@@ -31,6 +31,29 @@ target_link_libraries(better_micro_apo PRIVATE
     rtworkq.lib Propsys.lib)
 
 # ---------------------------------------------------------------------------
+# Embed the APO DLL into the GUI executable
+# ---------------------------------------------------------------------------
+
+# The resource compiler needs a config-independent path, so stage a copy of the
+# built DLL and embed that. The GUI target depends on the DLL target, which
+# guarantees the copy exists before the resource is compiled.
+set(APO_EMBED_DIR "${CMAKE_BINARY_DIR}/apo_embed")
+set(APO_EMBED_DLL "${APO_EMBED_DIR}/better_micro_apo.dll")
+
+add_custom_command(TARGET better_micro_apo POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${APO_EMBED_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:better_micro_apo>" "${APO_EMBED_DLL}"
+    # Touch the resource script so the resource compiler re-runs and picks up
+    # the new DLL. MSBuild does not know the script embeds a binary file.
+    COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_BINARY_DIR}/apo_dll.rc"
+    COMMENT "Staging the APO DLL for embedding"
+)
+
+file(TO_CMAKE_PATH "${APO_EMBED_DLL}" APO_EMBED_DLL_RC)
+configure_file(gui/apo_dll.rc.in "${CMAKE_BINARY_DIR}/apo_dll.rc" @ONLY)
+
+# ---------------------------------------------------------------------------
 # Installer / status GUI
 # ---------------------------------------------------------------------------
 
@@ -41,6 +64,7 @@ add_executable(better_micro_apo_gui WIN32
     gui/apo_status.cpp
     gui/apo_util.cpp
     gui/main.cpp
+    "${CMAKE_BINARY_DIR}/apo_dll.rc"
 )
 
 target_include_directories(better_micro_apo_gui PRIVATE gui src)

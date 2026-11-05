@@ -1,0 +1,7 @@
+#include <windows.h>
+
+#include "apo_resource.h"
+
+// The path is filled in by CMake. The resource compiler reads the DLL at build
+// time and embeds its bytes into the GUI executable.
+IDR_APO_DLL RCDATA "@APO_EMBED_DLL_RC@"

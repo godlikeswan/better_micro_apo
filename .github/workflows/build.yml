@@ -1,0 +1,58 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $stage = "package"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item "build/bin/Release/better_micro_apo_gui.exe" $stage
+          Copy-Item "README.md", "ARCHITECTURE.md" $stage
+          $label = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME } else { "dev" }
+          Compress-Archive -Path "$stage/*" -DestinationPath "better_micro_apo-$label-win64.zip"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: better_micro_apo-win64
+          path: |
+            better_micro_apo-*-win64.zip
+            build/bin/Release/better_micro_apo_gui.exe
+            build/bin/Release/better_micro_apo.dll
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = Get-ChildItem "better_micro_apo-*-win64.zip" | Select-Object -First 1
+          gh release create "$env:GITHUB_REF_NAME" `
+            $zip.FullName `
+            "build/bin/Release/better_micro_apo.dll" `
+            --title "Better Micro APO $env:GITHUB_REF_NAME" `
+            --generate-notes

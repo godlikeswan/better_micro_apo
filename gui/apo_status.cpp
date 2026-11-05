@@ -63,23 +63,6 @@ bool FileExists(const std::wstring& path)
            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
-std::wstring DefaultSourceDll()
-{
-    wchar_t path[32768]{};
-    const DWORD length =
-        GetModuleFileNameW(nullptr, path, static_cast<DWORD>(std::size(path)));
-    if (length == 0 || length >= std::size(path)) {
-        return L"better_micro_apo.dll";
-    }
-
-    std::wstring full(path, length);
-    const size_t slash = full.find_last_of(L"\\/");
-    if (slash != std::wstring::npos) {
-        full.resize(slash + 1);
-    }
-    return full + L"better_micro_apo.dll";
-}
-
 bool IsElevated()
 {
     HANDLE token = nullptr;

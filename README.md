@@ -14,8 +14,12 @@ Run the GUI (it requests elevation):
 build\bin\Release\better_micro_apo_gui.exe
 ```
 
-1. Click **Install** to copy the DLL to `C:\Program Files\better_micro_apo`,
-   register its COM class, and restart audio. Audio stops for about a second.
+The GUI is self-contained: the APO DLL is embedded in it, so it is the only
+file you need to distribute.
+
+1. Click **Install** to extract the embedded APO DLL to
+   `C:\Program Files\better_micro_apo`, register its COM class, and restart
+   audio. Audio stops for about a second.
 2. Check the capture devices to enable the effect on. Inactive devices are
    shown grayed out.
 3. Select a device and edit its settings in the panel on the right. Each
@@ -49,17 +53,27 @@ Output:
 
 ```
 build\bin\Release\better_micro_apo.dll
-```
-
-The DLL uses the static MSVC runtime and has no third-party dependencies.
-
-The native Win32 installer/status window is built alongside it:
-
-```
 build\bin\Release\better_micro_apo_gui.exe
 ```
 
-See [Installation and usage](#installation-and-usage).
+`better_micro_apo_gui.exe` is the distributable: CMake embeds the DLL into it
+as an `RCDATA` resource during the build, so it can be shipped on its own. The
+standalone DLL is still produced for debugging.
+
+The DLL uses the static MSVC runtime and has no third-party dependencies.
+
+## Releases
+
+GitHub Actions builds the Release configuration on every push and publishes a
+release for every `v*` tag. The release contains
+`better_micro_apo-<tag>-win64.zip` with the GUI executable and these docs.
+
+To publish a release:
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
 
 ## DSP settings
 

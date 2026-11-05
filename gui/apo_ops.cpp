@@ -1,11 +1,13 @@
 #include "apo.h"
 
 #include "apo_internal.h"
+#include "apo_resource.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cwchar>
 #include <filesystem>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -265,6 +267,62 @@ bool CopyWithRetry(const std::wstring& source,
     return false;
 }
 
+bool ExtractEmbeddedDll(const std::wstring& destination, std::wstring& log)
+{
+    const HRSRC resource =
+        FindResourceW(nullptr, MAKEINTRESOURCEW(IDR_APO_DLL), RT_RCDATA);
+    if (resource == nullptr) {
+        log += L"The embedded APO DLL is missing from this build.\r\n";
+        return false;
+    }
+
+    const DWORD size = SizeofResource(nullptr, resource);
+    const HGLOBAL handle = LoadResource(nullptr, resource);
+    const void* data = handle ? LockResource(handle) : nullptr;
+    if (data == nullptr || size == 0) {
+        log += L"Could not read the embedded APO DLL.\r\n";
+        return false;
+    }
+
+    // Write the payload to a temporary file first, then copy it into place
+    // with retries: audiodg can keep the installed DLL open for a moment
+    // after the audio service stops.
+    wchar_t tempDirectory[MAX_PATH]{};
+    wchar_t tempFile[MAX_PATH]{};
+    if (GetTempPathW(static_cast<DWORD>(std::size(tempDirectory)),
+                     tempDirectory) == 0 ||
+        GetTempFileNameW(tempDirectory, L"bma", 0, tempFile) == 0) {
+        log += L"Could not create a temporary file: " +
+               FormatWin32Error(GetLastError()) + L"\r\n";
+        return false;
+    }
+
+    bool written = false;
+    const HANDLE file =
+        CreateFileW(tempFile, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                    FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        log += L"Could not write the temporary DLL: " +
+               FormatWin32Error(GetLastError()) + L"\r\n";
+    } else {
+        DWORD count = 0;
+        written = WriteFile(file, data, size, &count, nullptr) != FALSE &&
+                  count == size;
+        if (!written) {
+            log += L"Could not write the temporary DLL: " +
+                   FormatWin32Error(GetLastError()) + L"\r\n";
+        }
+        CloseHandle(file);
+    }
+
+    bool ok = false;
+    if (written) {
+        ok = CopyWithRetry(tempFile, destination, log);
+    }
+    DeleteFileW(tempFile);
+    return ok;
+}
+
 std::wstring FormatHresult(HRESULT hr)
 {
     wchar_t buffer[32]{};
@@ -489,17 +547,10 @@ bool RestoreBackup(const Endpoint& endpoint, std::wstring& log)
 
 } // namespace
 
-Result InstallFiles(const std::wstring& sourceDll)
+Result InstallFiles()
 {
     Result result;
     std::wstring log;
-
-    if (!FileExists(sourceDll)) {
-        result.ok = false;
-        result.summary = L"Source DLL not found.";
-        result.details = sourceDll;
-        return result;
-    }
 
     AudioSession session;
     if (!StopAudio(session, log)) {
@@ -521,15 +572,13 @@ Result InstallFiles(const std::wstring& sourceDll)
         return result;
     }
 
-    if (_wcsicmp(sourceDll.c_str(), kInstalledDll) != 0) {
-        if (!CopyWithRetry(sourceDll, kInstalledDll, log)) {
-            result.ok = false;
-            result.summary = L"Could not copy the DLL.";
-            result.details = log;
-            return result;
-        }
-        log += L"Copied the DLL to " + std::wstring(kInstalledDll) + L"\r\n";
+    if (!ExtractEmbeddedDll(kInstalledDll, log)) {
+        result.ok = false;
+        result.summary = L"Could not install the APO DLL.";
+        result.details = log;
+        return result;
     }
+    log += L"Extracted the APO DLL to " + std::wstring(kInstalledDll) + L"\r\n";
 
     std::filesystem::create_directories(kDataDir, ec);
     if (ec) {

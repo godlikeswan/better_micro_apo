@@ -710,18 +710,8 @@ void DoInstall()
         return;
     }
 
-    const std::wstring source = apo::DefaultSourceDll();
-    if (!apo::FileExists(source)) {
-        const std::wstring message =
-            L"Source DLL not found:\r\n\r\n" + source +
-            L"\r\n\r\nBuild the Release configuration first.";
-        MessageBoxW(g_window, message.c_str(), L"Better Micro APO",
-                    MB_ICONERROR);
-        return;
-    }
-
     StopListening();
-    StartWork([source] { return apo::InstallFiles(source); }, L"Installing...");
+    StartWork([] { return apo::InstallFiles(); }, L"Installing...");
 }
 
 void DoUninstall()

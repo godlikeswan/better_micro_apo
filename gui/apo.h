@@ -73,14 +73,13 @@ bool IsDeviceActive(DWORD state);
 std::wstring DeviceStateText(DWORD state);
 std::wstring FormatWin32Error(DWORD error);
 bool FileExists(const std::wstring& path);
-std::wstring DefaultSourceDll();
 bool IsElevated();
 
 std::vector<Endpoint> EnumEndpoints();
 FilesStatus GetFilesStatus();
 
 // Blocking operations: run them on a worker thread.
-Result InstallFiles(const std::wstring& sourceDll);
+Result InstallFiles();
 Result UninstallFiles();
 Result ApplyChanges(const std::vector<Change>& changes);
 

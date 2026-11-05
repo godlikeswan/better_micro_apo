@@ -44,6 +44,16 @@ section, then restarts the audio service once.
 - Logs setup calls to `C:\ProgramData\better_micro_apo\better_micro_apo.log`
   and to `OutputDebugStringW`. `APOProcess` never logs or allocates.
 
+## Packaging
+
+The build embeds the APO DLL in `better_micro_apo_gui.exe` as an `RCDATA`
+resource (`IDR_APO_DLL`), so the GUI is the only file that needs to be
+distributed. CMake stages the built DLL at
+`build/apo_embed/better_micro_apo.dll`, generates the resource script from
+`gui/apo_dll.rc.in`, and touches it after every DLL build so the resource
+compiler picks up the new bytes. `Install` extracts the resource to
+`C:\Program Files\better_micro_apo\better_micro_apo.dll` and registers it.
+
 ## Further reading
 
 For the general install/uninstall flow, registry layout, and pitfalls, see the
