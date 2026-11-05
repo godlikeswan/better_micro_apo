@@ -1,0 +1,487 @@
+#include "apo_monitor.h"
+
+#include "apo.h"
+
+#include <audioclient.h>
+#include <mmdeviceapi.h>
+
+#include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <cwchar>
+#include <future>
+#include <memory>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace apo {
+namespace {
+
+std::thread g_thread;
+std::atomic<bool> g_running{false};
+std::atomic<double> g_peak{0.0};
+std::atomic<bool> g_clipped{false};
+std::atomic<unsigned> g_drops{0};
+
+template <class T>
+class ComPtr {
+public:
+    ComPtr() = default;
+    ~ComPtr() { reset(); }
+
+    ComPtr(const ComPtr&) = delete;
+    ComPtr& operator=(const ComPtr&) = delete;
+
+    ComPtr(ComPtr&& other) noexcept : ptr_(other.ptr_)
+    {
+        other.ptr_ = nullptr;
+    }
+
+    ComPtr& operator=(ComPtr&& other) noexcept
+    {
+        if (this != &other) {
+            reset();
+            ptr_ = other.ptr_;
+            other.ptr_ = nullptr;
+        }
+        return *this;
+    }
+
+    T** put()
+    {
+        reset();
+        return &ptr_;
+    }
+
+    T* get() const { return ptr_; }
+    T* operator->() const { return ptr_; }
+    explicit operator bool() const { return ptr_ != nullptr; }
+
+    void reset()
+    {
+        if (ptr_ != nullptr) {
+            ptr_->Release();
+            ptr_ = nullptr;
+        }
+    }
+
+private:
+    T* ptr_ = nullptr;
+};
+
+struct CoTaskMemDeleter {
+    void operator()(void* value) const { CoTaskMemFree(value); }
+};
+
+using FormatPtr = std::unique_ptr<WAVEFORMATEX, CoTaskMemDeleter>;
+
+std::wstring HresultText(const wchar_t* action, HRESULT hr)
+{
+    wchar_t code[16]{};
+    swprintf_s(code, L"0x%08X", static_cast<unsigned>(hr));
+    return std::wstring(action) + L" (" + code + L").";
+}
+
+bool IsFloatFormat(const WAVEFORMATEX* format)
+{
+    if (format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
+        return true;
+    }
+    if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
+        const auto* extended =
+            reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(format);
+        return extended->SubFormat.Data1 == 3; // KSDATAFORMAT_SUBTYPE_IEEE_FLOAT
+    }
+    return false;
+}
+
+double BufferPeak(const BYTE* data, UINT32 frames, UINT32 channels,
+                  UINT32 sampleBytes, bool isFloat)
+{
+    if (data == nullptr || frames == 0 || channels == 0 ||
+        sampleBytes == 0) {
+        return 0.0;
+    }
+
+    const size_t count = static_cast<size_t>(frames) * channels;
+    double peak = 0.0;
+
+    if (isFloat && sampleBytes == 4) {
+        const float* samples = reinterpret_cast<const float*>(data);
+        for (size_t i = 0; i < count; ++i) {
+            const double value =
+                std::fabs(static_cast<double>(samples[i]));
+            if (value > peak) {
+                peak = value;
+            }
+        }
+    } else if (sampleBytes == 2) {
+        const int16_t* samples = reinterpret_cast<const int16_t*>(data);
+        for (size_t i = 0; i < count; ++i) {
+            const double value =
+                std::fabs(static_cast<double>(samples[i]) / 32768.0);
+            if (value > peak) {
+                peak = value;
+            }
+        }
+    } else if (sampleBytes == 3) {
+        for (size_t i = 0; i < count; ++i) {
+            const BYTE* sample = data + i * 3;
+            int32_t value = static_cast<int32_t>(sample[0]) |
+                            (static_cast<int32_t>(sample[1]) << 8) |
+                            (static_cast<int32_t>(sample[2]) << 16);
+            if ((value & 0x00800000) != 0) {
+                value |= ~0x00FFFFFF;
+            }
+            const double magnitude =
+                std::fabs(static_cast<double>(value) / 8388608.0);
+            if (magnitude > peak) {
+                peak = magnitude;
+            }
+        }
+    } else if (sampleBytes == 4) {
+        const int32_t* samples = reinterpret_cast<const int32_t*>(data);
+        for (size_t i = 0; i < count; ++i) {
+            const double value = std::fabs(
+                static_cast<double>(samples[i]) / 2147483648.0);
+            if (value > peak) {
+                peak = value;
+            }
+        }
+    }
+
+    return peak;
+}
+
+void ReportPeak(double peak)
+{
+    // PCM formats cannot represent exactly 1.0, so treat near-full-scale as
+    // clipping too.
+    if (peak >= 0.9999) {
+        g_clipped.store(true, std::memory_order_relaxed);
+    }
+
+    double current = g_peak.load(std::memory_order_relaxed);
+    while (peak > current &&
+           !g_peak.compare_exchange_weak(current, peak,
+                                          std::memory_order_relaxed)) {
+    }
+}
+
+struct ComInit {
+    HRESULT hr = E_FAIL;
+
+    ComInit() : hr(CoInitializeEx(nullptr, COINIT_MULTITHREADED)) {}
+    ~ComInit()
+    {
+        if (SUCCEEDED(hr)) {
+            CoUninitialize();
+        }
+    }
+};
+
+struct Monitor {
+    ComPtr<IAudioClient> captureClient;
+    ComPtr<IAudioCaptureClient> capture;
+    ComPtr<IAudioClient> renderClient;
+    ComPtr<IAudioRenderClient> render;
+    FormatPtr format;
+    UINT32 renderFrames = 0;
+    UINT32 frameBytes = 0;
+    UINT32 channels = 0;
+    UINT32 sampleBytes = 0;
+    bool isFloat = false;
+
+    ~Monitor()
+    {
+        if (captureClient) {
+            captureClient->Stop();
+        }
+        if (renderClient) {
+            renderClient->Stop();
+        }
+    }
+};
+
+std::wstring OpenMonitor(const std::wstring& endpointId, Monitor& monitor)
+{
+    ComPtr<IMMDeviceEnumerator> enumerator;
+    HRESULT hr = CoCreateInstance(
+        __uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+        IID_PPV_ARGS(enumerator.put()));
+    if (FAILED(hr)) {
+        return HresultText(L"Could not access the audio devices", hr);
+    }
+
+    ComPtr<IMMDeviceCollection> collection;
+    hr = enumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE,
+                                        collection.put());
+    if (FAILED(hr)) {
+        return HresultText(L"Could not enumerate the capture devices", hr);
+    }
+
+    ComPtr<IMMDevice> captureDevice;
+    UINT count = 0;
+    if (FAILED(collection->GetCount(&count))) {
+        return L"Could not read the capture device list.";
+    }
+
+    for (UINT i = 0; i < count && !captureDevice; ++i) {
+        ComPtr<IMMDevice> device;
+        if (FAILED(collection->Item(i, device.put())) || !device) {
+            continue;
+        }
+
+        LPWSTR id = nullptr;
+        if (SUCCEEDED(device->GetId(&id)) && id != nullptr) {
+            const bool match = std::wcsstr(id, endpointId.c_str()) != nullptr;
+            CoTaskMemFree(id);
+            if (match) {
+                captureDevice = std::move(device);
+            }
+        }
+    }
+
+    if (!captureDevice) {
+        return L"The selected capture device is not active.";
+    }
+
+    hr = captureDevice->Activate(
+        __uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+        reinterpret_cast<void**>(monitor.captureClient.put()));
+    if (FAILED(hr)) {
+        return HresultText(L"Could not open the capture device", hr);
+    }
+
+    WAVEFORMATEX* rawFormat = nullptr;
+    hr = monitor.captureClient->GetMixFormat(&rawFormat);
+    if (FAILED(hr) || rawFormat == nullptr) {
+        return HresultText(L"Could not read the capture format", hr);
+    }
+    monitor.format.reset(rawFormat);
+
+    hr = monitor.captureClient->Initialize(
+        AUDCLNT_SHAREMODE_SHARED, 0, 2000000, 0, monitor.format.get(), nullptr);
+    if (FAILED(hr)) {
+        return HresultText(L"Could not start the capture stream", hr);
+    }
+
+    hr = monitor.captureClient->GetService(
+        __uuidof(IAudioCaptureClient),
+        reinterpret_cast<void**>(monitor.capture.put()));
+    if (FAILED(hr)) {
+        return HresultText(L"Could not open the capture client", hr);
+    }
+
+    ComPtr<IMMDevice> renderDevice;
+    hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole,
+                                             renderDevice.put());
+    if (FAILED(hr)) {
+        return HresultText(L"Could not find the default output device", hr);
+    }
+
+    hr = renderDevice->Activate(
+        __uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+        reinterpret_cast<void**>(monitor.renderClient.put()));
+    if (FAILED(hr)) {
+        return HresultText(L"Could not open the default output device", hr);
+    }
+
+    // Let the audio engine convert the capture format to the output mix
+    // format, so capture and render devices do not need matching rates.
+    const DWORD flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
+                        AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+    hr = monitor.renderClient->Initialize(AUDCLNT_SHAREMODE_SHARED, flags,
+                                          2000000, 0, monitor.format.get(),
+                                          nullptr);
+    if (FAILED(hr)) {
+        return HresultText(L"Could not start the output stream", hr);
+    }
+
+    hr = monitor.renderClient->GetService(
+        __uuidof(IAudioRenderClient),
+        reinterpret_cast<void**>(monitor.render.put()));
+    if (FAILED(hr)) {
+        return HresultText(L"Could not open the output client", hr);
+    }
+
+    hr = monitor.renderClient->GetBufferSize(&monitor.renderFrames);
+    if (FAILED(hr) || monitor.renderFrames == 0) {
+        return HresultText(L"Could not size the output buffer", hr);
+    }
+
+    monitor.frameBytes = monitor.format->nBlockAlign;
+    monitor.channels = monitor.format->nChannels;
+    if (monitor.frameBytes == 0 || monitor.channels == 0) {
+        return L"The capture format has no frame size.";
+    }
+    monitor.sampleBytes = monitor.frameBytes / monitor.channels;
+    monitor.isFloat = IsFloatFormat(monitor.format.get());
+
+    hr = monitor.renderClient->Start();
+    if (FAILED(hr)) {
+        return HresultText(L"Could not start the output stream", hr);
+    }
+
+    hr = monitor.captureClient->Start();
+    if (FAILED(hr)) {
+        return HresultText(L"Could not start the capture stream", hr);
+    }
+
+    return {};
+}
+
+void RunMonitor(Monitor& monitor)
+{
+    std::vector<BYTE> pending;
+    pending.reserve(static_cast<size_t>(monitor.frameBytes) *
+                    monitor.format->nSamplesPerSec / 4);
+
+    // Keep at most one second queued; drop the oldest audio if output stalls.
+    const size_t maxPending = static_cast<size_t>(monitor.frameBytes) *
+                              monitor.format->nSamplesPerSec;
+
+    while (g_running.load()) {
+        UINT32 packet = 0;
+        while (g_running.load() &&
+               SUCCEEDED(monitor.capture->GetNextPacketSize(&packet)) &&
+               packet != 0) {
+            BYTE* data = nullptr;
+            UINT32 frames = 0;
+            DWORD flags = 0;
+            if (FAILED(monitor.capture->GetBuffer(&data, &frames, &flags,
+                                                  nullptr, nullptr))) {
+                break;
+            }
+
+            if ((flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0) {
+                g_drops.fetch_add(1, std::memory_order_relaxed);
+            }
+
+            if (frames != 0) {
+                const size_t bytes =
+                    static_cast<size_t>(frames) * monitor.frameBytes;
+                if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0 ||
+                    data == nullptr) {
+                    pending.insert(pending.end(), bytes, 0);
+                } else {
+                    ReportPeak(BufferPeak(data, frames, monitor.channels,
+                                          monitor.sampleBytes,
+                                          monitor.isFloat));
+                    pending.insert(pending.end(), data, data + bytes);
+                }
+            }
+            monitor.capture->ReleaseBuffer(frames);
+        }
+
+        if (pending.size() > maxPending) {
+            const size_t drop = pending.size() - maxPending;
+            g_drops.fetch_add(
+                static_cast<unsigned>(drop / monitor.frameBytes),
+                std::memory_order_relaxed);
+            pending.erase(pending.begin(), pending.begin() + drop);
+        }
+
+        UINT32 padding = 0;
+        if (!pending.empty() &&
+            SUCCEEDED(monitor.renderClient->GetCurrentPadding(&padding))) {
+            const UINT32 available =
+                (padding < monitor.renderFrames)
+                    ? (monitor.renderFrames - padding)
+                    : 0;
+            if (available != 0) {
+                const size_t pendingFrames =
+                    pending.size() / monitor.frameBytes;
+                const UINT32 frames = static_cast<UINT32>(
+                    std::min<size_t>(available, pendingFrames));
+                if (frames != 0) {
+                    BYTE* output = nullptr;
+                    if (SUCCEEDED(
+                            monitor.render->GetBuffer(frames, &output)) &&
+                        output != nullptr) {
+                        const size_t bytes =
+                            static_cast<size_t>(frames) * monitor.frameBytes;
+                        std::memcpy(output, pending.data(), bytes);
+                        monitor.render->ReleaseBuffer(frames, 0);
+                        pending.erase(pending.begin(),
+                                      pending.begin() + bytes);
+                    }
+                }
+            }
+        }
+
+        Sleep(5);
+    }
+}
+
+void MonitorLoop(std::wstring endpointId, std::promise<std::wstring> ready)
+{
+    ComInit com;
+    if (FAILED(com.hr)) {
+        ready.set_value(HresultText(L"Could not initialize COM", com.hr));
+        return;
+    }
+
+    Monitor monitor;
+    std::wstring error = OpenMonitor(endpointId, monitor);
+    if (!error.empty()) {
+        ready.set_value(std::move(error));
+        return;
+    }
+
+    ready.set_value(std::wstring());
+    RunMonitor(monitor);
+    g_running = false;
+}
+
+} // namespace
+
+std::wstring StartMonitor(const std::wstring& endpointId)
+{
+    StopMonitor();
+
+    g_peak.store(0.0, std::memory_order_relaxed);
+    g_clipped.store(false, std::memory_order_relaxed);
+    g_drops.store(0, std::memory_order_relaxed);
+
+    g_running = true;
+    std::promise<std::wstring> promise;
+    std::future<std::wstring> future = promise.get_future();
+    g_thread = std::thread(MonitorLoop, endpointId, std::move(promise));
+
+    std::wstring error = future.get();
+    if (!error.empty()) {
+        g_running = false;
+        if (g_thread.joinable()) {
+            g_thread.join();
+        }
+    }
+    return error;
+}
+
+void StopMonitor()
+{
+    g_running = false;
+    if (g_thread.joinable()) {
+        g_thread.join();
+    }
+}
+
+bool IsMonitorActive()
+{
+    return g_running.load();
+}
+
+MonitorLevel TakeMonitorLevel()
+{
+    MonitorLevel level;
+    level.peak = g_peak.exchange(0.0, std::memory_order_relaxed);
+    level.clipped = g_clipped.exchange(false, std::memory_order_relaxed);
+    level.drops = g_drops.exchange(0, std::memory_order_relaxed);
+    return level;
+}
+
+} // namespace apo
