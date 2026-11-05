@@ -4,6 +4,8 @@ Better Micro APO (internally `better_micro_apo`) is a simple microphone effect
 for Windows. Its main goal is to raise the input level without distortion:
 input gain lifts the signal, while a peak compressor tames the peaks.
 
+![Better Micro APO GUI](docs/screenshot.png)
+
 ## Installation and usage
 
 Run the GUI (it requests elevation):
