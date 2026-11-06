@@ -33,9 +33,10 @@ file you need to distribute.
    default output. This is the quickest way to audition the applied settings.
    Use headphones to avoid feedback from speakers. Listening stops on its own
    when you change the selection, apply, install, or uninstall. While
-   listening, **Peak** shows the level of the monitored stream after the APO;
-   **CLIP** latches when it reaches full scale, and **drops** counts gaps in
-   the monitor stream.
+   listening, **Peak** is the maximum level over the last 500 ms and **RMS** is
+   the average level over the same window, both measured after the APO. **CLIP**
+   latches when the peak reaches full scale, and **drops** counts gaps in the
+   monitor stream.
 6. Click **Uninstall** to unbind the devices, unregister the APO, and remove the
    installed DLL directory. Backups, settings, and logs stay in
    `C:\ProgramData\better_micro_apo`.

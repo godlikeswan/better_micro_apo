@@ -67,6 +67,18 @@ the input gain stage was removed keep the same sound.
 The GUI writes the same files during `Apply`, inside the existing audio-stop
 section, then restarts the audio service once.
 
+## Listen monitor
+
+`gui/apo_monitor.cpp` opens the selected capture endpoint in shared mode and
+renders it to the default output, so the APO runs on the monitored stream. The
+capture thread accumulates the peak, the sum of squared samples, and the sample
+count per packet. Silent packets count as zero-energy samples so the RMS window
+decays instead of holding the previous level. The GUI timer samples these
+counters every 100 ms and keeps a 500 ms history: the displayed peak is the
+maximum of that history and the RMS is
+`sqrt(sum(sumSquares) / sum(samples))`. Clip and drop counters are latched and
+reset when listening starts.
+
 ## Registration and logging
 
 - CLSID: `{6A8BE200-CD89-4E77-97F5-D51E8F16EF90}`

@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cwchar>
+#include <deque>
 #include <functional>
 #include <iterator>
 #include <string>
@@ -82,6 +83,7 @@ enum : int {
 
 constexpr UINT WM_APP_WORK_DONE = WM_APP + 1;
 constexpr UINT_PTR kMonitorTimer = 1;
+constexpr DWORD kMeterWindowMs = 500;
 
 constexpr wchar_t kWindowClass[] = L"BetterMicroApoInstaller";
 constexpr wchar_t kInstanceMutex[] = L"Local\\better_micro_apo_gui_instance";
@@ -145,6 +147,15 @@ HWND g_meter = nullptr;
 
 DWORD g_clipHoldUntil = 0;
 unsigned g_dropTotal = 0;
+
+struct MeterEntry {
+    DWORD tick = 0;
+    double peak = 0.0;
+    double sumSquares = 0.0;
+    unsigned long long samples = 0;
+};
+
+std::deque<MeterEntry> g_meterHistory;
 std::wstring g_meterText;
 
 HFONT g_font = nullptr;
@@ -415,7 +426,8 @@ void ResetMeter()
 {
     g_clipHoldUntil = 0;
     g_dropTotal = 0;
-    g_meterText = L"Peak: --";
+    g_meterHistory.clear();
+    g_meterText = L"Peak: --  RMS: --";
     if (g_meter != nullptr) {
         SetWindowTextW(g_meter, g_meterText.c_str());
     }
@@ -424,20 +436,53 @@ void ResetMeter()
 
 void UpdateMeter()
 {
+    const DWORD now = GetTickCount();
     const apo::MonitorLevel level = apo::TakeMonitorLevel();
     g_dropTotal += level.drops;
     if (level.clipped) {
-        g_clipHoldUntil = GetTickCount() + 2000;
+        g_clipHoldUntil = now + 2000;
     }
 
-    std::wstring text = L"Peak: --";
-    if (level.peak > 0.0) {
-        wchar_t buffer[64]{};
-        swprintf_s(buffer, L"Peak: %.1f dBFS",
-                   20.0 * std::log10(level.peak));
-        text = buffer;
+    // Keep the last 500 ms of 100 ms blocks. The displayed peak is the maximum
+    // over that window and the RMS is computed from the summed energy, which
+    // makes both readings much steadier than the raw per-timer values.
+    g_meterHistory.push_back(
+        MeterEntry{now, level.peak, level.sumSquares, level.samples});
+    while (!g_meterHistory.empty() &&
+           now - g_meterHistory.front().tick > kMeterWindowMs) {
+        g_meterHistory.pop_front();
     }
-    if (GetTickCount() < g_clipHoldUntil) {
+
+    double peak = 0.0;
+    double sumSquares = 0.0;
+    unsigned long long samples = 0;
+    for (const MeterEntry& entry : g_meterHistory) {
+        peak = std::max(peak, entry.peak);
+        sumSquares += entry.sumSquares;
+        samples += entry.samples;
+    }
+
+    wchar_t buffer[96]{};
+    if (peak > 0.0) {
+        swprintf_s(buffer, L"Peak: %.1f dBFS", 20.0 * std::log10(peak));
+    } else {
+        swprintf_s(buffer, L"Peak: --");
+    }
+    std::wstring text = buffer;
+
+    if (samples != 0) {
+        const double rms = std::sqrt(sumSquares / static_cast<double>(samples));
+        if (rms > 0.0) {
+            swprintf_s(buffer, L"  RMS: %.1f dBFS", 20.0 * std::log10(rms));
+        } else {
+            swprintf_s(buffer, L"  RMS: -inf dBFS");
+        }
+    } else {
+        swprintf_s(buffer, L"  RMS: --");
+    }
+    text += buffer;
+
+    if (now < g_clipHoldUntil) {
         text += L"  CLIP";
     }
     if (g_dropTotal != 0) {
@@ -960,7 +1005,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             L"Plays through the default output.\r\n"
             L"Use headphones to avoid feedback.",
             SS_LEFT);
-        g_meter = CreateStatic(window, IDC_METER, L"Peak: --", SS_LEFT);
+        g_meter = CreateStatic(window, IDC_METER, L"Peak: --  RMS: --",
+                               SS_LEFT);
 
         g_status = CreateStatic(window, IDC_STATUS, L"", SS_LEFT);
         g_logButton = CreateButton(window, IDC_LOG, L"Open log");

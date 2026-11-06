@@ -23,6 +23,8 @@ namespace {
 std::thread g_thread;
 std::atomic<bool> g_running{false};
 std::atomic<double> g_peak{0.0};
+std::atomic<double> g_sumSquares{0.0};
+std::atomic<unsigned long long> g_samples{0};
 std::atomic<bool> g_clipped{false};
 std::atomic<unsigned> g_drops{0};
 
@@ -98,76 +100,103 @@ bool IsFloatFormat(const WAVEFORMATEX* format)
     return false;
 }
 
-double BufferPeak(const BYTE* data, UINT32 frames, UINT32 channels,
-                  UINT32 sampleBytes, bool isFloat)
+struct BlockLevel {
+    double peak = 0.0;
+    double sumSquares = 0.0;
+    unsigned long long samples = 0;
+};
+
+BlockLevel BufferLevel(const BYTE* data, UINT32 frames, UINT32 channels,
+                       UINT32 sampleBytes, bool isFloat)
 {
+    BlockLevel level;
     if (data == nullptr || frames == 0 || channels == 0 ||
         sampleBytes == 0) {
-        return 0.0;
+        return level;
     }
 
     const size_t count = static_cast<size_t>(frames) * channels;
-    double peak = 0.0;
+    level.samples = static_cast<unsigned long long>(count);
 
     if (isFloat && sampleBytes == 4) {
         const float* samples = reinterpret_cast<const float*>(data);
         for (size_t i = 0; i < count; ++i) {
-            const double value =
-                std::fabs(static_cast<double>(samples[i]));
-            if (value > peak) {
-                peak = value;
+            const double value = static_cast<double>(samples[i]);
+            const double magnitude = std::fabs(value);
+            level.sumSquares += value * value;
+            if (magnitude > level.peak) {
+                level.peak = magnitude;
             }
         }
     } else if (sampleBytes == 2) {
         const int16_t* samples = reinterpret_cast<const int16_t*>(data);
         for (size_t i = 0; i < count; ++i) {
-            const double value =
-                std::fabs(static_cast<double>(samples[i]) / 32768.0);
-            if (value > peak) {
-                peak = value;
+            const double value = static_cast<double>(samples[i]) / 32768.0;
+            const double magnitude = std::fabs(value);
+            level.sumSquares += value * value;
+            if (magnitude > level.peak) {
+                level.peak = magnitude;
             }
         }
     } else if (sampleBytes == 3) {
         for (size_t i = 0; i < count; ++i) {
             const BYTE* sample = data + i * 3;
-            int32_t value = static_cast<int32_t>(sample[0]) |
-                            (static_cast<int32_t>(sample[1]) << 8) |
-                            (static_cast<int32_t>(sample[2]) << 16);
-            if ((value & 0x00800000) != 0) {
-                value |= ~0x00FFFFFF;
+            int32_t raw = static_cast<int32_t>(sample[0]) |
+                          (static_cast<int32_t>(sample[1]) << 8) |
+                          (static_cast<int32_t>(sample[2]) << 16);
+            if ((raw & 0x00800000) != 0) {
+                raw |= ~0x00FFFFFF;
             }
-            const double magnitude =
-                std::fabs(static_cast<double>(value) / 8388608.0);
-            if (magnitude > peak) {
-                peak = magnitude;
+            const double value = static_cast<double>(raw) / 8388608.0;
+            const double magnitude = std::fabs(value);
+            level.sumSquares += value * value;
+            if (magnitude > level.peak) {
+                level.peak = magnitude;
             }
         }
     } else if (sampleBytes == 4) {
         const int32_t* samples = reinterpret_cast<const int32_t*>(data);
         for (size_t i = 0; i < count; ++i) {
-            const double value = std::fabs(
-                static_cast<double>(samples[i]) / 2147483648.0);
-            if (value > peak) {
-                peak = value;
+            const double value =
+                static_cast<double>(samples[i]) / 2147483648.0;
+            const double magnitude = std::fabs(value);
+            level.sumSquares += value * value;
+            if (magnitude > level.peak) {
+                level.peak = magnitude;
             }
         }
+    } else {
+        level.samples = 0;
     }
 
-    return peak;
+    return level;
 }
 
-void ReportPeak(double peak)
+void AddSumSquares(double value)
+{
+    double current = g_sumSquares.load(std::memory_order_relaxed);
+    while (!g_sumSquares.compare_exchange_weak(
+        current, current + value, std::memory_order_relaxed)) {
+    }
+}
+
+void ReportLevel(const BlockLevel& level)
 {
     // PCM formats cannot represent exactly 1.0, so treat near-full-scale as
     // clipping too.
-    if (peak >= 0.9999) {
+    if (level.peak >= 0.9999) {
         g_clipped.store(true, std::memory_order_relaxed);
     }
 
     double current = g_peak.load(std::memory_order_relaxed);
-    while (peak > current &&
-           !g_peak.compare_exchange_weak(current, peak,
+    while (level.peak > current &&
+           !g_peak.compare_exchange_weak(current, level.peak,
                                           std::memory_order_relaxed)) {
+    }
+
+    if (level.samples != 0) {
+        AddSumSquares(level.sumSquares);
+        g_samples.fetch_add(level.samples, std::memory_order_relaxed);
     }
 }
 
@@ -366,11 +395,17 @@ void RunMonitor(Monitor& monitor)
                     static_cast<size_t>(frames) * monitor.frameBytes;
                 if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0 ||
                     data == nullptr) {
+                    // Count silent frames as zero-energy samples so the RMS
+                    // window decays instead of holding the last level.
+                    BlockLevel silence;
+                    silence.samples = static_cast<unsigned long long>(frames) *
+                                      monitor.channels;
+                    ReportLevel(silence);
                     pending.insert(pending.end(), bytes, 0);
                 } else {
-                    ReportPeak(BufferPeak(data, frames, monitor.channels,
-                                          monitor.sampleBytes,
-                                          monitor.isFloat));
+                    ReportLevel(BufferLevel(data, frames, monitor.channels,
+                                            monitor.sampleBytes,
+                                            monitor.isFloat));
                     pending.insert(pending.end(), data, data + bytes);
                 }
             }
@@ -444,6 +479,8 @@ std::wstring StartMonitor(const std::wstring& endpointId)
     StopMonitor();
 
     g_peak.store(0.0, std::memory_order_relaxed);
+    g_sumSquares.store(0.0, std::memory_order_relaxed);
+    g_samples.store(0, std::memory_order_relaxed);
     g_clipped.store(false, std::memory_order_relaxed);
     g_drops.store(0, std::memory_order_relaxed);
 
@@ -479,6 +516,8 @@ MonitorLevel TakeMonitorLevel()
 {
     MonitorLevel level;
     level.peak = g_peak.exchange(0.0, std::memory_order_relaxed);
+    level.sumSquares = g_sumSquares.exchange(0.0, std::memory_order_relaxed);
+    level.samples = g_samples.exchange(0, std::memory_order_relaxed);
     level.clipped = g_clipped.exchange(false, std::memory_order_relaxed);
     level.drops = g_drops.exchange(0, std::memory_order_relaxed);
     return level;
