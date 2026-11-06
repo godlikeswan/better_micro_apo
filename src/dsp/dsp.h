@@ -61,6 +61,10 @@ public:
     // Clears internal state without touching the configuration.
     virtual void Reset() {}
 
+    // True when the stage buffers audio across calls, so the chain must still
+    // be run for silent input buffers to flush the buffered tail.
+    virtual bool NeedsSilence() const { return false; }
+
     // Processes `frames` frames in place. `samples` holds
     // frames * channels interleaved values in [-1, 1]. Real-time safe.
     virtual void Process(double* samples, UINT32 frames, UINT32 channels) = 0;
@@ -75,8 +79,11 @@ public:
     void Clear();
     void Configure(const AudioFormat& format);
     void Reset();
+    bool NeedsSilence() const;
     void Process(const BYTE* source, BYTE* destination, UINT32 frames,
                  double* scratch) const;
+    void ProcessSilence(BYTE* destination, UINT32 frames,
+                        double* scratch) const;
 
     bool Empty() const { return m_stages.empty(); }
 

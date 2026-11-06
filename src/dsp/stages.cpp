@@ -1,5 +1,6 @@
 #include "dsp/stages.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace apo::dsp {
@@ -36,8 +37,24 @@ void GateStage::Configure(const AudioFormat& format)
     m_attackCoeff = TimeCoefficient(m_settings.attackMs, sampleRate);
     m_releaseCoeff = TimeCoefficient(m_settings.releaseMs, sampleRate);
 
+    m_channels = format.channels;
+    const double lookaheadSeconds = m_settings.lookaheadMs * 0.001;
+    m_delayFrames = static_cast<UINT32>(lookaheadSeconds * sampleRate + 0.5);
+    if (m_delayFrames > 0 && m_channels > 0)
+    {
+        m_delay.assign(static_cast<size_t>(m_delayFrames) * m_channels, 0.0);
+    }
+    else
+    {
+        m_delay.clear();
+        m_delayFrames = 0;
+    }
+
+    // The detector runs ahead of the delayed audio, so extend the hold by the
+    // lookahead to keep the same hold time at the output.
     const double holdSeconds = m_settings.holdMs * 0.001;
-    m_holdFrames = static_cast<UINT32>(holdSeconds * sampleRate + 0.5);
+    m_holdFrames = static_cast<UINT32>(holdSeconds * sampleRate + 0.5) +
+                   m_delayFrames;
 
     Reset();
 }
@@ -47,10 +64,16 @@ void GateStage::Reset()
     m_holdCounter = 0;
     m_open = true;
     m_gain = 1.0;
+    m_delayWrite = 0;
+    std::fill(m_delay.begin(), m_delay.end(), 0.0);
 }
 
 void GateStage::Process(double* samples, UINT32 frames, UINT32 channels)
 {
+    const bool lookahead =
+        m_delayFrames > 0 && channels == m_channels &&
+        m_delay.size() >= static_cast<size_t>(m_delayFrames) * channels;
+
     for (UINT32 frame = 0; frame < frames; ++frame)
     {
         double* values = samples + static_cast<size_t>(frame) * channels;
@@ -76,9 +99,30 @@ void GateStage::Process(double* samples, UINT32 frames, UINT32 channels)
             (target > m_gain) ? m_attackCoeff : m_releaseCoeff;
         m_gain += (target - m_gain) * coefficient;
 
-        for (UINT32 channel = 0; channel < channels; ++channel)
+        if (lookahead)
         {
-            values[channel] *= m_gain;
+            // The detector ran on the incoming frame; apply the resulting gain
+            // to the frame that is one lookahead behind it.
+            double* delayed =
+                m_delay.data() + static_cast<size_t>(m_delayWrite) * channels;
+            for (UINT32 channel = 0; channel < channels; ++channel)
+            {
+                const double current = values[channel];
+                values[channel] = delayed[channel] * m_gain;
+                delayed[channel] = current;
+            }
+
+            if (++m_delayWrite >= m_delayFrames)
+            {
+                m_delayWrite = 0;
+            }
+        }
+        else
+        {
+            for (UINT32 channel = 0; channel < channels; ++channel)
+            {
+                values[channel] *= m_gain;
+            }
         }
     }
 }

@@ -320,13 +320,14 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
         return E_OUTOFMEMORY;
     }
 
-    Log(L"LockForProcess ok: format=%s channels=%u rate=%u containerBytes=%u maxFrames=%u endpoint=%s gate=%d gateThreshold=%.2fdB gateRange=%.2fdB gateAttack=%.2fms gateHold=%.2fms gateRelease=%.2fms compressor=%d threshold=%.2fdB ratio=%.2f:1 attack=%.2fms release=%.2fms makeup=%.2fdB mono=%d",
+    Log(L"LockForProcess ok: format=%s channels=%u rate=%u containerBytes=%u maxFrames=%u endpoint=%s gate=%d gateThreshold=%.2fdB gateRange=%.2fdB gateAttack=%.2fms gateHold=%.2fms gateRelease=%.2fms gateLookahead=%.2fms compressor=%d threshold=%.2fdB ratio=%.2f:1 attack=%.2fms release=%.2fms makeup=%.2fdB mono=%d",
         apo::dsp::FormatName(m_formatInfo.sample), m_formatInfo.channels,
         m_formatInfo.sampleRate, m_formatInfo.bytesPerSample, m_maxFrames,
         m_endpointId.empty() ? L"<unknown>" : m_endpointId.c_str(),
         m_settings.gate.enabled ? 1 : 0, m_settings.gate.thresholdDb,
         m_settings.gate.rangeDb, m_settings.gate.attackMs,
         m_settings.gate.holdMs, m_settings.gate.releaseMs,
+        m_settings.gate.lookaheadMs,
         m_settings.compressor.enabled ? 1 : 0,
         m_settings.compressor.thresholdDb, m_settings.compressor.ratio,
         m_settings.compressor.attackMs, m_settings.compressor.releaseMs,
@@ -391,15 +392,28 @@ STDMETHODIMP_(void) BetterMicroApo::APOProcess(
 
     if (input->u32BufferFlags == BUFFER_SILENT)
     {
-        output->u32BufferFlags = BUFFER_SILENT;
-
-        // If the engine did not give us an in-place buffer, make sure the
-        // silent output is actually zeroed.
-        if (destination != nullptr && destination != source)
+        // A stage with lookahead buffers audio, so run the silent buffer
+        // through the chain to flush its tail instead of replaying stale audio
+        // when sound resumes.
+        if (destination != nullptr && m_chain.NeedsSilence())
         {
-            ZeroMemory(destination,
-                       static_cast<size_t>(input->u32ValidFrameCount) *
-                           m_formatInfo.channels * m_formatInfo.bytesPerSample);
+            m_chain.ProcessSilence(destination, input->u32ValidFrameCount,
+                                   m_scratch.data());
+            output->u32BufferFlags = BUFFER_VALID;
+        }
+        else
+        {
+            output->u32BufferFlags = BUFFER_SILENT;
+
+            // If the engine did not give us an in-place buffer, make sure the
+            // silent output is actually zeroed.
+            if (destination != nullptr && destination != source)
+            {
+                ZeroMemory(destination,
+                           static_cast<size_t>(input->u32ValidFrameCount) *
+                               m_formatInfo.channels *
+                               m_formatInfo.bytesPerSample);
+            }
         }
         return;
     }

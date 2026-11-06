@@ -74,7 +74,9 @@ optional gate -> peak compressor -> makeup gain -> optional mono copy
 
 - **Gate** attenuates the signal when it falls below the threshold. `Range` is
   the maximum attenuation while closed, and `Hold` keeps it open after the level
-  drops. It is off by default.
+  drops. `Lookahead` delays the audio so the gate opens before a transient
+  arrives; it adds that much latency while the gate is enabled. The gate is off
+  by default.
 - **Compressor** uses a linked peak detector, so a stereo source keeps its
   image.
 - **Makeup** gain is applied after the compressor.
@@ -83,9 +85,9 @@ optional gate -> peak compressor -> makeup gain -> optional mono copy
 
 Default settings:
 
-| Gate | Threshold | Range | Attack | Hold | Release |
-| --- | --- | --- | --- | --- | --- |
-| off | -50 dBFS | 60 dB | 5 ms | 50 ms | 100 ms |
+| Gate | Threshold | Range | Attack | Hold | Release | Lookahead |
+| --- | --- | --- | --- | --- | --- | --- |
+| off | -50 dBFS | 60 dB | 5 ms | 50 ms | 100 ms | 0 ms |
 
 | Compressor | Threshold | Ratio | Attack | Release | Makeup |
 | --- | --- | --- | --- | --- | --- |
@@ -110,6 +112,7 @@ The GUI clamps values to a safe range:
 | Gate attack | 0.1 to 1000 ms |
 | Gate hold | 0 to 2000 ms |
 | Gate release | 1 to 5000 ms |
+| Gate lookahead | 0 to 20 ms |
 | Compressor threshold | -60 to 0 dBFS |
 | Compressor ratio | 1:1 to 20:1 |
 | Compressor attack | 0.1 to 1000 ms |
@@ -122,6 +125,8 @@ The GUI clamps values to a safe range:
   supported yet.
 - Settings take effect after **Apply**, which briefly stops audio. Changing
   them while audio keeps running is not supported yet.
+- Gate lookahead delays the stream by the configured lookahead time while the
+  gate is enabled. Keep it at 0 ms if you need zero latency.
 
 ## Architecture
 

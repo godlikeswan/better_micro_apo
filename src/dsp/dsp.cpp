@@ -1,5 +1,6 @@
 #include "dsp/dsp.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 
@@ -161,6 +162,18 @@ void Chain::Reset()
     }
 }
 
+bool Chain::NeedsSilence() const
+{
+    for (const auto& stage : m_stages)
+    {
+        if (stage->NeedsSilence())
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 void Chain::Process(const BYTE* source, BYTE* destination, UINT32 frames,
                     double* scratch) const
 {
@@ -190,6 +203,41 @@ void Chain::Process(const BYTE* source, BYTE* destination, UINT32 frames,
         scratch[i] = DecodeSample(m_format.sample, source, i);
     }
 
+    for (auto& stage : m_stages)
+    {
+        stage->Process(scratch, frames, m_format.channels);
+    }
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        EncodeSample(m_format.sample, destination, i, scratch[i]);
+    }
+}
+
+void Chain::ProcessSilence(BYTE* destination, UINT32 frames,
+                           double* scratch) const
+{
+    if (destination == nullptr ||
+        m_format.sample == SampleFormat::Unknown || m_format.channels == 0)
+    {
+        return;
+    }
+
+    const size_t count = static_cast<size_t>(frames) * m_format.channels;
+    if (count == 0)
+    {
+        return;
+    }
+
+    if (m_stages.empty())
+    {
+        std::memset(destination, 0, count * m_format.bytesPerSample);
+        return;
+    }
+
+    // Run zeros through the stages so buffered stages (such as a gate with
+    // lookahead) flush their tail instead of replaying stale audio later.
+    std::fill(scratch, scratch + count, 0.0);
     for (auto& stage : m_stages)
     {
         stage->Process(scratch, frames, m_format.channels);

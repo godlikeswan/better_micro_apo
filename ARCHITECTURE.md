@@ -13,7 +13,8 @@ identity and aggregation are handled by ATL (`CComObjectRootEx`, `CComCoClass`,
 
 ## Processing
 
-- 1 input / 1 output, in-place, zero latency.
+- 1 input / 1 output, in-place. Latency is zero unless the gate lookahead is
+  enabled.
 - Supported sample formats: float32, PCM16, PCM24, PCM32 (container size must
   equal the valid-bit size).
 - The DSP is a chain of `apo::dsp::Stage` objects (`src/dsp`). `ConfigureDsp()`
@@ -30,6 +31,11 @@ identity and aggregation are handled by ATL (`CComObjectRootEx`, `CComCoClass`,
   `double` scratch buffer, runs each stage in place, then encodes and clips the
   result. The scratch buffer is sized in `LockForProcess` from the connection's
   maximum frame count, so `APOProcess` stays allocation-free.
+- `GateStage` can delay the audio by up to 20 ms while its detector watches the
+  incoming signal, so the gate opens before a transient reaches the output. The
+  delay line is allocated in `Configure`, cleared in `Reset`, and its state is
+  advanced for silent buffers too (`Stage::NeedsSilence` /
+  `Chain::ProcessSilence`) so buffered audio is not replayed later.
 - The gate and compressor both use a linked peak detector across channels, so a
   stereo source keeps its image.
 - Optional mono mode copies the processed left channel to every other channel,
@@ -50,9 +56,9 @@ cached instance state, so the real-time path does no file I/O and no
 allocation. Missing files fall back to the defaults.
 
 The INI keys are `gate_enabled`, `gate_threshold_db`, `gate_range_db`,
-`gate_attack_ms`, `gate_hold_ms`, `gate_release_ms`, `compressor_enabled`,
-`compressor_threshold_db`, `compressor_ratio`, `compressor_attack_ms`,
-`compressor_release_ms`, `makeup_db`, and `mono`. Legacy keys (`threshold_db`,
+`gate_attack_ms`, `gate_hold_ms`, `gate_release_ms`, `gate_lookahead_ms`,
+`compressor_enabled`, `compressor_threshold_db`, `compressor_ratio`,
+`compressor_attack_ms`, `compressor_release_ms`, `makeup_db`, and `mono`. Legacy keys (`threshold_db`,
 `ratio`, `attack_ms`, `release_ms`) are still read for the compressor. A legacy
 `input_gain_db` key is folded into the compressor threshold and makeup gain
 (`threshold -= input_gain`, `makeup += input_gain`) so settings written before

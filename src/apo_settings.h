@@ -14,6 +14,11 @@ struct GateSettings
     double attackMs = 5.0;
     double holdMs = 50.0;
     double releaseMs = 100.0;
+
+    // Detector lookahead. The audio is delayed by this much so the gate can
+    // open before a transient reaches the output. Adds the same latency to the
+    // stream while the gate is enabled.
+    double lookaheadMs = 0.0;
 };
 
 struct CompressorSettings

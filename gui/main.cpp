@@ -61,6 +61,8 @@ enum : int {
     IDC_GATE_HOLD_EDIT,
     IDC_GATE_RELEASE_LABEL,
     IDC_GATE_RELEASE_EDIT,
+    IDC_GATE_LOOKAHEAD_LABEL,
+    IDC_GATE_LOOKAHEAD_EDIT,
     IDC_COMPRESSOR,
     IDC_COMP_THRESHOLD_LABEL,
     IDC_COMP_THRESHOLD_EDIT,
@@ -123,6 +125,8 @@ HWND g_gateHoldLabel = nullptr;
 HWND g_gateHoldEdit = nullptr;
 HWND g_gateReleaseLabel = nullptr;
 HWND g_gateReleaseEdit = nullptr;
+HWND g_gateLookaheadLabel = nullptr;
+HWND g_gateLookaheadEdit = nullptr;
 HWND g_compressor = nullptr;
 HWND g_compThresholdLabel = nullptr;
 HWND g_compThresholdEdit = nullptr;
@@ -286,8 +290,9 @@ void ClearSettingsEditor()
     SetWindowTextW(g_settingsName, L"Select a device");
     const HWND edits[] = {
         g_gateThresholdEdit, g_gateRangeEdit, g_gateAttackEdit,
-        g_gateHoldEdit, g_gateReleaseEdit, g_compThresholdEdit,
-        g_compRatioEdit, g_compAttackEdit, g_compReleaseEdit, g_makeupEdit,
+        g_gateHoldEdit, g_gateReleaseEdit, g_gateLookaheadEdit,
+        g_compThresholdEdit, g_compRatioEdit, g_compAttackEdit,
+        g_compReleaseEdit, g_makeupEdit,
     };
     for (HWND edit : edits) {
         SetWindowTextW(edit, L"");
@@ -317,6 +322,7 @@ void ShowSettingsForSelected()
     SetEditNumber(g_gateAttackEdit, settings.gate.attackMs);
     SetEditNumber(g_gateHoldEdit, settings.gate.holdMs);
     SetEditNumber(g_gateReleaseEdit, settings.gate.releaseMs);
+    SetEditNumber(g_gateLookaheadEdit, settings.gate.lookaheadMs);
     SetEditNumber(g_compThresholdEdit, settings.compressor.thresholdDb);
     SetEditNumber(g_compRatioEdit, settings.compressor.ratio);
     SetEditNumber(g_compAttackEdit, settings.compressor.attackMs);
@@ -345,6 +351,7 @@ bool CommitSettingsEditor()
         !ReadEditNumber(g_gateAttackEdit, settings.gate.attackMs) ||
         !ReadEditNumber(g_gateHoldEdit, settings.gate.holdMs) ||
         !ReadEditNumber(g_gateReleaseEdit, settings.gate.releaseMs) ||
+        !ReadEditNumber(g_gateLookaheadEdit, settings.gate.lookaheadMs) ||
         !ReadEditNumber(g_compThresholdEdit,
                         settings.compressor.thresholdDb) ||
         !ReadEditNumber(g_compRatioEdit, settings.compressor.ratio) ||
@@ -371,6 +378,7 @@ bool CommitSettingsEditor()
     SetEditNumber(g_gateAttackEdit, settings.gate.attackMs);
     SetEditNumber(g_gateHoldEdit, settings.gate.holdMs);
     SetEditNumber(g_gateReleaseEdit, settings.gate.releaseMs);
+    SetEditNumber(g_gateLookaheadEdit, settings.gate.lookaheadMs);
     SetEditNumber(g_compThresholdEdit, settings.compressor.thresholdDb);
     SetEditNumber(g_compRatioEdit, settings.compressor.ratio);
     SetEditNumber(g_compAttackEdit, settings.compressor.attackMs);
@@ -389,6 +397,7 @@ void EnableSettingsControls(bool enabled)
         g_gateAttackLabel, g_gateAttackEdit,
         g_gateHoldLabel, g_gateHoldEdit,
         g_gateReleaseLabel, g_gateReleaseEdit,
+        g_gateLookaheadLabel, g_gateLookaheadEdit,
         g_compressor,
         g_compThresholdLabel, g_compThresholdEdit,
         g_compRatioLabel, g_compRatioEdit,
@@ -731,7 +740,8 @@ void Layout(int width, int height)
                      g_gateRangeLabel, g_gateRangeEdit);
     placeSettingPair(g_gateAttackLabel, g_gateAttackEdit, g_gateHoldLabel,
                      g_gateHoldEdit);
-    placeSettingPair(g_gateReleaseLabel, g_gateReleaseEdit, nullptr, nullptr);
+    placeSettingPair(g_gateReleaseLabel, g_gateReleaseEdit,
+                     g_gateLookaheadLabel, g_gateLookaheadEdit);
 
     MoveWindow(g_compressor, settingsX, settingsY, settingsWidth, Scale(20),
                TRUE);
@@ -924,6 +934,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         g_gateReleaseLabel = CreateStatic(window, IDC_GATE_RELEASE_LABEL,
                                           L"Release (ms)", SS_LEFT);
         g_gateReleaseEdit = CreateEdit(window, IDC_GATE_RELEASE_EDIT);
+        g_gateLookaheadLabel = CreateStatic(
+            window, IDC_GATE_LOOKAHEAD_LABEL, L"Lookahead (ms)", SS_LEFT);
+        g_gateLookaheadEdit = CreateEdit(window, IDC_GATE_LOOKAHEAD_EDIT);
         g_compressor = CreateCheck(window, IDC_COMPRESSOR, L"Compressor");
         g_compThresholdLabel = CreateStatic(
             window, IDC_COMP_THRESHOLD_LABEL, L"Threshold (dBFS)", SS_LEFT);
@@ -997,6 +1010,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_GATE_ATTACK_EDIT:
         case IDC_GATE_HOLD_EDIT:
         case IDC_GATE_RELEASE_EDIT:
+        case IDC_GATE_LOOKAHEAD_EDIT:
         case IDC_COMP_THRESHOLD_EDIT:
         case IDC_COMP_RATIO_EDIT:
         case IDC_COMP_ATTACK_EDIT:
@@ -1229,6 +1243,8 @@ int DumpStatus(const std::wstring& path)
                 FormatNumber(endpoint.settings.gate.holdMs) +
                 L" | gate_release=" +
                 FormatNumber(endpoint.settings.gate.releaseMs) +
+                L" | gate_lookahead=" +
+                FormatNumber(endpoint.settings.gate.lookaheadMs) +
                 L" | compressor=" +
                 (endpoint.settings.compressor.enabled ? L"on" : L"off") +
                 L" | threshold=" +

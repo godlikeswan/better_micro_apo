@@ -200,6 +200,8 @@ void ClampSettings(ApoSettings& settings)
     ClampFinite(settings.gate.attackMs, defaults.gate.attackMs, 0.1, 1000.0);
     ClampFinite(settings.gate.holdMs, defaults.gate.holdMs, 0.0, 2000.0);
     ClampFinite(settings.gate.releaseMs, defaults.gate.releaseMs, 1.0, 5000.0);
+    ClampFinite(settings.gate.lookaheadMs, defaults.gate.lookaheadMs, 0.0,
+                20.0);
 
     ClampFinite(settings.compressor.thresholdDb,
                 defaults.compressor.thresholdDb, -60.0, 0.0);
@@ -286,6 +288,8 @@ bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
             ParseDouble(value, settings.gate.holdMs);
         } else if (EqualsIgnoreCase(key, L"gate_release_ms")) {
             ParseDouble(value, settings.gate.releaseMs);
+        } else if (EqualsIgnoreCase(key, L"gate_lookahead_ms")) {
+            ParseDouble(value, settings.gate.lookaheadMs);
         } else if (EqualsIgnoreCase(key, L"compressor_enabled")) {
             ParseBool(value, settings.compressor.enabled);
         } else if (EqualsIgnoreCase(key, L"compressor_threshold_db") ||
@@ -334,6 +338,8 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
     text += "gate_attack_ms=" + FormatDouble(settings.gate.attackMs) + "\n";
     text += "gate_hold_ms=" + FormatDouble(settings.gate.holdMs) + "\n";
     text += "gate_release_ms=" + FormatDouble(settings.gate.releaseMs) + "\n";
+    text += "gate_lookahead_ms=" + FormatDouble(settings.gate.lookaheadMs) +
+            "\n";
     text += std::string("compressor_enabled=") +
             (settings.compressor.enabled ? "1" : "0") + "\n";
     text += "compressor_threshold_db=" +
