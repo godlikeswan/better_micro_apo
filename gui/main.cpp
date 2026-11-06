@@ -73,6 +73,7 @@ enum : int {
     IDC_COMP_ATTACK_EDIT,
     IDC_COMP_RELEASE_LABEL,
     IDC_COMP_RELEASE_EDIT,
+    IDC_GAIN,
     IDC_MAKEUP_LABEL,
     IDC_MAKEUP_EDIT,
     IDC_MONO,
@@ -138,6 +139,7 @@ HWND g_compAttackLabel = nullptr;
 HWND g_compAttackEdit = nullptr;
 HWND g_compReleaseLabel = nullptr;
 HWND g_compReleaseEdit = nullptr;
+HWND g_gain = nullptr;
 HWND g_makeupLabel = nullptr;
 HWND g_makeupEdit = nullptr;
 HWND g_mono = nullptr;
@@ -310,6 +312,7 @@ void ClearSettingsEditor()
     }
     SendMessageW(g_gate, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessageW(g_compressor, BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessageW(g_gain, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessageW(g_mono, BM_SETCHECK, BST_UNCHECKED, 0);
     g_settingsLoading = false;
 }
@@ -344,6 +347,8 @@ void ShowSettingsForSelected()
     SendMessageW(g_compressor, BM_SETCHECK,
                  settings.compressor.enabled ? BST_CHECKED : BST_UNCHECKED,
                  0);
+    SendMessageW(g_gain, BM_SETCHECK,
+                 settings.makeupEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(g_mono, BM_SETCHECK,
                  settings.mono ? BST_CHECKED : BST_UNCHECKED, 0);
     g_settingsLoading = false;
@@ -378,6 +383,8 @@ bool CommitSettingsEditor()
         SendMessageW(g_gate, BM_GETCHECK, 0, 0) == BST_CHECKED;
     settings.compressor.enabled =
         SendMessageW(g_compressor, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    settings.makeupEnabled =
+        SendMessageW(g_gain, BM_GETCHECK, 0, 0) == BST_CHECKED;
     settings.mono =
         SendMessageW(g_mono, BM_GETCHECK, 0, 0) == BST_CHECKED;
     apo::ClampSettings(settings);
@@ -414,7 +421,7 @@ void EnableSettingsControls(bool enabled)
         g_compRatioLabel, g_compRatioEdit,
         g_compAttackLabel, g_compAttackEdit,
         g_compReleaseLabel, g_compReleaseEdit,
-        g_makeupLabel, g_makeupEdit,
+        g_gain, g_makeupLabel, g_makeupEdit,
         g_mono, g_listen,
     };
     for (HWND control : controls) {
@@ -795,6 +802,8 @@ void Layout(int width, int height)
                      g_compRatioLabel, g_compRatioEdit);
     placeSettingPair(g_compAttackLabel, g_compAttackEdit, g_compReleaseLabel,
                      g_compReleaseEdit);
+    MoveWindow(g_gain, settingsX, settingsY, settingsWidth, Scale(20), TRUE);
+    settingsY += Scale(28);
     placeSettingPair(g_makeupLabel, g_makeupEdit, nullptr, nullptr);
 
     MoveWindow(g_mono, settingsX, settingsY, settingsWidth, Scale(20), TRUE);
@@ -995,6 +1004,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         g_compReleaseLabel = CreateStatic(window, IDC_COMP_RELEASE_LABEL,
                                           L"Release (ms)", SS_LEFT);
         g_compReleaseEdit = CreateEdit(window, IDC_COMP_RELEASE_EDIT);
+        g_gain = CreateCheck(window, IDC_GAIN, L"Gain");
         g_makeupLabel =
             CreateStatic(window, IDC_MAKEUP_LABEL, L"Makeup (dB)", SS_LEFT);
         g_makeupEdit = CreateEdit(window, IDC_MAKEUP_EDIT);
@@ -1068,6 +1078,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             break;
         case IDC_GATE:
         case IDC_COMPRESSOR:
+        case IDC_GAIN:
         case IDC_MONO:
             if (HIWORD(wParam) == BN_CLICKED) {
                 MarkSettingsDirty();
@@ -1301,6 +1312,8 @@ int DumpStatus(const std::wstring& path)
                 FormatNumber(endpoint.settings.compressor.attackMs) +
                 L" | release=" +
                 FormatNumber(endpoint.settings.compressor.releaseMs) +
+                L" | gain=" +
+                (endpoint.settings.makeupEnabled ? L"on" : L"off") +
                 L" | makeup=" + FormatNumber(endpoint.settings.makeupDb) +
                 L" | mono=" + (endpoint.settings.mono ? L"on" : L"off") +
                 L"\r\n";

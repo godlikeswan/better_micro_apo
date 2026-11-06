@@ -37,6 +37,10 @@ struct ApoSettings
 {
     GateSettings gate;
     CompressorSettings compressor;
+
+    // Flat makeup gain. `makeupEnabled` lets the stage be bypassed without
+    // losing the configured value.
+    bool makeupEnabled = true;
     double makeupDb = 28.0;
 
     // Copy the first (left) channel to every other channel after processing.

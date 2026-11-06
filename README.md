@@ -70,7 +70,7 @@ The chain order is fixed; stages can be disabled, and makeup and mono are
 optional:
 
 ```
-optional gate -> peak compressor -> makeup gain -> optional mono copy
+optional gate -> peak compressor -> optional makeup gain -> optional mono copy
 ```
 
 - **Gate** attenuates the signal when it falls below the threshold. `Range` is
@@ -80,6 +80,8 @@ optional gate -> peak compressor -> makeup gain -> optional mono copy
   by default.
 - **Compressor** uses a linked peak detector, so a stereo source keeps its
   image.
+- **Gain** enables the makeup gain stage. The configured value is kept while
+  the checkbox is off, so it can be bypassed without losing it.
 - **Makeup** gain is applied after the compressor.
 - **Mono (left to all channels)** duplicates the processed left channel to all
   other channels. It is per device and is saved with the other settings.
@@ -93,6 +95,8 @@ Default settings:
 | Compressor | Threshold | Ratio | Attack | Release | Makeup |
 | --- | --- | --- | --- | --- | --- |
 | enabled | -58 dBFS | 3:1 | 5 ms | 100 ms | +28 dB |
+
+Gain is enabled by default.
 
 Each capture device stores its own settings in
 `C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.ini`. The APO reads

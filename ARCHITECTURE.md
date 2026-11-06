@@ -58,7 +58,8 @@ allocation. Missing files fall back to the defaults.
 The INI keys are `gate_enabled`, `gate_threshold_db`, `gate_range_db`,
 `gate_attack_ms`, `gate_hold_ms`, `gate_release_ms`, `gate_lookahead_ms`,
 `compressor_enabled`, `compressor_threshold_db`, `compressor_ratio`,
-`compressor_attack_ms`, `compressor_release_ms`, `makeup_db`, and `mono`. Legacy keys (`threshold_db`,
+`compressor_attack_ms`, `compressor_release_ms`, `makeup_enabled`, `makeup_db`,
+and `mono`. Legacy keys (`threshold_db`,
 `ratio`, `attack_ms`, `release_ms`) are still read for the compressor. A legacy
 `input_gain_db` key is folded into the compressor threshold and makeup gain
 (`threshold -= input_gain`, `makeup += input_gain`) so settings written before

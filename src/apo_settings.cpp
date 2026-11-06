@@ -304,6 +304,8 @@ bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
         } else if (EqualsIgnoreCase(key, L"compressor_release_ms") ||
                    EqualsIgnoreCase(key, L"release_ms")) {
             ParseDouble(value, settings.compressor.releaseMs);
+        } else if (EqualsIgnoreCase(key, L"makeup_enabled")) {
+            ParseBool(value, settings.makeupEnabled);
         } else if (EqualsIgnoreCase(key, L"makeup_db")) {
             ParseDouble(value, settings.makeupDb);
         } else if (EqualsIgnoreCase(key, L"mono")) {
@@ -350,6 +352,8 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
             FormatDouble(settings.compressor.attackMs) + "\n";
     text += "compressor_release_ms=" +
             FormatDouble(settings.compressor.releaseMs) + "\n";
+    text += std::string("makeup_enabled=") +
+            (settings.makeupEnabled ? "1" : "0") + "\n";
     text += "makeup_db=" + FormatDouble(settings.makeupDb) + "\n";
     text += std::string("mono=") + (settings.mono ? "1" : "0") + "\n";
 

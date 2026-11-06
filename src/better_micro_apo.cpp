@@ -320,7 +320,7 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
         return E_OUTOFMEMORY;
     }
 
-    Log(L"LockForProcess ok: format=%s channels=%u rate=%u containerBytes=%u maxFrames=%u endpoint=%s gate=%d gateThreshold=%.2fdB gateRange=%.2fdB gateAttack=%.2fms gateHold=%.2fms gateRelease=%.2fms gateLookahead=%.2fms compressor=%d threshold=%.2fdB ratio=%.2f:1 attack=%.2fms release=%.2fms makeup=%.2fdB mono=%d",
+    Log(L"LockForProcess ok: format=%s channels=%u rate=%u containerBytes=%u maxFrames=%u endpoint=%s gate=%d gateThreshold=%.2fdB gateRange=%.2fdB gateAttack=%.2fms gateHold=%.2fms gateRelease=%.2fms gateLookahead=%.2fms compressor=%d threshold=%.2fdB ratio=%.2f:1 attack=%.2fms release=%.2fms makeup=%d makeupGain=%.2fdB mono=%d",
         apo::dsp::FormatName(m_formatInfo.sample), m_formatInfo.channels,
         m_formatInfo.sampleRate, m_formatInfo.bytesPerSample, m_maxFrames,
         m_endpointId.empty() ? L"<unknown>" : m_endpointId.c_str(),
@@ -331,7 +331,8 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
         m_settings.compressor.enabled ? 1 : 0,
         m_settings.compressor.thresholdDb, m_settings.compressor.ratio,
         m_settings.compressor.attackMs, m_settings.compressor.releaseMs,
-        m_settings.makeupDb, m_settings.mono ? 1 : 0);
+        m_settings.makeupEnabled ? 1 : 0, m_settings.makeupDb,
+        m_settings.mono ? 1 : 0);
     return S_OK;
 }
 
@@ -443,7 +444,7 @@ void BetterMicroApo::ConfigureDsp()
     {
         m_chain.Add(std::make_unique<CompressorStage>(m_settings.compressor));
     }
-    if (m_settings.makeupDb != 0.0)
+    if (m_settings.makeupEnabled && m_settings.makeupDb != 0.0)
     {
         m_chain.Add(std::make_unique<GainStage>(m_settings.makeupDb));
     }
