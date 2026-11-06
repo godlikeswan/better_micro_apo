@@ -62,19 +62,6 @@ standalone DLL is still produced for debugging.
 
 The DLL uses the static MSVC runtime and has no third-party dependencies.
 
-## Releases
-
-GitHub Actions builds the Release configuration on every push and publishes a
-release for every `v*` tag. The release contains
-`better_micro_apo-<tag>-win64.zip` with the GUI executable and these docs.
-
-To publish a release:
-
-```powershell
-git tag v0.1.0
-git push origin v0.1.0
-```
-
 ## DSP settings
 
 The chain is fixed:

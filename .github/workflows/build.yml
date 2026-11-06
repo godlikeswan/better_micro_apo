@@ -24,24 +24,11 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel
 
-      - name: Package
-        shell: pwsh
-        run: |
-          $stage = "package"
-          New-Item -ItemType Directory -Path $stage | Out-Null
-          Copy-Item "build/bin/Release/better_micro_apo_gui.exe" $stage
-          Copy-Item "README.md", "ARCHITECTURE.md" $stage
-          $label = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME } else { "dev" }
-          Compress-Archive -Path "$stage/*" -DestinationPath "better_micro_apo-$label-win64.zip"
-
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: better_micro_apo-win64
-          path: |
-            better_micro_apo-*-win64.zip
-            build/bin/Release/better_micro_apo_gui.exe
-            build/bin/Release/better_micro_apo.dll
+          name: better_micro_apo
+          path: build/bin/Release/better_micro_apo_gui.exe
           if-no-files-found: error
 
       - name: Publish release
@@ -50,9 +37,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $zip = Get-ChildItem "better_micro_apo-*-win64.zip" | Select-Object -First 1
           gh release create "$env:GITHUB_REF_NAME" `
-            $zip.FullName `
-            "build/bin/Release/better_micro_apo.dll" `
+            "build/bin/Release/better_micro_apo_gui.exe" `
             --title "Better Micro APO $env:GITHUB_REF_NAME" `
             --generate-notes
