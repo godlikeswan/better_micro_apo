@@ -112,7 +112,7 @@ The GUI clamps values to a safe range:
 | Gate attack | 0.1 to 1000 ms |
 | Gate hold | 0 to 2000 ms |
 | Gate release | 1 to 5000 ms |
-| Gate lookahead | 0 to 20 ms |
+| Gate lookahead | 0 to 300 ms |
 | Compressor threshold | -60 to 0 dBFS |
 | Compressor ratio | 1:1 to 20:1 |
 | Compressor attack | 0.1 to 1000 ms |

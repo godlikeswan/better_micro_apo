@@ -31,7 +31,7 @@ identity and aggregation are handled by ATL (`CComObjectRootEx`, `CComCoClass`,
   `double` scratch buffer, runs each stage in place, then encodes and clips the
   result. The scratch buffer is sized in `LockForProcess` from the connection's
   maximum frame count, so `APOProcess` stays allocation-free.
-- `GateStage` can delay the audio by up to 20 ms while its detector watches the
+- `GateStage` can delay the audio by up to 300 ms while its detector watches the
   incoming signal, so the gate opens before a transient reaches the output. The
   delay line is allocated in `Configure`, cleared in `Reset`, and its state is
   advanced for silent buffers too (`Stage::NeedsSilence` /

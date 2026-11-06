@@ -201,7 +201,7 @@ void ClampSettings(ApoSettings& settings)
     ClampFinite(settings.gate.holdMs, defaults.gate.holdMs, 0.0, 2000.0);
     ClampFinite(settings.gate.releaseMs, defaults.gate.releaseMs, 1.0, 5000.0);
     ClampFinite(settings.gate.lookaheadMs, defaults.gate.lookaheadMs, 0.0,
-                20.0);
+                300.0);
 
     ClampFinite(settings.compressor.thresholdDb,
                 defaults.compressor.thresholdDb, -60.0, 0.0);
