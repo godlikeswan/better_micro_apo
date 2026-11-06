@@ -9,13 +9,19 @@
 #include <BaseAudioProcessingObject.h>
 
 #include <string>
+#include <vector>
 
 #include "apo_ids.h"
 #include "apo_settings.h"
+#include "dsp/dsp.h"
 
 // Minimal capture APO.
 //
-// DSP chain: input gain -> peak compressor -> makeup gain.
+// DSP chain: optional gate -> linked peak compressor -> makeup gain ->
+// optional mono copy. The stages live in src/dsp; ConfigureDsp() assembles the
+// chain, so adding or reordering a stage only touches that function and the
+// settings model.
+//
 // The DSP settings are loaded per endpoint from
 // C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.ini.
 //
@@ -75,37 +81,16 @@ public:
     static const CRegAPOProperties<1> sm_RegProperties;
 
 private:
-    enum class SampleFormat
-    {
-        Unknown,
-        Float32,
-        Pcm16,
-        Pcm24,
-        Pcm32
-    };
-
     static bool IsSupportedFormat(const UNCOMPRESSEDAUDIOFORMAT& format);
-    static const wchar_t* FormatName(SampleFormat format);
 
     void ConfigureDsp();
-    void UpdateEnvelope(double peak);
-    double ReadSample(const BYTE* buffer, size_t index) const;
-    void WriteSample(BYTE* buffer, size_t index, double value) const;
     void ProcessBuffer(const BYTE* source, BYTE* destination, UINT32 frames);
 
     std::wstring m_endpointId;
     apo::ApoSettings m_settings;
 
-    UINT32 m_channels = 0;
-    UINT32 m_sampleRate = 0;
-    UINT32 m_bytesPerSample = 0;
-    SampleFormat m_format = SampleFormat::Unknown;
-
-    // Compressor state and coefficients.
-    double m_inputGain = 1.0;
-    double m_makeupGain = 1.0;
-    double m_thresholdLinear = 1.0;
-    double m_attackCoeff = 0.0;
-    double m_releaseCoeff = 0.0;
-    double m_envelopeDb = 0.0;
+    apo::dsp::Chain m_chain;
+    apo::dsp::AudioFormat m_formatInfo;
+    std::vector<double> m_scratch;
+    UINT32 m_maxFrames = 0;
 };

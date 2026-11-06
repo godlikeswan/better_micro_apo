@@ -16,6 +16,8 @@ add_library(better_micro_apo SHARED
     src/apo_settings.cpp
     src/better_micro_apo.cpp
     src/better_micro_apo.def
+    src/dsp/dsp.cpp
+    src/dsp/stages.cpp
 )
 target_include_directories(better_micro_apo PRIVATE src)
 target_compile_definitions(better_micro_apo PRIVATE

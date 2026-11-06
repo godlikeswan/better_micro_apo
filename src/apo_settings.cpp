@@ -178,33 +178,39 @@ double Clamp(double value, double low, double high)
 
 } // namespace
 
+namespace {
+
+void ClampFinite(double& value, double fallback, double low, double high)
+{
+    if (!std::isfinite(value)) {
+        value = fallback;
+    }
+    value = Clamp(value, low, high);
+}
+
+} // namespace
+
 void ClampSettings(ApoSettings& settings)
 {
-    if (!std::isfinite(settings.inputGainDb)) {
-        settings.inputGainDb = ApoSettings{}.inputGainDb;
-    }
-    if (!std::isfinite(settings.thresholdDb)) {
-        settings.thresholdDb = ApoSettings{}.thresholdDb;
-    }
-    if (!std::isfinite(settings.ratio)) {
-        settings.ratio = ApoSettings{}.ratio;
-    }
-    if (!std::isfinite(settings.attackMs)) {
-        settings.attackMs = ApoSettings{}.attackMs;
-    }
-    if (!std::isfinite(settings.releaseMs)) {
-        settings.releaseMs = ApoSettings{}.releaseMs;
-    }
-    if (!std::isfinite(settings.makeupDb)) {
-        settings.makeupDb = ApoSettings{}.makeupDb;
-    }
+    const ApoSettings defaults;
 
-    settings.inputGainDb = Clamp(settings.inputGainDb, -24.0, 48.0);
-    settings.thresholdDb = Clamp(settings.thresholdDb, -60.0, 0.0);
-    settings.ratio = Clamp(settings.ratio, 1.0, 20.0);
-    settings.attackMs = Clamp(settings.attackMs, 0.1, 1000.0);
-    settings.releaseMs = Clamp(settings.releaseMs, 1.0, 5000.0);
-    settings.makeupDb = Clamp(settings.makeupDb, -24.0, 48.0);
+    ClampFinite(settings.gate.thresholdDb, defaults.gate.thresholdDb, -80.0,
+                0.0);
+    ClampFinite(settings.gate.rangeDb, defaults.gate.rangeDb, 0.0, 96.0);
+    ClampFinite(settings.gate.attackMs, defaults.gate.attackMs, 0.1, 1000.0);
+    ClampFinite(settings.gate.holdMs, defaults.gate.holdMs, 0.0, 2000.0);
+    ClampFinite(settings.gate.releaseMs, defaults.gate.releaseMs, 1.0, 5000.0);
+
+    ClampFinite(settings.compressor.thresholdDb,
+                defaults.compressor.thresholdDb, -60.0, 0.0);
+    ClampFinite(settings.compressor.ratio, defaults.compressor.ratio, 1.0,
+                20.0);
+    ClampFinite(settings.compressor.attackMs, defaults.compressor.attackMs,
+                0.1, 1000.0);
+    ClampFinite(settings.compressor.releaseMs, defaults.compressor.releaseMs,
+                1.0, 5000.0);
+
+    ClampFinite(settings.makeupDb, defaults.makeupDb, -24.0, 48.0);
 }
 
 std::wstring SettingsDirectory()
@@ -225,6 +231,12 @@ bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
     if (!ReadFileText(SettingsPath(endpointId), data)) {
         return false;
     }
+
+    // Older files used a separate input gain stage. If we see it, fold its
+    // value into the compressor threshold and makeup gain so the sound is
+    // preserved after the stage was removed.
+    bool hasLegacyInputGain = false;
+    double legacyInputGainDb = 0.0;
 
     const std::wstring text = Utf8ToWide(data);
     std::wstring section;
@@ -259,22 +271,45 @@ bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
         const std::wstring value = Trim(line.substr(equals + 1));
 
         if (EqualsIgnoreCase(key, L"input_gain_db")) {
-            ParseDouble(value, settings.inputGainDb);
+            if (ParseDouble(value, legacyInputGainDb)) {
+                hasLegacyInputGain = true;
+            }
+        } else if (EqualsIgnoreCase(key, L"gate_enabled")) {
+            ParseBool(value, settings.gate.enabled);
+        } else if (EqualsIgnoreCase(key, L"gate_threshold_db")) {
+            ParseDouble(value, settings.gate.thresholdDb);
+        } else if (EqualsIgnoreCase(key, L"gate_range_db")) {
+            ParseDouble(value, settings.gate.rangeDb);
+        } else if (EqualsIgnoreCase(key, L"gate_attack_ms")) {
+            ParseDouble(value, settings.gate.attackMs);
+        } else if (EqualsIgnoreCase(key, L"gate_hold_ms")) {
+            ParseDouble(value, settings.gate.holdMs);
+        } else if (EqualsIgnoreCase(key, L"gate_release_ms")) {
+            ParseDouble(value, settings.gate.releaseMs);
         } else if (EqualsIgnoreCase(key, L"compressor_enabled")) {
-            ParseBool(value, settings.compressorEnabled);
-        } else if (EqualsIgnoreCase(key, L"threshold_db")) {
-            ParseDouble(value, settings.thresholdDb);
-        } else if (EqualsIgnoreCase(key, L"ratio")) {
-            ParseDouble(value, settings.ratio);
-        } else if (EqualsIgnoreCase(key, L"attack_ms")) {
-            ParseDouble(value, settings.attackMs);
-        } else if (EqualsIgnoreCase(key, L"release_ms")) {
-            ParseDouble(value, settings.releaseMs);
+            ParseBool(value, settings.compressor.enabled);
+        } else if (EqualsIgnoreCase(key, L"compressor_threshold_db") ||
+                   EqualsIgnoreCase(key, L"threshold_db")) {
+            ParseDouble(value, settings.compressor.thresholdDb);
+        } else if (EqualsIgnoreCase(key, L"compressor_ratio") ||
+                   EqualsIgnoreCase(key, L"ratio")) {
+            ParseDouble(value, settings.compressor.ratio);
+        } else if (EqualsIgnoreCase(key, L"compressor_attack_ms") ||
+                   EqualsIgnoreCase(key, L"attack_ms")) {
+            ParseDouble(value, settings.compressor.attackMs);
+        } else if (EqualsIgnoreCase(key, L"compressor_release_ms") ||
+                   EqualsIgnoreCase(key, L"release_ms")) {
+            ParseDouble(value, settings.compressor.releaseMs);
         } else if (EqualsIgnoreCase(key, L"makeup_db")) {
             ParseDouble(value, settings.makeupDb);
         } else if (EqualsIgnoreCase(key, L"mono")) {
             ParseBool(value, settings.mono);
         }
+    }
+
+    if (hasLegacyInputGain) {
+        settings.compressor.thresholdDb -= legacyInputGainDb;
+        settings.makeupDb += legacyInputGainDb;
     }
 
     ClampSettings(settings);
@@ -291,13 +326,24 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
 
     std::string text;
     text += "[dsp]\n";
-    text += "input_gain_db=" + FormatDouble(settings.inputGainDb) + "\n";
+    text += std::string("gate_enabled=") +
+            (settings.gate.enabled ? "1" : "0") + "\n";
+    text += "gate_threshold_db=" + FormatDouble(settings.gate.thresholdDb) +
+            "\n";
+    text += "gate_range_db=" + FormatDouble(settings.gate.rangeDb) + "\n";
+    text += "gate_attack_ms=" + FormatDouble(settings.gate.attackMs) + "\n";
+    text += "gate_hold_ms=" + FormatDouble(settings.gate.holdMs) + "\n";
+    text += "gate_release_ms=" + FormatDouble(settings.gate.releaseMs) + "\n";
     text += std::string("compressor_enabled=") +
-            (settings.compressorEnabled ? "1" : "0") + "\n";
-    text += "threshold_db=" + FormatDouble(settings.thresholdDb) + "\n";
-    text += "ratio=" + FormatDouble(settings.ratio) + "\n";
-    text += "attack_ms=" + FormatDouble(settings.attackMs) + "\n";
-    text += "release_ms=" + FormatDouble(settings.releaseMs) + "\n";
+            (settings.compressor.enabled ? "1" : "0") + "\n";
+    text += "compressor_threshold_db=" +
+            FormatDouble(settings.compressor.thresholdDb) + "\n";
+    text += "compressor_ratio=" + FormatDouble(settings.compressor.ratio) +
+            "\n";
+    text += "compressor_attack_ms=" +
+            FormatDouble(settings.compressor.attackMs) + "\n";
+    text += "compressor_release_ms=" +
+            FormatDouble(settings.compressor.releaseMs) + "\n";
     text += "makeup_db=" + FormatDouble(settings.makeupDb) + "\n";
     text += std::string("mono=") + (settings.mono ? "1" : "0") + "\n";
 

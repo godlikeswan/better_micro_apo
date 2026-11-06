@@ -1,17 +1,18 @@
 // Better Micro APO - a minimal Windows capture APO.
 //
-// DSP chain: input gain -> linked peak compressor -> makeup gain -> clip ->
+// DSP chain: optional gate -> linked peak compressor -> makeup gain ->
 // optional mono copy (left channel to all channels).
 //
-// COM plumbing follows Microsoft's SwapAPO sample: ATL owns the class factory,
-// the object map and the aggregation rules. Only the DSP and the registry
-// writes are ours.
+// The stages themselves live in src/dsp. COM plumbing follows Microsoft's
+// SwapAPO sample: ATL owns the class factory, the object map and the
+// aggregation rules. Only the DSP and the registry writes are ours.
 
 #include <atlbase.h>
 #include <atlcom.h>
 
 #include "better_micro_apo.h"
 #include "audio_format_ids.h"
+#include "dsp/stages.h"
 
 #include <mmdeviceapi.h>
 #include <objbase.h>
@@ -177,7 +178,7 @@ void BetterMicroApo::FinalRelease()
 STDMETHODIMP BetterMicroApo::Reset()
 {
     const HRESULT hr = CBaseAudioProcessingObject::Reset();
-    m_envelopeDb = 0.0;
+    m_chain.Reset();
     return hr;
 }
 
@@ -243,18 +244,6 @@ bool BetterMicroApo::IsSupportedFormat(const UNCOMPRESSEDAUDIOFORMAT& format)
     return false;
 }
 
-const wchar_t* BetterMicroApo::FormatName(SampleFormat format)
-{
-    switch (format)
-    {
-    case SampleFormat::Float32: return L"float32";
-    case SampleFormat::Pcm16:   return L"pcm16";
-    case SampleFormat::Pcm24:   return L"pcm24";
-    case SampleFormat::Pcm32:   return L"pcm32";
-    default:                    return L"unknown";
-    }
-}
-
 STDMETHODIMP BetterMicroApo::LockForProcess(
     UINT32 u32NumInputConnections,
     APO_CONNECTION_DESCRIPTOR** ppInputConnections,
@@ -281,25 +270,27 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
         return APOERR_INVALID_CONNECTION_FORMAT;
     }
 
-    m_channels = format.dwSamplesPerFrame;
-    m_sampleRate = static_cast<UINT32>(format.fFramesPerSecond + 0.5f);
-    m_bytesPerSample = format.dwBytesPerSampleContainer;
+    apo::dsp::AudioFormat info;
+    info.channels = format.dwSamplesPerFrame;
+    info.sampleRate = static_cast<UINT32>(format.fFramesPerSecond + 0.5f);
+    info.bytesPerSample = format.dwBytesPerSampleContainer;
+    info.maxFrames = ppInputConnections[0]->u32MaxFrameCount;
 
     if (IsEqualGUID(format.guidFormatType, SUBTYPE_IEEE_FLOAT))
     {
-        m_format = SampleFormat::Float32;
+        info.sample = apo::dsp::SampleFormat::Float32;
     }
-    else if (m_bytesPerSample == 2)
+    else if (info.bytesPerSample == 2)
     {
-        m_format = SampleFormat::Pcm16;
+        info.sample = apo::dsp::SampleFormat::Pcm16;
     }
-    else if (m_bytesPerSample == 3)
+    else if (info.bytesPerSample == 3)
     {
-        m_format = SampleFormat::Pcm24;
+        info.sample = apo::dsp::SampleFormat::Pcm24;
     }
     else
     {
-        m_format = SampleFormat::Pcm32;
+        info.sample = apo::dsp::SampleFormat::Pcm32;
     }
 
     m_settings = apo::ApoSettings{};
@@ -309,16 +300,37 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
     }
     apo::ClampSettings(m_settings);
 
-    ConfigureDsp();
-    m_envelopeDb = 0.0;
+    m_formatInfo = info;
+    m_maxFrames = (info.maxFrames > 0) ? info.maxFrames : 1;
 
-    Log(L"LockForProcess ok: format=%s channels=%u rate=%u containerBytes=%u maxFrames=%u endpoint=%s inputGain=%.2fdB compressor=%d threshold=%.2fdB ratio=%.2f:1 attack=%.2fms release=%.2fms makeup=%.2fdB mono=%d",
-        FormatName(m_format), m_channels, m_sampleRate, m_bytesPerSample,
-        ppInputConnections[0]->u32MaxFrameCount,
+    try
+    {
+        m_scratch.assign(
+            static_cast<size_t>(m_maxFrames) * info.channels, 0.0);
+        ConfigureDsp();
+    }
+    catch (...)
+    {
+        CBaseAudioProcessingObject::UnlockForProcess();
+        m_chain.Clear();
+        m_formatInfo = apo::dsp::AudioFormat{};
+        m_maxFrames = 0;
+        std::vector<double>().swap(m_scratch);
+        Log(L"LockForProcess: could not allocate DSP buffers");
+        return E_OUTOFMEMORY;
+    }
+
+    Log(L"LockForProcess ok: format=%s channels=%u rate=%u containerBytes=%u maxFrames=%u endpoint=%s gate=%d gateThreshold=%.2fdB gateRange=%.2fdB gateAttack=%.2fms gateHold=%.2fms gateRelease=%.2fms compressor=%d threshold=%.2fdB ratio=%.2f:1 attack=%.2fms release=%.2fms makeup=%.2fdB mono=%d",
+        apo::dsp::FormatName(m_formatInfo.sample), m_formatInfo.channels,
+        m_formatInfo.sampleRate, m_formatInfo.bytesPerSample, m_maxFrames,
         m_endpointId.empty() ? L"<unknown>" : m_endpointId.c_str(),
-        m_settings.inputGainDb, m_settings.compressorEnabled ? 1 : 0,
-        m_settings.thresholdDb, m_settings.ratio, m_settings.attackMs,
-        m_settings.releaseMs, m_settings.makeupDb, m_settings.mono ? 1 : 0);
+        m_settings.gate.enabled ? 1 : 0, m_settings.gate.thresholdDb,
+        m_settings.gate.rangeDb, m_settings.gate.attackMs,
+        m_settings.gate.holdMs, m_settings.gate.releaseMs,
+        m_settings.compressor.enabled ? 1 : 0,
+        m_settings.compressor.thresholdDb, m_settings.compressor.ratio,
+        m_settings.compressor.attackMs, m_settings.compressor.releaseMs,
+        m_settings.makeupDb, m_settings.mono ? 1 : 0);
     return S_OK;
 }
 
@@ -326,11 +338,10 @@ STDMETHODIMP BetterMicroApo::UnlockForProcess()
 {
     const HRESULT hr = CBaseAudioProcessingObject::UnlockForProcess();
 
-    m_format = SampleFormat::Unknown;
-    m_channels = 0;
-    m_sampleRate = 0;
-    m_bytesPerSample = 0;
-    m_envelopeDb = 0.0;
+    m_chain.Clear();
+    m_formatInfo = apo::dsp::AudioFormat{};
+    m_maxFrames = 0;
+    std::vector<double>().swap(m_scratch);
 
     Log(L"UnlockForProcess hr=0x%08X", hr);
     return hr;
@@ -359,8 +370,16 @@ STDMETHODIMP_(void) BetterMicroApo::APOProcess(
     output->u32Signature = APO_CONNECTION_PROPERTY_SIGNATURE;
     output->u32ValidFrameCount = input->u32ValidFrameCount;
 
-    if (!m_bIsLocked || m_format == SampleFormat::Unknown ||
+    if (!m_bIsLocked ||
+        m_formatInfo.sample == apo::dsp::SampleFormat::Unknown ||
         input->u32BufferFlags == BUFFER_INVALID)
+    {
+        output->u32ValidFrameCount = 0;
+        output->u32BufferFlags = BUFFER_INVALID;
+        return;
+    }
+
+    if (input->u32ValidFrameCount > m_maxFrames)
     {
         output->u32ValidFrameCount = 0;
         output->u32BufferFlags = BUFFER_INVALID;
@@ -380,7 +399,7 @@ STDMETHODIMP_(void) BetterMicroApo::APOProcess(
         {
             ZeroMemory(destination,
                        static_cast<size_t>(input->u32ValidFrameCount) *
-                           m_channels * m_bytesPerSample);
+                           m_formatInfo.channels * m_formatInfo.bytesPerSample);
         }
         return;
     }
@@ -398,199 +417,34 @@ STDMETHODIMP_(void) BetterMicroApo::APOProcess(
 
 void BetterMicroApo::ConfigureDsp()
 {
-    m_inputGain = std::pow(10.0, m_settings.inputGainDb / 20.0);
-    m_makeupGain = std::pow(10.0, m_settings.makeupDb / 20.0);
-    m_thresholdLinear = std::pow(10.0, m_settings.thresholdDb / 20.0);
+    using namespace apo::dsp;
 
-    const double sampleRate = (m_sampleRate > 0) ? static_cast<double>(m_sampleRate) : 48000.0;
-    const double attackSeconds =
-        (m_settings.attackMs > 0.0) ? (m_settings.attackMs * 0.001) : 0.001;
-    const double releaseSeconds =
-        (m_settings.releaseMs > 0.0) ? (m_settings.releaseMs * 0.001) : 0.001;
+    m_chain.Clear();
 
-    m_attackCoeff = 1.0 - std::exp(-1.0 / (attackSeconds * sampleRate));
-    m_releaseCoeff = 1.0 - std::exp(-1.0 / (releaseSeconds * sampleRate));
-}
-
-void BetterMicroApo::UpdateEnvelope(double peak)
-{
-    double targetDb = 0.0;
-
-    if (peak > m_thresholdLinear)
+    if (m_settings.gate.enabled)
     {
-        const double levelDb = 20.0 * std::log10(peak);
-        targetDb = (m_settings.thresholdDb - levelDb) *
-                   (1.0 - 1.0 / m_settings.ratio);
-        if (targetDb > 0.0)
-        {
-            targetDb = 0.0;
-        }
+        m_chain.Add(std::make_unique<GateStage>(m_settings.gate));
+    }
+    if (m_settings.compressor.enabled)
+    {
+        m_chain.Add(std::make_unique<CompressorStage>(m_settings.compressor));
+    }
+    if (m_settings.makeupDb != 0.0)
+    {
+        m_chain.Add(std::make_unique<GainStage>(m_settings.makeupDb));
+    }
+    if (m_settings.mono)
+    {
+        m_chain.Add(std::make_unique<MonoStage>());
     }
 
-    // Attack when we need more reduction, release when we need less.
-    const double coeff = (targetDb < m_envelopeDb) ? m_attackCoeff : m_releaseCoeff;
-    m_envelopeDb += (targetDb - m_envelopeDb) * coeff;
-}
-
-double BetterMicroApo::ReadSample(const BYTE* buffer, size_t index) const
-{
-    switch (m_format)
-    {
-    case SampleFormat::Float32:
-        return static_cast<double>(reinterpret_cast<const float*>(buffer)[index]);
-
-    case SampleFormat::Pcm16:
-        return static_cast<double>(reinterpret_cast<const int16_t*>(buffer)[index]) / 32768.0;
-
-    case SampleFormat::Pcm24:
-    {
-        const BYTE* sample = buffer + index * 3;
-        int32_t value = static_cast<int32_t>(sample[0]) |
-                        (static_cast<int32_t>(sample[1]) << 8) |
-                        (static_cast<int32_t>(sample[2]) << 16);
-        if ((value & 0x00800000) != 0)
-        {
-            value |= ~0x00FFFFFF;
-        }
-        return static_cast<double>(value) / 8388608.0;
-    }
-
-    case SampleFormat::Pcm32:
-        return static_cast<double>(reinterpret_cast<const int32_t*>(buffer)[index]) / 2147483648.0;
-
-    case SampleFormat::Unknown:
-    default:
-        return 0.0;
-    }
-}
-
-void BetterMicroApo::WriteSample(BYTE* buffer, size_t index, double value) const
-{
-    // Keep the output inside the nominal [-1, 1] range for every format.
-    if (value > 1.0)
-    {
-        value = 1.0;
-    }
-    else if (value < -1.0)
-    {
-        value = -1.0;
-    }
-
-    switch (m_format)
-    {
-    case SampleFormat::Float32:
-        reinterpret_cast<float*>(buffer)[index] = static_cast<float>(value);
-        break;
-
-    case SampleFormat::Pcm16:
-    {
-        long scaled = std::lrint(value * 32768.0);
-        if (scaled > 32767)
-        {
-            scaled = 32767;
-        }
-        else if (scaled < -32768)
-        {
-            scaled = -32768;
-        }
-        reinterpret_cast<int16_t*>(buffer)[index] = static_cast<int16_t>(scaled);
-        break;
-    }
-
-    case SampleFormat::Pcm24:
-    {
-        long scaled = std::lrint(value * 8388608.0);
-        if (scaled > 8388607)
-        {
-            scaled = 8388607;
-        }
-        else if (scaled < -8388608)
-        {
-            scaled = -8388608;
-        }
-
-        BYTE* sample = buffer + index * 3;
-        sample[0] = static_cast<BYTE>(scaled & 0xFF);
-        sample[1] = static_cast<BYTE>((scaled >> 8) & 0xFF);
-        sample[2] = static_cast<BYTE>((scaled >> 16) & 0xFF);
-        break;
-    }
-
-    case SampleFormat::Pcm32:
-    {
-        long long scaled = std::llrint(value * 2147483648.0);
-        if (scaled > 2147483647LL)
-        {
-            scaled = 2147483647LL;
-        }
-        else if (scaled < -2147483648LL)
-        {
-            scaled = -2147483648LL;
-        }
-        reinterpret_cast<int32_t*>(buffer)[index] = static_cast<int32_t>(scaled);
-        break;
-    }
-
-    case SampleFormat::Unknown:
-    default:
-        break;
-    }
+    m_chain.Configure(m_formatInfo);
+    m_chain.Reset();
 }
 
 void BetterMicroApo::ProcessBuffer(const BYTE* source, BYTE* destination, UINT32 frames)
 {
-    const size_t channels = m_channels;
-
-    for (UINT32 frame = 0; frame < frames; ++frame)
-    {
-        const size_t base = static_cast<size_t>(frame) * channels;
-
-        // First pass: find the peak of this frame after input gain. Using the
-        // peak across all channels keeps the gain linked for stereo sources.
-        double peak = 0.0;
-        for (size_t channel = 0; channel < channels; ++channel)
-        {
-            const double sample = ReadSample(source, base + channel) * m_inputGain;
-            const double magnitude = std::fabs(sample);
-            if (magnitude > peak)
-            {
-                peak = magnitude;
-            }
-        }
-
-        double compressorGain = 1.0;
-        if (m_settings.compressorEnabled)
-        {
-            UpdateEnvelope(peak);
-            compressorGain = std::pow(10.0, m_envelopeDb / 20.0);
-        }
-
-        const double totalGain = compressorGain * m_makeupGain;
-
-        // Second pass: apply input gain, compressor gain and makeup gain.
-        // Reading and writing the same index is safe for in-place buffers.
-        for (size_t channel = 0; channel < channels; ++channel)
-        {
-            const double sample = ReadSample(source, base + channel) * m_inputGain;
-            WriteSample(destination, base + channel, sample * totalGain);
-        }
-    }
-
-    // Mono mode copies the processed left channel to every other channel, so a
-    // mono source on input 1 is heard on both sides.
-    if (m_settings.mono && channels > 1)
-    {
-        for (UINT32 frame = 0; frame < frames; ++frame)
-        {
-            const size_t base = static_cast<size_t>(frame) * channels;
-            const BYTE* left = destination + base * m_bytesPerSample;
-            for (size_t channel = 1; channel < channels; ++channel)
-            {
-                std::memcpy(destination + (base + channel) * m_bytesPerSample,
-                            left, m_bytesPerSample);
-            }
-        }
-    }
+    m_chain.Process(source, destination, frames, m_scratch.data());
 }
 
 // ---------------------------------------------------------------------------

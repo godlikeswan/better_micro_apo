@@ -50,17 +50,26 @@ enum : int {
     IDC_LOG,
     IDC_SETTINGS_HEADING,
     IDC_SETTINGS_NAME,
-    IDC_GAIN_LABEL,
-    IDC_GAIN_EDIT,
+    IDC_GATE,
+    IDC_GATE_THRESHOLD_LABEL,
+    IDC_GATE_THRESHOLD_EDIT,
+    IDC_GATE_RANGE_LABEL,
+    IDC_GATE_RANGE_EDIT,
+    IDC_GATE_ATTACK_LABEL,
+    IDC_GATE_ATTACK_EDIT,
+    IDC_GATE_HOLD_LABEL,
+    IDC_GATE_HOLD_EDIT,
+    IDC_GATE_RELEASE_LABEL,
+    IDC_GATE_RELEASE_EDIT,
     IDC_COMPRESSOR,
-    IDC_THRESHOLD_LABEL,
-    IDC_THRESHOLD_EDIT,
-    IDC_RATIO_LABEL,
-    IDC_RATIO_EDIT,
-    IDC_ATTACK_LABEL,
-    IDC_ATTACK_EDIT,
-    IDC_RELEASE_LABEL,
-    IDC_RELEASE_EDIT,
+    IDC_COMP_THRESHOLD_LABEL,
+    IDC_COMP_THRESHOLD_EDIT,
+    IDC_COMP_RATIO_LABEL,
+    IDC_COMP_RATIO_EDIT,
+    IDC_COMP_ATTACK_LABEL,
+    IDC_COMP_ATTACK_EDIT,
+    IDC_COMP_RELEASE_LABEL,
+    IDC_COMP_RELEASE_EDIT,
     IDC_MAKEUP_LABEL,
     IDC_MAKEUP_EDIT,
     IDC_MONO,
@@ -103,17 +112,26 @@ HWND g_logButton = nullptr;
 
 HWND g_settingsHeading = nullptr;
 HWND g_settingsName = nullptr;
-HWND g_gainLabel = nullptr;
-HWND g_gainEdit = nullptr;
+HWND g_gate = nullptr;
+HWND g_gateThresholdLabel = nullptr;
+HWND g_gateThresholdEdit = nullptr;
+HWND g_gateRangeLabel = nullptr;
+HWND g_gateRangeEdit = nullptr;
+HWND g_gateAttackLabel = nullptr;
+HWND g_gateAttackEdit = nullptr;
+HWND g_gateHoldLabel = nullptr;
+HWND g_gateHoldEdit = nullptr;
+HWND g_gateReleaseLabel = nullptr;
+HWND g_gateReleaseEdit = nullptr;
 HWND g_compressor = nullptr;
-HWND g_thresholdLabel = nullptr;
-HWND g_thresholdEdit = nullptr;
-HWND g_ratioLabel = nullptr;
-HWND g_ratioEdit = nullptr;
-HWND g_attackLabel = nullptr;
-HWND g_attackEdit = nullptr;
-HWND g_releaseLabel = nullptr;
-HWND g_releaseEdit = nullptr;
+HWND g_compThresholdLabel = nullptr;
+HWND g_compThresholdEdit = nullptr;
+HWND g_compRatioLabel = nullptr;
+HWND g_compRatioEdit = nullptr;
+HWND g_compAttackLabel = nullptr;
+HWND g_compAttackEdit = nullptr;
+HWND g_compReleaseLabel = nullptr;
+HWND g_compReleaseEdit = nullptr;
 HWND g_makeupLabel = nullptr;
 HWND g_makeupEdit = nullptr;
 HWND g_mono = nullptr;
@@ -266,12 +284,15 @@ void ClearSettingsEditor()
     g_settingsIndex = -1;
     g_settingsLoading = true;
     SetWindowTextW(g_settingsName, L"Select a device");
-    SetWindowTextW(g_gainEdit, L"");
-    SetWindowTextW(g_thresholdEdit, L"");
-    SetWindowTextW(g_ratioEdit, L"");
-    SetWindowTextW(g_attackEdit, L"");
-    SetWindowTextW(g_releaseEdit, L"");
-    SetWindowTextW(g_makeupEdit, L"");
+    const HWND edits[] = {
+        g_gateThresholdEdit, g_gateRangeEdit, g_gateAttackEdit,
+        g_gateHoldEdit, g_gateReleaseEdit, g_compThresholdEdit,
+        g_compRatioEdit, g_compAttackEdit, g_compReleaseEdit, g_makeupEdit,
+    };
+    for (HWND edit : edits) {
+        SetWindowTextW(edit, L"");
+    }
+    SendMessageW(g_gate, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessageW(g_compressor, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessageW(g_mono, BM_SETCHECK, BST_UNCHECKED, 0);
     g_settingsLoading = false;
@@ -291,14 +312,21 @@ void ShowSettingsForSelected()
 
     g_settingsLoading = true;
     SetWindowTextW(g_settingsName, g_endpoints[selected].name.c_str());
-    SetEditNumber(g_gainEdit, settings.inputGainDb);
-    SetEditNumber(g_thresholdEdit, settings.thresholdDb);
-    SetEditNumber(g_ratioEdit, settings.ratio);
-    SetEditNumber(g_attackEdit, settings.attackMs);
-    SetEditNumber(g_releaseEdit, settings.releaseMs);
+    SetEditNumber(g_gateThresholdEdit, settings.gate.thresholdDb);
+    SetEditNumber(g_gateRangeEdit, settings.gate.rangeDb);
+    SetEditNumber(g_gateAttackEdit, settings.gate.attackMs);
+    SetEditNumber(g_gateHoldEdit, settings.gate.holdMs);
+    SetEditNumber(g_gateReleaseEdit, settings.gate.releaseMs);
+    SetEditNumber(g_compThresholdEdit, settings.compressor.thresholdDb);
+    SetEditNumber(g_compRatioEdit, settings.compressor.ratio);
+    SetEditNumber(g_compAttackEdit, settings.compressor.attackMs);
+    SetEditNumber(g_compReleaseEdit, settings.compressor.releaseMs);
     SetEditNumber(g_makeupEdit, settings.makeupDb);
+    SendMessageW(g_gate, BM_SETCHECK,
+                 settings.gate.enabled ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(g_compressor, BM_SETCHECK,
-                 settings.compressorEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
+                 settings.compressor.enabled ? BST_CHECKED : BST_UNCHECKED,
+                 0);
     SendMessageW(g_mono, BM_SETCHECK,
                  settings.mono ? BST_CHECKED : BST_UNCHECKED, 0);
     g_settingsLoading = false;
@@ -312,18 +340,25 @@ bool CommitSettingsEditor()
     }
 
     apo::ApoSettings settings = g_endpoints[g_settingsIndex].settings;
-    if (!ReadEditNumber(g_gainEdit, settings.inputGainDb) ||
-        !ReadEditNumber(g_thresholdEdit, settings.thresholdDb) ||
-        !ReadEditNumber(g_ratioEdit, settings.ratio) ||
-        !ReadEditNumber(g_attackEdit, settings.attackMs) ||
-        !ReadEditNumber(g_releaseEdit, settings.releaseMs) ||
+    if (!ReadEditNumber(g_gateThresholdEdit, settings.gate.thresholdDb) ||
+        !ReadEditNumber(g_gateRangeEdit, settings.gate.rangeDb) ||
+        !ReadEditNumber(g_gateAttackEdit, settings.gate.attackMs) ||
+        !ReadEditNumber(g_gateHoldEdit, settings.gate.holdMs) ||
+        !ReadEditNumber(g_gateReleaseEdit, settings.gate.releaseMs) ||
+        !ReadEditNumber(g_compThresholdEdit,
+                        settings.compressor.thresholdDb) ||
+        !ReadEditNumber(g_compRatioEdit, settings.compressor.ratio) ||
+        !ReadEditNumber(g_compAttackEdit, settings.compressor.attackMs) ||
+        !ReadEditNumber(g_compReleaseEdit, settings.compressor.releaseMs) ||
         !ReadEditNumber(g_makeupEdit, settings.makeupDb)) {
         MessageBoxW(g_window, L"Enter a valid number in every setting.",
                     L"Better Micro APO", MB_ICONWARNING);
         return false;
     }
 
-    settings.compressorEnabled =
+    settings.gate.enabled =
+        SendMessageW(g_gate, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    settings.compressor.enabled =
         SendMessageW(g_compressor, BM_GETCHECK, 0, 0) == BST_CHECKED;
     settings.mono =
         SendMessageW(g_mono, BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -331,11 +366,15 @@ bool CommitSettingsEditor()
     g_endpoints[g_settingsIndex].settings = settings;
 
     g_settingsLoading = true;
-    SetEditNumber(g_gainEdit, settings.inputGainDb);
-    SetEditNumber(g_thresholdEdit, settings.thresholdDb);
-    SetEditNumber(g_ratioEdit, settings.ratio);
-    SetEditNumber(g_attackEdit, settings.attackMs);
-    SetEditNumber(g_releaseEdit, settings.releaseMs);
+    SetEditNumber(g_gateThresholdEdit, settings.gate.thresholdDb);
+    SetEditNumber(g_gateRangeEdit, settings.gate.rangeDb);
+    SetEditNumber(g_gateAttackEdit, settings.gate.attackMs);
+    SetEditNumber(g_gateHoldEdit, settings.gate.holdMs);
+    SetEditNumber(g_gateReleaseEdit, settings.gate.releaseMs);
+    SetEditNumber(g_compThresholdEdit, settings.compressor.thresholdDb);
+    SetEditNumber(g_compRatioEdit, settings.compressor.ratio);
+    SetEditNumber(g_compAttackEdit, settings.compressor.attackMs);
+    SetEditNumber(g_compReleaseEdit, settings.compressor.releaseMs);
     SetEditNumber(g_makeupEdit, settings.makeupDb);
     g_settingsLoading = false;
     return true;
@@ -344,11 +383,17 @@ bool CommitSettingsEditor()
 void EnableSettingsControls(bool enabled)
 {
     const HWND controls[] = {
-        g_gainLabel, g_gainEdit, g_compressor,
-        g_thresholdLabel, g_thresholdEdit,
-        g_ratioLabel, g_ratioEdit,
-        g_attackLabel, g_attackEdit,
-        g_releaseLabel, g_releaseEdit,
+        g_gate,
+        g_gateThresholdLabel, g_gateThresholdEdit,
+        g_gateRangeLabel, g_gateRangeEdit,
+        g_gateAttackLabel, g_gateAttackEdit,
+        g_gateHoldLabel, g_gateHoldEdit,
+        g_gateReleaseLabel, g_gateReleaseEdit,
+        g_compressor,
+        g_compThresholdLabel, g_compThresholdEdit,
+        g_compRatioLabel, g_compRatioEdit,
+        g_compAttackLabel, g_compAttackEdit,
+        g_compReleaseLabel, g_compReleaseEdit,
         g_makeupLabel, g_makeupEdit,
         g_mono, g_listen,
     };
@@ -513,6 +558,16 @@ void UpdateDevicesUi()
     }
 }
 
+void MarkSettingsDirty()
+{
+    if (g_settingsLoading || g_settingsIndex < 0 ||
+        g_settingsIndex >= static_cast<int>(g_endpoints.size())) {
+        return;
+    }
+    g_endpoints[g_settingsIndex].settingsDirty = true;
+    UpdateDevicesUi();
+}
+
 void Refresh()
 {
     StopListening();
@@ -627,14 +682,14 @@ void Layout(int width, int height)
 
     y += filesHeight + Scale(12);
     int devicesHeight = height - y - Scale(52);
-    if (devicesHeight < Scale(404)) {
-        devicesHeight = Scale(404);
+    if (devicesHeight < Scale(440)) {
+        devicesHeight = Scale(440);
     }
     MoveWindow(g_groupDevices, margin, y, width - 2 * margin, devicesHeight,
                TRUE);
 
     const int listX = margin + Scale(16);
-    const int settingsWidth = Scale(250);
+    const int settingsWidth = Scale(360);
     const int listWidth =
         width - 2 * margin - Scale(32) - settingsWidth - gap;
     const int listHeight = devicesHeight - Scale(76);
@@ -649,21 +704,44 @@ void Layout(int width, int height)
                Scale(20), TRUE);
     settingsY += Scale(26);
 
-    auto placeSetting = [&](HWND label, HWND edit) {
-        MoveWindow(label, settingsX, settingsY, Scale(116), Scale(20), TRUE);
-        MoveWindow(edit, settingsX + Scale(116), settingsY,
-                   settingsWidth - Scale(116), Scale(22), TRUE);
+    const int columnGap = Scale(12);
+    const int columnWidth = (settingsWidth - columnGap) / 2;
+    const int settingLabelWidth = Scale(100);
+    const int settingEditWidth = columnWidth - settingLabelWidth;
+
+    auto placeSettingPair = [&](HWND leftLabel, HWND leftEdit,
+                                HWND rightLabel, HWND rightEdit) {
+        MoveWindow(leftLabel, settingsX, settingsY, settingLabelWidth,
+                   Scale(20), TRUE);
+        MoveWindow(leftEdit, settingsX + settingLabelWidth, settingsY,
+                   settingEditWidth, Scale(22), TRUE);
+        if (rightLabel != nullptr) {
+            const int rightX = settingsX + columnWidth + columnGap;
+            MoveWindow(rightLabel, rightX, settingsY, settingLabelWidth,
+                       Scale(20), TRUE);
+            MoveWindow(rightEdit, rightX + settingLabelWidth, settingsY,
+                       settingEditWidth, Scale(22), TRUE);
+        }
         settingsY += Scale(28);
     };
-    placeSetting(g_gainLabel, g_gainEdit);
+
+    MoveWindow(g_gate, settingsX, settingsY, settingsWidth, Scale(20), TRUE);
+    settingsY += Scale(28);
+    placeSettingPair(g_gateThresholdLabel, g_gateThresholdEdit,
+                     g_gateRangeLabel, g_gateRangeEdit);
+    placeSettingPair(g_gateAttackLabel, g_gateAttackEdit, g_gateHoldLabel,
+                     g_gateHoldEdit);
+    placeSettingPair(g_gateReleaseLabel, g_gateReleaseEdit, nullptr, nullptr);
+
     MoveWindow(g_compressor, settingsX, settingsY, settingsWidth, Scale(20),
                TRUE);
     settingsY += Scale(28);
-    placeSetting(g_thresholdLabel, g_thresholdEdit);
-    placeSetting(g_ratioLabel, g_ratioEdit);
-    placeSetting(g_attackLabel, g_attackEdit);
-    placeSetting(g_releaseLabel, g_releaseEdit);
-    placeSetting(g_makeupLabel, g_makeupEdit);
+    placeSettingPair(g_compThresholdLabel, g_compThresholdEdit,
+                     g_compRatioLabel, g_compRatioEdit);
+    placeSettingPair(g_compAttackLabel, g_compAttackEdit, g_compReleaseLabel,
+                     g_compReleaseEdit);
+    placeSettingPair(g_makeupLabel, g_makeupEdit, nullptr, nullptr);
+
     MoveWindow(g_mono, settingsX, settingsY, settingsWidth, Scale(20), TRUE);
     settingsY += Scale(24);
     MoveWindow(g_listen, settingsX, settingsY, settingsWidth, Scale(20), TRUE);
@@ -830,24 +908,37 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         g_settingsName = CreateStatic(window, IDC_SETTINGS_NAME,
                                       L"Select a device",
                                       SS_LEFT | SS_PATHELLIPSIS);
-        g_gainLabel =
-            CreateStatic(window, IDC_GAIN_LABEL, L"Input gain (dB)", SS_LEFT);
-        g_gainEdit = CreateEdit(window, IDC_GAIN_EDIT);
+        g_gate = CreateCheck(window, IDC_GATE, L"Gate");
+        g_gateThresholdLabel = CreateStatic(
+            window, IDC_GATE_THRESHOLD_LABEL, L"Threshold (dBFS)", SS_LEFT);
+        g_gateThresholdEdit = CreateEdit(window, IDC_GATE_THRESHOLD_EDIT);
+        g_gateRangeLabel =
+            CreateStatic(window, IDC_GATE_RANGE_LABEL, L"Range (dB)", SS_LEFT);
+        g_gateRangeEdit = CreateEdit(window, IDC_GATE_RANGE_EDIT);
+        g_gateAttackLabel =
+            CreateStatic(window, IDC_GATE_ATTACK_LABEL, L"Attack (ms)", SS_LEFT);
+        g_gateAttackEdit = CreateEdit(window, IDC_GATE_ATTACK_EDIT);
+        g_gateHoldLabel =
+            CreateStatic(window, IDC_GATE_HOLD_LABEL, L"Hold (ms)", SS_LEFT);
+        g_gateHoldEdit = CreateEdit(window, IDC_GATE_HOLD_EDIT);
+        g_gateReleaseLabel = CreateStatic(window, IDC_GATE_RELEASE_LABEL,
+                                          L"Release (ms)", SS_LEFT);
+        g_gateReleaseEdit = CreateEdit(window, IDC_GATE_RELEASE_EDIT);
         g_compressor = CreateCheck(window, IDC_COMPRESSOR, L"Compressor");
-        g_thresholdLabel = CreateStatic(window, IDC_THRESHOLD_LABEL,
-                                        L"Threshold (dBFS)", SS_LEFT);
-        g_thresholdEdit = CreateEdit(window, IDC_THRESHOLD_EDIT);
-        g_ratioLabel =
-            CreateStatic(window, IDC_RATIO_LABEL, L"Ratio (:1)", SS_LEFT);
-        g_ratioEdit = CreateEdit(window, IDC_RATIO_EDIT);
-        g_attackLabel =
-            CreateStatic(window, IDC_ATTACK_LABEL, L"Attack (ms)", SS_LEFT);
-        g_attackEdit = CreateEdit(window, IDC_ATTACK_EDIT);
-        g_releaseLabel =
-            CreateStatic(window, IDC_RELEASE_LABEL, L"Release (ms)", SS_LEFT);
-        g_releaseEdit = CreateEdit(window, IDC_RELEASE_EDIT);
+        g_compThresholdLabel = CreateStatic(
+            window, IDC_COMP_THRESHOLD_LABEL, L"Threshold (dBFS)", SS_LEFT);
+        g_compThresholdEdit = CreateEdit(window, IDC_COMP_THRESHOLD_EDIT);
+        g_compRatioLabel =
+            CreateStatic(window, IDC_COMP_RATIO_LABEL, L"Ratio (:1)", SS_LEFT);
+        g_compRatioEdit = CreateEdit(window, IDC_COMP_RATIO_EDIT);
+        g_compAttackLabel = CreateStatic(window, IDC_COMP_ATTACK_LABEL,
+                                         L"Attack (ms)", SS_LEFT);
+        g_compAttackEdit = CreateEdit(window, IDC_COMP_ATTACK_EDIT);
+        g_compReleaseLabel = CreateStatic(window, IDC_COMP_RELEASE_LABEL,
+                                          L"Release (ms)", SS_LEFT);
+        g_compReleaseEdit = CreateEdit(window, IDC_COMP_RELEASE_EDIT);
         g_makeupLabel =
-            CreateStatic(window, IDC_MAKEUP_LABEL, L"Makeup gain (dB)", SS_LEFT);
+            CreateStatic(window, IDC_MAKEUP_LABEL, L"Makeup (dB)", SS_LEFT);
         g_makeupEdit = CreateEdit(window, IDC_MAKEUP_EDIT);
         g_mono = CreateCheck(window, IDC_MONO, L"Mono (left to all channels)");
         g_listen = CreateCheck(window, IDC_LISTEN, L"Listen to this device");
@@ -873,8 +964,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
 
     case WM_GETMINMAXINFO: {
         auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
-        info->ptMinTrackSize.x = Scale(820);
-        info->ptMinTrackSize.y = Scale(704);
+        info->ptMinTrackSize.x = Scale(900);
+        info->ptMinTrackSize.y = Scale(760);
         break;
     }
 
@@ -901,33 +992,25 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_LOG:
             DoOpenLog();
             break;
-        case IDC_GAIN_EDIT:
-        case IDC_THRESHOLD_EDIT:
-        case IDC_RATIO_EDIT:
-        case IDC_ATTACK_EDIT:
-        case IDC_RELEASE_EDIT:
+        case IDC_GATE_THRESHOLD_EDIT:
+        case IDC_GATE_RANGE_EDIT:
+        case IDC_GATE_ATTACK_EDIT:
+        case IDC_GATE_HOLD_EDIT:
+        case IDC_GATE_RELEASE_EDIT:
+        case IDC_COMP_THRESHOLD_EDIT:
+        case IDC_COMP_RATIO_EDIT:
+        case IDC_COMP_ATTACK_EDIT:
+        case IDC_COMP_RELEASE_EDIT:
         case IDC_MAKEUP_EDIT:
-            if (HIWORD(wParam) == EN_CHANGE && !g_settingsLoading &&
-                g_settingsIndex >= 0 &&
-                g_settingsIndex < static_cast<int>(g_endpoints.size())) {
-                g_endpoints[g_settingsIndex].settingsDirty = true;
-                UpdateDevicesUi();
+            if (HIWORD(wParam) == EN_CHANGE) {
+                MarkSettingsDirty();
             }
             break;
+        case IDC_GATE:
         case IDC_COMPRESSOR:
-            if (HIWORD(wParam) == BN_CLICKED && !g_settingsLoading &&
-                g_settingsIndex >= 0 &&
-                g_settingsIndex < static_cast<int>(g_endpoints.size())) {
-                g_endpoints[g_settingsIndex].settingsDirty = true;
-                UpdateDevicesUi();
-            }
-            break;
         case IDC_MONO:
-            if (HIWORD(wParam) == BN_CLICKED && !g_settingsLoading &&
-                g_settingsIndex >= 0 &&
-                g_settingsIndex < static_cast<int>(g_endpoints.size())) {
-                g_endpoints[g_settingsIndex].settingsDirty = true;
-                UpdateDevicesUi();
+            if (HIWORD(wParam) == BN_CLICKED) {
+                MarkSettingsDirty();
             }
             break;
         case IDC_LISTEN:
@@ -1134,14 +1217,28 @@ int DumpStatus(const std::wstring& path)
                 (endpoint.streamOurs ? L"installed" : L"no") +
                 L" | sysfx=" +
                 (endpoint.disableSysFx ? L"disabled" : L"enabled") +
-                L" | gain=" + FormatNumber(endpoint.settings.inputGainDb) +
+                L" | gate=" +
+                (endpoint.settings.gate.enabled ? L"on" : L"off") +
+                L" | gate_threshold=" +
+                FormatNumber(endpoint.settings.gate.thresholdDb) +
+                L" | gate_range=" +
+                FormatNumber(endpoint.settings.gate.rangeDb) +
+                L" | gate_attack=" +
+                FormatNumber(endpoint.settings.gate.attackMs) +
+                L" | gate_hold=" +
+                FormatNumber(endpoint.settings.gate.holdMs) +
+                L" | gate_release=" +
+                FormatNumber(endpoint.settings.gate.releaseMs) +
                 L" | compressor=" +
-                (endpoint.settings.compressorEnabled ? L"on" : L"off") +
+                (endpoint.settings.compressor.enabled ? L"on" : L"off") +
                 L" | threshold=" +
-                FormatNumber(endpoint.settings.thresholdDb) +
-                L" | ratio=" + FormatNumber(endpoint.settings.ratio) +
-                L" | attack=" + FormatNumber(endpoint.settings.attackMs) +
-                L" | release=" + FormatNumber(endpoint.settings.releaseMs) +
+                FormatNumber(endpoint.settings.compressor.thresholdDb) +
+                L" | ratio=" +
+                FormatNumber(endpoint.settings.compressor.ratio) +
+                L" | attack=" +
+                FormatNumber(endpoint.settings.compressor.attackMs) +
+                L" | release=" +
+                FormatNumber(endpoint.settings.compressor.releaseMs) +
                 L" | makeup=" + FormatNumber(endpoint.settings.makeupDb) +
                 L" | mono=" + (endpoint.settings.mono ? L"on" : L"off") +
                 L"\r\n";
@@ -1236,8 +1333,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show)
 
     HWND window = CreateWindowExW(
         0, windowClass.lpszClassName, L"Better Micro APO",
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, Scale(980),
-        Scale(780), nullptr, nullptr, instance, nullptr);
+        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, Scale(1020),
+        Scale(820), nullptr, nullptr, instance, nullptr);
     if (!window) {
         return 1;
     }

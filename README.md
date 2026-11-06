@@ -1,8 +1,9 @@
 # Better Micro APO
 
 Better Micro APO (internally `better_micro_apo`) is a simple microphone effect
-for Windows. Its main goal is to raise the input level without distortion:
-input gain lifts the signal, while a peak compressor tames the peaks.
+for Windows. Its main goal is to raise the input level without distortion: a
+peak compressor tames the peaks and makeup gain lifts the result. An optional
+gate silences the input between phrases.
 
 ![Better Micro APO GUI](docs/screenshot.png)
 
@@ -64,20 +65,31 @@ The DLL uses the static MSVC runtime and has no third-party dependencies.
 
 ## DSP settings
 
-The chain is fixed:
+The chain order is fixed; stages can be disabled, and makeup and mono are
+optional:
 
 ```
-input gain -> peak compressor -> makeup gain -> optional mono copy
+optional gate -> peak compressor -> makeup gain -> optional mono copy
 ```
 
-The optional mono copy duplicates the processed left channel to all other
-channels. It is per device and is saved with the other settings.
+- **Gate** attenuates the signal when it falls below the threshold. `Range` is
+  the maximum attenuation while closed, and `Hold` keeps it open after the level
+  drops. It is off by default.
+- **Compressor** uses a linked peak detector, so a stereo source keeps its
+  image.
+- **Makeup** gain is applied after the compressor.
+- **Mono (left to all channels)** duplicates the processed left channel to all
+  other channels. It is per device and is saved with the other settings.
 
 Default settings:
 
-| Input gain | Compressor | Threshold | Ratio | Attack | Release | Makeup gain |
-| --- | --- | --- | --- | --- | --- | --- |
-| +28 dB | enabled | -30 dBFS | 3:1 | 5 ms | 100 ms | 0 dB |
+| Gate | Threshold | Range | Attack | Hold | Release |
+| --- | --- | --- | --- | --- | --- |
+| off | -50 dBFS | 60 dB | 5 ms | 50 ms | 100 ms |
+
+| Compressor | Threshold | Ratio | Attack | Release | Makeup |
+| --- | --- | --- | --- | --- | --- |
+| enabled | -58 dBFS | 3:1 | 5 ms | 100 ms | +28 dB |
 
 Each capture device stores its own settings in
 `C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.ini`. The APO reads
@@ -85,9 +97,24 @@ that file when a stream starts, so one DLL serves every device. **Listen to
 this device** opens a new stream and therefore plays the saved settings; click
 **Apply** first to hear unsaved edits.
 
-The GUI clamps values to a safe range: input and makeup gain -24 to +48 dB,
-threshold -60 to 0 dBFS, ratio 1:1 to 20:1, attack 0.1 to 1000 ms, and release
-1 to 5000 ms.
+Older settings files that contain the removed `input_gain_db` key are migrated
+automatically: the value is folded into the compressor threshold and makeup
+gain, so the sound stays the same.
+
+The GUI clamps values to a safe range:
+
+| Setting | Range |
+| --- | --- |
+| Gate threshold | -80 to 0 dBFS |
+| Gate range | 0 to 96 dB |
+| Gate attack | 0.1 to 1000 ms |
+| Gate hold | 0 to 2000 ms |
+| Gate release | 1 to 5000 ms |
+| Compressor threshold | -60 to 0 dBFS |
+| Compressor ratio | 1:1 to 20:1 |
+| Compressor attack | 0.1 to 1000 ms |
+| Compressor release | 1 to 5000 ms |
+| Makeup gain | -24 to +48 dB |
 
 ## Known limitations
 

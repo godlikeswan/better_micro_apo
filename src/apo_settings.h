@@ -4,17 +4,35 @@
 
 namespace apo {
 
-// Per-endpoint DSP settings. Defaults match the tuned sound that used to be
-// compiled into the APO.
-struct ApoSettings
+struct GateSettings
 {
-    double inputGainDb = 28.0;
-    bool compressorEnabled = true;
-    double thresholdDb = -30.0;
+    bool enabled = false;
+    double thresholdDb = -50.0;
+
+    // Maximum attenuation when the gate is closed.
+    double rangeDb = 60.0;
+    double attackMs = 5.0;
+    double holdMs = 50.0;
+    double releaseMs = 100.0;
+};
+
+struct CompressorSettings
+{
+    bool enabled = true;
+    double thresholdDb = -58.0;
     double ratio = 3.0;
     double attackMs = 5.0;
     double releaseMs = 100.0;
-    double makeupDb = 0.0;
+};
+
+// Per-endpoint DSP settings. Defaults match the tuned sound that used to be
+// compiled into the APO: the old +28 dB input gain now lives in the compressor
+// threshold and makeup gain.
+struct ApoSettings
+{
+    GateSettings gate;
+    CompressorSettings compressor;
+    double makeupDb = 28.0;
 
     // Copy the first (left) channel to every other channel after processing.
     // Useful for a mono source on a stereo interface.
