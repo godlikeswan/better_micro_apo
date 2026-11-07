@@ -9,8 +9,12 @@
 namespace apo {
 
 inline constexpr wchar_t kClsid[] = L"{6A8BE200-CD89-4E77-97F5-D51E8F16EF90}";
+inline constexpr wchar_t kFxPropBase[] =
+    L"{d04e05a6-594b-4fb6-a80d-01af5eed7d1d}";
 inline constexpr wchar_t kPreMixProp[] = L"{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1";
 inline constexpr wchar_t kStreamProp[] = L"{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},5";
+inline constexpr wchar_t kCompositeStreamProp[] =
+    L"{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},13";
 inline constexpr wchar_t kDisableSysFxProp[] = L"{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5";
 inline constexpr wchar_t kDeviceNameProp[] = L"{a45c254e-df1c-4efd-8020-67d146a850e0},2";
 inline constexpr wchar_t kFriendlyNameProp[] = L"{b3f8fa53-0004-438e-9003-51a46e139bfc},6";
@@ -32,6 +36,16 @@ struct Endpoint {
     bool premixOurs = false;
     bool streamOurs = false;
     bool disableSysFx = false;
+
+    // Composite effect packs replace the single FX values on some devices.
+    // When present, Windows ignores the legacy PreMix slot.
+    bool compositePresent = false;
+    bool compositeOurs = false;
+
+    bool Enabled() const
+    {
+        return compositePresent ? compositeOurs : premixOurs;
+    }
 
     // Per-device settings, loaded from ProgramData and edited by the GUI.
     ApoSettings settings;

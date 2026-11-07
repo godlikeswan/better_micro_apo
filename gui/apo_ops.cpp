@@ -396,6 +396,36 @@ std::wstring BackupPrefix(const std::wstring& id)
            detail::SafeId(id) + L"-";
 }
 
+bool ContainsClsid(const std::vector<std::wstring>& values,
+                   const wchar_t* clsid)
+{
+    return std::any_of(values.begin(), values.end(),
+                       [&](const std::wstring& value) {
+                           return _wcsicmp(value.c_str(), clsid) == 0;
+                       });
+}
+
+void RemoveClsid(std::vector<std::wstring>& values, const wchar_t* clsid)
+{
+    values.erase(std::remove_if(values.begin(), values.end(),
+                                [&](const std::wstring& value) {
+                                    return _wcsicmp(value.c_str(), clsid) == 0;
+                                }),
+                 values.end());
+}
+
+std::wstring JoinValues(const std::vector<std::wstring>& values)
+{
+    std::wstring text;
+    for (const std::wstring& value : values) {
+        if (!text.empty()) {
+            text += L"|";
+        }
+        text += value;
+    }
+    return text;
+}
+
 std::vector<std::filesystem::path> FindBackups(const std::wstring& id)
 {
     std::vector<std::filesystem::path> files;
@@ -429,7 +459,10 @@ std::vector<std::filesystem::path> FindBackups(const std::wstring& id)
         std::error_code eb;
         const auto ta = std::filesystem::last_write_time(a, ea);
         const auto tb = std::filesystem::last_write_time(b, eb);
-        return ta > tb;
+        if (ta != tb) {
+            return ta > tb;
+        }
+        return a.filename().wstring() > b.filename().wstring();
     });
     return files;
 }
@@ -448,6 +481,11 @@ bool CreateBackup(const Endpoint& endpoint, std::wstring& file,
     std::wstring oldValue;
     const bool existed = detail::RegReadString(
         HKEY_LOCAL_MACHINE, detail::FxSub(endpoint.id), kPreMixProp, oldValue);
+
+    std::vector<std::wstring> composite;
+    const bool compositeExisted = detail::RegReadMultiString(
+        HKEY_LOCAL_MACHINE, detail::FxSub(endpoint.id), kCompositeStreamProp,
+        composite);
 
     const std::wstring stamp = detail::Timestamp();
     file = BackupPrefix(endpoint.id) + stamp + L".reg";
@@ -482,6 +520,10 @@ bool CreateBackup(const Endpoint& endpoint, std::wstring& file,
         L"property   = " + std::wstring(kPreMixProp) + L"\r\n" +
         L"existed    = " + (existed ? L"True" : L"False") + L"\r\n" +
         L"oldValue   = " + oldValue + L"\r\n" +
+        L"composite  = " + std::wstring(kCompositeStreamProp) + L"\r\n" +
+        L"compositeExisted = " + (compositeExisted ? L"True" : L"False") +
+        L"\r\n" +
+        L"compositeValue = " + JoinValues(composite) + L"\r\n" +
         L"newValue   = " + std::wstring(kClsid) + L"\r\n";
     detail::WriteTextFile(sidecar, text);
 
@@ -494,55 +536,111 @@ bool RestoreBackup(const Endpoint& endpoint, std::wstring& log)
     const std::wstring fx = detail::FxSub(endpoint.id);
     const auto backups = FindBackups(endpoint.id);
 
+    // Always use the newest backup. It was taken immediately before the most
+    // recent change, so it has the driver's current effect chain. Any CLSID
+    // that points at this APO is stripped below.
     std::wstring chosen;
     std::wstring text;
-    for (const auto& path : backups) {
-        text = detail::ReadTextFile(path.wstring());
-        if (text.find(kClsid) == std::wstring::npos) {
-            chosen = path.wstring();
-            break;
-        }
-    }
-    if (chosen.empty() && !backups.empty()) {
+    if (!backups.empty()) {
         chosen = backups.front().wstring();
         text = detail::ReadTextFile(chosen);
-        log += L"Every backup for " + endpoint.name +
-               L" already contains the APO CLSID; using the newest.\r\n";
     }
 
-    bool wrote = false;
-    if (!chosen.empty()) {
-        std::wstring value;
-        if (detail::ExtractRegString(text, kPreMixProp, value)) {
-            if (_wcsicmp(value.c_str(), kClsid) == 0) {
-                log += L"The backup for " + endpoint.name +
-                       L" points at this APO; removing the slot instead.\r\n";
-                wrote = detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx,
-                                               kPreMixProp);
-            } else {
-                wrote = detail::RegWriteString(HKEY_LOCAL_MACHINE, fx,
-                                               kPreMixProp, value);
-            }
-        } else {
-            wrote =
-                detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx, kPreMixProp);
+    std::wstring premixValue;
+    const bool premixExisted =
+        !chosen.empty() &&
+        detail::ExtractRegString(text, kPreMixProp, premixValue);
+
+    std::vector<std::wstring> compositeValue;
+    const bool compositeExisted =
+        !chosen.empty() &&
+        detail::ExtractRegMultiString(text, kCompositeStreamProp,
+                                      compositeValue);
+
+    if (chosen.empty()) {
+        log += L"No backup for " + endpoint.name +
+               L"; removing the slots.\r\n";
+    }
+
+    bool ok = true;
+
+    // A backed-up value that points at this APO is a leftover from an older
+    // install, not the original driver value. Treat it as absent.
+    if (premixExisted && _wcsicmp(premixValue.c_str(), kClsid) != 0) {
+        if (!detail::RegWriteString(HKEY_LOCAL_MACHINE, fx, kPreMixProp,
+                                    premixValue)) {
+            log += L"Could not restore the PreMix slot on " + endpoint.name +
+                   L".\r\n";
+            ok = false;
         }
     } else {
-        log += L"No backup for " + endpoint.name +
-               L"; removing the slot.\r\n";
-        wrote = detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx, kPreMixProp);
+        // Remove only our own value; never delete another APO's entry.
+        std::wstring current;
+        if (detail::RegReadString(HKEY_LOCAL_MACHINE, fx, kPreMixProp,
+                                  current) &&
+            _wcsicmp(current.c_str(), kClsid) == 0 &&
+            !detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx, kPreMixProp)) {
+            log += L"Could not clear the PreMix slot on " + endpoint.name +
+                   L".\r\n";
+            ok = false;
+        }
     }
 
-    std::wstring current;
-    if (detail::RegReadString(HKEY_LOCAL_MACHINE, fx, kPreMixProp, current) &&
-        _wcsicmp(current.c_str(), kClsid) == 0) {
+    std::vector<std::wstring> target;
+    bool writeComposite = false;
+    if (compositeExisted) {
+        target = compositeValue;
+        RemoveClsid(target, kClsid);
+        writeComposite = true;
+    } else {
+        // Older backups predate composite support: keep the driver's chain
+        // and remove only our CLSID from it.
+        std::vector<std::wstring> current;
+        detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
+                                   kCompositeStreamProp, current);
+        target = current;
+        const size_t before = target.size();
+        RemoveClsid(target, kClsid);
+        writeComposite = target.size() != before;
+    }
+
+    if (writeComposite) {
+        if (target.empty()) {
+            if (!detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx,
+                                        kCompositeStreamProp)) {
+                log += L"Could not clear the composite chain on " +
+                       endpoint.name + L".\r\n";
+                ok = false;
+            }
+        } else if (!detail::RegWriteMultiString(HKEY_LOCAL_MACHINE, fx,
+                                                kCompositeStreamProp, target)) {
+            log += L"Could not restore the composite chain on " +
+                   endpoint.name + L".\r\n";
+            ok = false;
+        }
+    }
+
+    std::wstring currentPremix;
+    if (detail::RegReadString(HKEY_LOCAL_MACHINE, fx, kPreMixProp,
+                              currentPremix) &&
+        _wcsicmp(currentPremix.c_str(), kClsid) == 0) {
         log += L"Could not remove the APO from " + endpoint.name + L".\r\n";
-        return false;
+        ok = false;
     }
 
-    log += wrote ? L"Disabled on " + endpoint.name + L".\r\n"
-                 : L"Slot already clear on " + endpoint.name + L".\r\n";
-    return true;
+    std::vector<std::wstring> currentComposite;
+    if (detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
+                                   kCompositeStreamProp, currentComposite) &&
+        ContainsClsid(currentComposite, kClsid)) {
+        log += L"Could not remove the APO from the composite chain on " +
+               endpoint.name + L".\r\n";
+        ok = false;
+    }
+
+    if (ok) {
+        log += L"Disabled on " + endpoint.name + L".\r\n";
+    }
+    return ok;
 }
 
 } // namespace
@@ -636,7 +734,8 @@ Result UninstallFiles()
     // Re-enumerate instead of trusting the caller's snapshot: a device may
     // have been bound or removed since the status was last refreshed.
     for (const auto& endpoint : EnumEndpoints()) {
-        if (endpoint.premixOurs || endpoint.streamOurs) {
+        if (endpoint.premixOurs || endpoint.compositeOurs ||
+            endpoint.streamOurs) {
             if (!RestoreBackup(endpoint, log)) {
                 result.ok = false;
             }
@@ -728,7 +827,7 @@ Result ApplyChanges(const std::vector<Change>& changes)
             }
         }
 
-        if (change.enable == it->premixOurs) {
+        if (change.enable == it->Enabled()) {
             continue;
         }
 
@@ -739,9 +838,34 @@ Result ApplyChanges(const std::vector<Change>& changes)
                 continue;
             }
 
-            if (!detail::RegWriteString(HKEY_LOCAL_MACHINE,
-                                        detail::FxSub(it->id), kPreMixProp,
-                                        kClsid)) {
+            const std::wstring fx = detail::FxSub(it->id);
+            if (it->compositePresent) {
+                std::vector<std::wstring> chain;
+                detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
+                                           kCompositeStreamProp, chain);
+                if (!ContainsClsid(chain, kClsid)) {
+                    chain.push_back(kClsid);
+                }
+                if (!detail::RegWriteMultiString(HKEY_LOCAL_MACHINE, fx,
+                                                 kCompositeStreamProp, chain)) {
+                    log += L"Could not write the composite chain for " +
+                           it->name + L".\r\n";
+                    result.ok = false;
+                    continue;
+                }
+
+                // The single PreMix slot is ignored on these devices, but a
+                // value left by an older version would become active again
+                // if the effect pack ever disappears.
+                std::wstring premix;
+                if (detail::RegReadString(HKEY_LOCAL_MACHINE, fx, kPreMixProp,
+                                          premix) &&
+                    _wcsicmp(premix.c_str(), kClsid) == 0) {
+                    detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx,
+                                           kPreMixProp);
+                }
+            } else if (!detail::RegWriteString(HKEY_LOCAL_MACHINE, fx,
+                                               kPreMixProp, kClsid)) {
                 log += L"Could not write the slot for " + it->name + L".\r\n";
                 result.ok = false;
                 continue;

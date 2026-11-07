@@ -45,6 +45,39 @@ bool RegReadString(HKEY root, const std::wstring& sub, const wchar_t* name,
     return true;
 }
 
+bool RegReadMultiString(HKEY root, const std::wstring& sub,
+                        const wchar_t* name, std::vector<std::wstring>& out)
+{
+    DWORD size = 0;
+    LSTATUS status = RegGetValueW(root, sub.c_str(), name,
+                                  RRF_RT_REG_MULTI_SZ, nullptr, nullptr, &size);
+    if (status != ERROR_SUCCESS || size < sizeof(wchar_t)) {
+        // Some tools store a single composite entry as REG_SZ. Treat it as a
+        // one-item list so the device is still recognized as an effect pack.
+        std::wstring single;
+        if (RegReadString(root, sub, name, single)) {
+            out.assign(1, single);
+            return true;
+        }
+        return false;
+    }
+
+    std::vector<wchar_t> buffer(size / sizeof(wchar_t) + 1, L'\0');
+    status = RegGetValueW(root, sub.c_str(), name, RRF_RT_REG_MULTI_SZ,
+                          nullptr, buffer.data(), &size);
+    if (status != ERROR_SUCCESS) {
+        return false;
+    }
+
+    out.clear();
+    for (size_t i = 0; i < buffer.size() && buffer[i] != L'\0';) {
+        const size_t length = wcslen(buffer.data() + i);
+        out.emplace_back(buffer.data() + i, length);
+        i += length + 1;
+    }
+    return true;
+}
+
 bool RegReadDword(HKEY root, const std::wstring& sub, const wchar_t* name,
                   DWORD& out)
 {
@@ -59,7 +92,6 @@ bool RegReadDword(HKEY root, const std::wstring& sub, const wchar_t* name,
     out = value;
     return true;
 }
-
 bool RegKeyExists(HKEY root, const std::wstring& sub)
 {
     HKEY key = nullptr;
@@ -84,6 +116,36 @@ bool RegWriteString(HKEY root, const std::wstring& sub, const wchar_t* name,
         key, name, 0, REG_SZ,
         reinterpret_cast<const BYTE*>(value.c_str()),
         static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t)));
+    RegCloseKey(key);
+    return status == ERROR_SUCCESS;
+}
+
+bool RegWriteMultiString(HKEY root, const std::wstring& sub,
+                         const wchar_t* name,
+                         const std::vector<std::wstring>& values)
+{
+    HKEY key = nullptr;
+    if (!RegOpenForWrite(root, sub, key)) {
+        return false;
+    }
+
+    std::vector<wchar_t> buffer;
+    for (const std::wstring& value : values) {
+        if (value.empty()) {
+            continue;
+        }
+        buffer.insert(buffer.end(), value.begin(), value.end());
+        buffer.push_back(L'\0');
+    }
+    if (buffer.empty()) {
+        buffer.push_back(L'\0');
+    }
+    buffer.push_back(L'\0');
+
+    const LSTATUS status = RegSetValueExW(
+        key, name, 0, REG_MULTI_SZ,
+        reinterpret_cast<const BYTE*>(buffer.data()),
+        static_cast<DWORD>(buffer.size() * sizeof(wchar_t)));
     RegCloseKey(key);
     return status == ERROR_SUCCESS;
 }
@@ -361,6 +423,134 @@ bool GrantLocalServiceModify(const std::wstring& dir, std::wstring& log)
     return true;
 }
 
+namespace {
+
+bool ParseRegQuoted(const std::wstring& text, size_t& pos, std::wstring& out)
+{
+    if (pos >= text.size() || text[pos] != L'"') {
+        return false;
+    }
+    ++pos;
+    out.clear();
+    while (pos < text.size()) {
+        const wchar_t c = text[pos++];
+        if (c == L'\\' && pos < text.size()) {
+            const wchar_t next = text[pos++];
+            if (next == L'\\' || next == L'"') {
+                out.push_back(next);
+            } else {
+                out.push_back(c);
+                out.push_back(next);
+            }
+        } else if (c == L'"') {
+            return true;
+        } else {
+            out.push_back(c);
+        }
+    }
+    return false;
+}
+
+int HexDigit(wchar_t c)
+{
+    if (c >= L'0' && c <= L'9') {
+        return c - L'0';
+    }
+    if (c >= L'a' && c <= L'f') {
+        return c - L'a' + 10;
+    }
+    if (c >= L'A' && c <= L'F') {
+        return c - L'A' + 10;
+    }
+    return -1;
+}
+
+bool ParseRegHexBytes(const std::wstring& text, size_t pos,
+                      std::vector<BYTE>& out)
+{
+    // A .reg value can wrap across lines with a trailing backslash.
+    size_t end = text.size();
+    size_t scan = pos;
+    for (;;) {
+        const size_t newline = text.find(L'\n', scan);
+        if (newline == std::wstring::npos) {
+            break;
+        }
+        size_t before = newline;
+        if (before > pos && text[before - 1] == L'\r') {
+            --before;
+        }
+        while (before > pos &&
+               (text[before - 1] == L' ' || text[before - 1] == L'\t')) {
+            --before;
+        }
+        if (before > pos && text[before - 1] == L'\\') {
+            scan = newline + 1;
+            continue;
+        }
+        end = before;
+        break;
+    }
+
+    out.clear();
+    int high = -1;
+    for (size_t i = pos; i < end; ++i) {
+        const int digit = HexDigit(text[i]);
+        if (digit < 0) {
+            continue;
+        }
+        if (high < 0) {
+            high = digit;
+        } else {
+            out.push_back(static_cast<BYTE>((high << 4) | digit));
+            high = -1;
+        }
+    }
+    return high < 0;
+}
+
+std::wstring WideFromBytes(const std::vector<BYTE>& bytes)
+{
+    std::wstring text;
+    for (size_t i = 0; i + 1 < bytes.size(); i += 2) {
+        const wchar_t c = static_cast<wchar_t>(
+            static_cast<unsigned>(bytes[i]) |
+            (static_cast<unsigned>(bytes[i + 1]) << 8));
+        if (c == L'\0') {
+            break;
+        }
+        text.push_back(c);
+    }
+    return text;
+}
+
+std::vector<std::wstring> MultiStringFromBytes(
+    const std::vector<BYTE>& bytes)
+{
+    std::vector<std::wstring> values;
+    std::wstring current;
+    for (size_t i = 0; i + 1 < bytes.size(); i += 2) {
+        const wchar_t c = static_cast<wchar_t>(
+            static_cast<unsigned>(bytes[i]) |
+            (static_cast<unsigned>(bytes[i + 1]) << 8));
+        if (c == L'\0') {
+            if (current.empty()) {
+                break;
+            }
+            values.push_back(current);
+            current.clear();
+        } else {
+            current.push_back(c);
+        }
+    }
+    if (!current.empty()) {
+        values.push_back(current);
+    }
+    return values;
+}
+
+} // namespace
+
 bool ExtractRegString(const std::wstring& text, const std::wstring& name,
                       std::wstring& value)
 {
@@ -371,17 +561,48 @@ bool ExtractRegString(const std::wstring& text, const std::wstring& name,
     }
 
     pos += needle.size();
-    if (pos >= text.size() || text[pos] != L'"') {
+    if (pos < text.size() && text[pos] == L'"') {
+        return ParseRegQuoted(text, pos, value);
+    }
+    if (text.compare(pos, 7, L"hex(1):") == 0 ||
+        text.compare(pos, 7, L"hex(2):") == 0) {
+        std::vector<BYTE> bytes;
+        if (!ParseRegHexBytes(text, pos + 7, bytes)) {
+            return false;
+        }
+        value = WideFromBytes(bytes);
+        return true;
+    }
+    return false;
+}
+
+bool ExtractRegMultiString(const std::wstring& text, const std::wstring& name,
+                           std::vector<std::wstring>& values)
+{
+    const std::wstring needle = L"\"" + name + L"\"=";
+    size_t pos = text.find(needle);
+    if (pos == std::wstring::npos) {
         return false;
     }
 
-    const size_t end = text.find(L'"', pos + 1);
-    if (end == std::wstring::npos) {
-        return false;
+    pos += needle.size();
+    if (text.compare(pos, 7, L"hex(7):") == 0) {
+        std::vector<BYTE> bytes;
+        if (!ParseRegHexBytes(text, pos + 7, bytes)) {
+            return false;
+        }
+        values = MultiStringFromBytes(bytes);
+        return true;
     }
-
-    value = text.substr(pos + 1, end - pos - 1);
-    return true;
+    if (pos < text.size() && text[pos] == L'"') {
+        std::wstring single;
+        if (!ParseRegQuoted(text, pos, single)) {
+            return false;
+        }
+        values.assign(1, single);
+        return true;
+    }
+    return false;
 }
 
 } // namespace apo::detail

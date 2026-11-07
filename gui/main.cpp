@@ -539,7 +539,7 @@ bool HasChanges()
     for (size_t i = 0; i < g_endpoints.size(); ++i) {
         const bool checked =
             ListView_GetCheckState(g_list, static_cast<int>(i)) != FALSE;
-        if (checked != g_endpoints[i].premixOurs) {
+        if (checked != g_endpoints[i].Enabled()) {
             return true;
         }
         if (g_endpoints[i].settingsDirty) {
@@ -600,7 +600,7 @@ void UpdateDevicesUi()
     const bool anyBound =
         std::any_of(g_endpoints.begin(), g_endpoints.end(),
                     [](const apo::Endpoint& endpoint) {
-                        return endpoint.premixOurs;
+                        return endpoint.Enabled();
                     });
     const bool sectionEnabled = g_files.FullyInstalled() || anyBound;
 
@@ -658,12 +658,18 @@ void Refresh()
         std::wstring state = apo::DeviceStateText(endpoint.state);
         ListView_SetItemText(g_list, row, 1, state.data());
 
-        std::wstring apoText = endpoint.premixOurs ? L"Installed" : L"-";
+        std::wstring apoText = endpoint.Enabled() ? L"Installed" : L"-";
         ListView_SetItemText(g_list, row, 2, apoText.data());
 
         std::wstring notes;
         if (endpoint.disableSysFx) {
             notes = L"System effects disabled";
+        }
+        if (endpoint.compositePresent) {
+            if (!notes.empty()) {
+                notes += L"; ";
+            }
+            notes += L"effect pack";
         }
         if (endpoint.streamOurs) {
             if (!notes.empty()) {
@@ -673,7 +679,7 @@ void Refresh()
         }
         ListView_SetItemText(g_list, row, 3, notes.data());
 
-        ListView_SetCheckState(g_list, row, endpoint.premixOurs);
+        ListView_SetCheckState(g_list, row, endpoint.Enabled());
     }
 
     if (!selectedId.empty()) {
@@ -879,7 +885,7 @@ void DoApply()
     for (size_t i = 0; i < g_endpoints.size(); ++i) {
         const bool checked =
             ListView_GetCheckState(g_list, static_cast<int>(i)) != FALSE;
-        const bool bindingChanged = checked != g_endpoints[i].premixOurs;
+        const bool bindingChanged = checked != g_endpoints[i].Enabled();
         if (!bindingChanged && !g_endpoints[i].settingsDirty) {
             continue;
         }
@@ -1163,6 +1169,12 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             const size_t index = static_cast<size_t>(tip->iItem);
             if (index < g_endpoints.size()) {
                 std::wstring text = g_endpoints[index].id;
+                if (g_endpoints[index].compositePresent) {
+                    text += L"\r\nUses an effect pack (composite FX)";
+                }
+                if (g_endpoints[index].compositeOurs) {
+                    text += L"\r\nAlso bound in the composite stream chain";
+                }
                 if (g_endpoints[index].streamOurs) {
                     text += L"\r\nAlso bound in the Stream slot";
                 }
@@ -1284,6 +1296,10 @@ int DumpStatus(const std::wstring& path)
                 (apo::IsDeviceActive(endpoint.state) ? L"yes" : L"no") +
                 L" | premix=" +
                 (endpoint.premixOurs ? L"installed" : L"no") +
+                L" | composite=" +
+                (endpoint.compositeOurs ? L"installed" : L"no") +
+                L" | effect_pack=" +
+                (endpoint.compositePresent ? L"yes" : L"no") +
                 L" | stream=" +
                 (endpoint.streamOurs ? L"installed" : L"no") +
                 L" | sysfx=" +

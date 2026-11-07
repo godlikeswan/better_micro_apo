@@ -80,6 +80,25 @@ maximum of that history and the RMS is
 `sqrt(sum(sumSquares) / sum(samples))`. Clip and drop counters are latched and
 reset when listening starts.
 
+## Device binding
+
+The GUI writes one of two registry values under the endpoint's `FxProperties`
+key, then restarts audio once:
+
+- `PKEY_FX_PreMixEffectClsid`
+  (`{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1`, `REG_SZ`) for devices without an
+  effect pack.
+- `PKEY_CompositeFX_StreamEffectClsid`
+  (`{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},13`, `REG_MULTI_SZ`) for devices
+  whose driver publishes composite FX entries. Windows ignores the single FX
+  slots on those devices, so the APO CLSID is appended to the existing driver
+  chain instead. The driver entries are preserved and restored on disable.
+
+Before changing either slot the GUI exports the whole `FxProperties` key with
+`reg.exe` to `C:\ProgramData\better_micro_apo\backup`. Restore parses the
+backup, puts back the original PreMix value and composite chain, and removes
+only this APO's CLSID from anything it did not write.
+
 ## Registration and logging
 
 - CLSID: `{6A8BE200-CD89-4E77-97F5-D51E8F16EF90}`

@@ -6,6 +6,35 @@
 #include <iterator>
 
 namespace apo {
+namespace {
+
+bool HasCompositeFx(const std::wstring& fx)
+{
+    // Any composite effect position means the driver uses effect packs. The
+    // composite keys use the same property GUID as the single FX keys.
+    for (int index = 13; index <= 20; ++index) {
+        const std::wstring name =
+            std::wstring(kFxPropBase) + L"," + std::to_wstring(index);
+        std::vector<std::wstring> values;
+        if (detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx, name.c_str(),
+                                       values) &&
+            !values.empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ContainsClsid(const std::vector<std::wstring>& values,
+                   const wchar_t* clsid)
+{
+    return std::any_of(values.begin(), values.end(),
+                       [&](const std::wstring& value) {
+                           return _wcsicmp(value.c_str(), clsid) == 0;
+                       });
+}
+
+} // namespace
 
 bool IsDeviceActive(DWORD state)
 {
@@ -132,6 +161,13 @@ std::vector<Endpoint> EnumEndpoints()
                                   value)) {
             endpoint.streamOurs = _wcsicmp(value.c_str(), kClsid) == 0;
         }
+
+        std::vector<std::wstring> composite;
+        if (detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
+                                       kCompositeStreamProp, composite)) {
+            endpoint.compositeOurs = ContainsClsid(composite, kClsid);
+        }
+        endpoint.compositePresent = HasCompositeFx(fx);
 
         DWORD disable = 0;
         if (detail::RegReadDword(HKEY_LOCAL_MACHINE, fx, kDisableSysFxProp,

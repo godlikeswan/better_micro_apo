@@ -27,8 +27,9 @@ file you need to distribute.
    capture device keeps its own settings. If a mono source is plugged into the
    left input of a stereo device, check **Mono (left to all channels)** so both
    sides carry it. This affects every app that uses the device.
-4. Click **Apply** to save the settings and bind the selected devices to the
-   PreMix slot. Audio stops for about a second.
+4. Click **Apply** to save the settings and bind the selected devices. Audio
+   stops for about a second. Devices that use an effect pack are bound in the
+   composite stream chain; other devices use the PreMix slot.
 5. Check **Listen to this device** to hear the selected device through the
    default output. This is the quickest way to audition the applied settings.
    Use headphones to avoid feedback from speakers. Listening stops on its own
@@ -41,7 +42,8 @@ file you need to distribute.
    installed DLL directory. Backups, settings, and logs stay in
    `C:\ProgramData\better_micro_apo`.
 
-The GUI currently binds only the PreMix slot. **Open log** opens
+The GUI binds either the PreMix slot or, on devices that use an effect pack,
+the composite stream chain. **Open log** opens
 `C:\ProgramData\better_micro_apo\better_micro_apo.log`.
 
 ## Build
