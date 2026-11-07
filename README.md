@@ -31,10 +31,10 @@ file you need to distribute.
    stops for about a second. Devices that use an effect pack are bound in the
    composite stream chain; other devices use the PreMix slot.
 5. On a device that uses an effect pack, **Ignore other effects** replaces the
-   driver's composite stream chain with only this APO. This is per device and is
-   applied with **Apply**; unchecking it restores the driver chain from the
-   backup. It only changes the stream chain, not the effect pack's mode or
-   endpoint effects.
+   driver's composite chains with only this APO. This clears the effect pack's
+   stream, mode, endpoint, keyword-detector, and offload chains, so none of its
+   processing runs. This is per device and is applied with **Apply**; unchecking
+   it restores the driver chains from the backup.
 6. Check **Listen to this device** to hear the selected device through the
    default output. This is the quickest way to audition the applied settings.
    Use headphones to avoid feedback from speakers. Listening stops on its own
@@ -48,8 +48,8 @@ file you need to distribute.
    `C:\ProgramData\better_micro_apo`.
 
 The GUI binds either the PreMix slot or, on devices that use an effect pack,
-the composite stream chain. **Ignore other effects** changes only that stream
-chain, so the effect pack's mode and endpoint chains keep running. **Open log**
+the composite stream chain. **Ignore other effects** removes the rest of the
+effect pack, so only this APO runs on that device. **Open log**
 opens `C:\ProgramData\better_micro_apo\better_micro_apo.log`.
 
 ## Build

@@ -99,16 +99,19 @@ key, then restarts audio once:
   slots on those devices, so the APO CLSID is appended to the existing driver
   chain instead. The driver entries are preserved and restored on disable.
 
-The per-device `isolate_effects` option replaces that composite stream chain
-with only this APO's CLSID. Turning it off rebuilds the chain from the newest
-backup plus this APO, and disabling the device restores the driver chain without
-this APO. The option does not touch the effect pack's mode (`...,14`), endpoint
-(`...,15`), or keyword (`...,16`-`...,18`) chains.
+The per-device `isolate_effects` option replaces the effect pack's composite
+chains with only this APO's CLSID. It sets the stream chain (`...,13`) to this
+APO and clears the mode (`...,14`), endpoint (`...,15`), keyword-detector
+(`...,16`-`...,18`), and offload (`...,19`-`...,20`) chains. Turning it off
+rebuilds every one of those values from the newest backup plus this APO, and
+disabling the device restores the driver chains without this APO. If isolation
+is already saved but other composite chains are still present, `Apply` finishes
+the cleanup without requiring a checkbox toggle.
 
 Before changing either slot the GUI exports the whole `FxProperties` key with
 `reg.exe` to `C:\ProgramData\better_micro_apo\backup`. Restore parses the
-backup, puts back the original PreMix value and composite chain, and removes
-only this APO's CLSID from anything it did not write.
+backup, puts back the original PreMix value and every composite chain, and
+removes only this APO's CLSID from anything it did not write.
 
 ## Registration and logging
 

@@ -12,7 +12,25 @@ bool HasCompositeFx(const std::wstring& fx)
 {
     // Any composite effect position means the driver uses effect packs. The
     // composite keys use the same property GUID as the single FX keys.
-    for (int index = 13; index <= 20; ++index) {
+    for (int index = kCompositeFirstProp; index <= kCompositeLastProp;
+         ++index) {
+        const std::wstring name =
+            std::wstring(kFxPropBase) + L"," + std::to_wstring(index);
+        std::vector<std::wstring> values;
+        if (detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx, name.c_str(),
+                                       values) &&
+            !values.empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool HasCompositeExtraFx(const std::wstring& fx)
+{
+    // Everything after the stream chain is an effect that is not this APO.
+    for (int index = kCompositeFirstProp + 1; index <= kCompositeLastProp;
+         ++index) {
         const std::wstring name =
             std::wstring(kFxPropBase) + L"," + std::to_wstring(index);
         std::vector<std::wstring> values;
@@ -168,6 +186,9 @@ std::vector<Endpoint> EnumEndpoints()
             endpoint.compositeOurs = ContainsClsid(composite, kClsid);
         }
         endpoint.compositePresent = HasCompositeFx(fx);
+        endpoint.isolatePendingCleanup =
+            endpoint.Enabled() && endpoint.compositePresent &&
+            endpoint.settings.isolateEffects && HasCompositeExtraFx(fx);
 
         DWORD disable = 0;
         if (detail::RegReadDword(HKEY_LOCAL_MACHINE, fx, kDisableSysFxProp,

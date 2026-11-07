@@ -467,18 +467,87 @@ std::vector<std::filesystem::path> FindBackups(const std::wstring& id)
     return files;
 }
 
-// Reads the composite stream chain from the newest backup. Returns false when
-// there is no backup or it has no composite value; the caller can then fall
-// back to the current registry value.
-bool ReadBackupComposite(const Endpoint& endpoint,
-                         std::vector<std::wstring>& values)
+std::wstring CompositeProp(int index)
+{
+    return std::wstring(kFxPropBase) + L"," + std::to_wstring(index);
+}
+
+// Reads the newest backup for an endpoint. Returns false when there is no
+// backup file.
+bool ReadNewestBackupText(const Endpoint& endpoint, std::wstring& text)
 {
     const auto backups = FindBackups(endpoint.id);
     if (backups.empty()) {
         return false;
     }
-    const std::wstring text = detail::ReadTextFile(backups.front().wstring());
-    return detail::ExtractRegMultiString(text, kCompositeStreamProp, values);
+    text = detail::ReadTextFile(backups.front().wstring());
+    return !text.empty();
+}
+
+bool HasCompositeValues(const std::wstring& fx, int first, int last)
+{
+    for (int index = first; index <= last; ++index) {
+        std::vector<std::wstring> values;
+        const std::wstring name = CompositeProp(index);
+        if (detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx, name.c_str(),
+                                       values) &&
+            !values.empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Removes the composite effect chains in the inclusive index range.
+bool ClearCompositeValues(const std::wstring& fx, int first, int last,
+                          const std::wstring& device, std::wstring& log)
+{
+    bool ok = true;
+    for (int index = first; index <= last; ++index) {
+        const std::wstring name = CompositeProp(index);
+        if (!detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx, name.c_str())) {
+            log += L"Could not clear " + name + L" on " + device + L".\r\n";
+            ok = false;
+        }
+    }
+    return ok;
+}
+
+// Puts the composite effect chains in the inclusive index range back to the
+// values in the newest backup. Values that were absent in the backup are
+// removed.
+bool RestoreCompositeValues(const std::wstring& fx,
+                            const std::wstring& backupText, int first,
+                            int last, const std::wstring& device,
+                            std::wstring& log)
+{
+    bool ok = true;
+    for (int index = first; index <= last; ++index) {
+        const std::wstring name = CompositeProp(index);
+        std::vector<std::wstring> values;
+        if (detail::ExtractRegMultiString(backupText, name, values)) {
+            // Never restore a stale entry that points at this APO.
+            RemoveClsid(values, kClsid);
+            if (values.empty()) {
+                if (!detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx,
+                                            name.c_str())) {
+                    log += L"Could not clear " + name + L" on " + device +
+                           L".\r\n";
+                    ok = false;
+                }
+            } else if (!detail::RegWriteMultiString(HKEY_LOCAL_MACHINE, fx,
+                                                    name.c_str(), values)) {
+                log += L"Could not restore " + name + L" on " + device +
+                       L".\r\n";
+                ok = false;
+            }
+        } else if (!detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx,
+                                           name.c_str())) {
+            log += L"Could not clear " + name + L" on " + device + L".\r\n";
+            ok = false;
+        }
+    }
+    return ok;
 }
 
 bool CreateBackup(const Endpoint& endpoint, std::wstring& file,
@@ -632,6 +701,14 @@ bool RestoreBackup(const Endpoint& endpoint, std::wstring& log)
                    endpoint.name + L".\r\n";
             ok = false;
         }
+    }
+
+    // The isolate option also clears the mode, endpoint, keyword-detector, and
+    // offload chains. Put them back from the same backup.
+    if (!chosen.empty() &&
+        !RestoreCompositeValues(fx, text, kCompositeFirstProp + 1,
+                                kCompositeLastProp, endpoint.name, log)) {
+        ok = false;
     }
 
     std::wstring currentPremix;
@@ -832,15 +909,26 @@ Result ApplyChanges(const std::vector<Change>& changes)
             continue;
         }
 
+        const std::wstring fx = detail::FxSub(it->id);
         const bool wasEnabled = it->Enabled();
         const bool bindingTransition = change.enable != wasEnabled;
         const bool isolateChanged =
             change.settingsChanged &&
             it->settings.isolateEffects != change.settings.isolateEffects;
-        const bool isolateRebind = change.enable && wasEnabled &&
-                                   it->compositePresent && isolateChanged;
         const ApoSettings& targetSettings =
             change.settingsChanged ? change.settings : it->settings;
+
+        // Isolation is already saved for this device but some other composite
+        // chain is still present. Apply should finish the cleanup without
+        // making the user toggle the checkbox off and on again.
+        const bool isolateCleanup =
+            change.enable && wasEnabled && it->compositePresent &&
+            targetSettings.isolateEffects &&
+            HasCompositeValues(fx, kCompositeFirstProp + 1,
+                               kCompositeLastProp);
+        const bool isolateRebind =
+            change.enable && wasEnabled && it->compositePresent &&
+            (isolateChanged || isolateCleanup);
 
         if (change.settingsChanged) {
             if (SaveSettings(it->id, change.settings)) {
@@ -856,11 +944,12 @@ Result ApplyChanges(const std::vector<Change>& changes)
         }
 
         if (change.enable) {
-            // Capture the driver's chain before the first bind and before
-            // isolating it, so turning isolation off or disabling the device
-            // can always put the driver's effects back.
+            // Capture the driver's chains before the first bind and before
+            // isolating them, so turning isolation off or disabling the device
+            // can always put the driver's effects back. Never back up an
+            // already-isolated device: its stream chain may be ours alone.
             if (bindingTransition ||
-                (isolateRebind && targetSettings.isolateEffects)) {
+                (isolateChanged && targetSettings.isolateEffects)) {
                 std::wstring backup;
                 if (!CreateBackup(*it, backup, log)) {
                     result.ok = false;
@@ -868,23 +957,46 @@ Result ApplyChanges(const std::vector<Change>& changes)
                 }
             }
 
-            const std::wstring fx = detail::FxSub(it->id);
             if (it->compositePresent) {
                 std::vector<std::wstring> chain;
+                std::wstring backupText;
+                const bool haveBackup = ReadNewestBackupText(*it, backupText);
+
                 if (targetSettings.isolateEffects) {
+                    // Remove every other effect-pack chain as well as the
+                    // driver's stream effects, leaving this APO alone.
                     chain.push_back(kClsid);
+                    if (!ClearCompositeValues(fx, kCompositeFirstProp + 1,
+                                              kCompositeLastProp, it->name,
+                                              log)) {
+                        result.ok = false;
+                    }
                 } else {
-                    if (bindingTransition) {
-                        detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
-                                                   kCompositeStreamProp, chain);
-                    } else if (!ReadBackupComposite(*it, chain)) {
-                        log += L"No composite backup for " + it->name +
-                               L"; keeping the current chain.\r\n";
+                    bool chainLoaded = false;
+                    if (!bindingTransition && haveBackup) {
+                        // Turning isolation off: the backup holds the driver's
+                        // stream chain. A missing value means it was empty.
+                        if (!detail::ExtractRegMultiString(
+                                backupText, kCompositeStreamProp, chain)) {
+                            chain.clear();
+                        }
+                        chainLoaded = true;
+                    }
+                    if (!chainLoaded) {
                         detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
                                                    kCompositeStreamProp, chain);
                     }
                     RemoveClsid(chain, kClsid);
                     chain.push_back(kClsid);
+
+                    // Put back the effect-pack chains that isolation cleared.
+                    if (!bindingTransition && haveBackup &&
+                        !RestoreCompositeValues(fx, backupText,
+                                                kCompositeFirstProp + 1,
+                                                kCompositeLastProp, it->name,
+                                                log)) {
+                        result.ok = false;
+                    }
                 }
                 if (!detail::RegWriteMultiString(HKEY_LOCAL_MACHINE, fx,
                                                  kCompositeStreamProp, chain)) {

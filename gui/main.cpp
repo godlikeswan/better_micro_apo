@@ -549,7 +549,8 @@ bool HasChanges()
         if (checked != g_endpoints[i].Enabled()) {
             return true;
         }
-        if (g_endpoints[i].settingsDirty) {
+        if (g_endpoints[i].settingsDirty ||
+            g_endpoints[i].isolatePendingCleanup) {
             return true;
         }
     }
@@ -685,7 +686,9 @@ void Refresh()
             }
             notes += L"effect pack";
             if (endpoint.settings.isolateEffects && endpoint.Enabled()) {
-                notes += L"; other effects ignored";
+                notes += endpoint.isolatePendingCleanup
+                             ? L"; other effects pending Apply"
+                             : L"; other effects ignored";
             }
         }
         if (endpoint.streamOurs) {
@@ -906,7 +909,8 @@ void DoApply()
         const bool checked =
             ListView_GetCheckState(g_list, static_cast<int>(i)) != FALSE;
         const bool bindingChanged = checked != g_endpoints[i].Enabled();
-        if (!bindingChanged && !g_endpoints[i].settingsDirty) {
+        if (!bindingChanged && !g_endpoints[i].settingsDirty &&
+            !g_endpoints[i].isolatePendingCleanup) {
             continue;
         }
 
@@ -1196,7 +1200,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
                 }
                 if (g_endpoints[index].compositePresent &&
                     g_endpoints[index].settings.isolateEffects) {
-                    text += L"\r\nOther effects are ignored on this device";
+                    text += g_endpoints[index].isolatePendingCleanup
+                                ? L"\r\nApply to finish ignoring the other effects"
+                                : L"\r\nOther effects are ignored on this device";
                 }
                 if (g_endpoints[index].compositeOurs) {
                     text += L"\r\nAlso bound in the composite stream chain";
@@ -1360,6 +1366,8 @@ int DumpStatus(const std::wstring& path)
                 L" | mono=" + (endpoint.settings.mono ? L"on" : L"off") +
                 L" | isolate=" +
                 (endpoint.settings.isolateEffects ? L"on" : L"off") +
+                L" | isolate_pending=" +
+                (endpoint.isolatePendingCleanup ? L"yes" : L"no") +
                 L"\r\n";
     }
 
