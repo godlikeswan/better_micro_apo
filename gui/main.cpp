@@ -77,6 +77,7 @@ enum : int {
     IDC_MAKEUP_LABEL,
     IDC_MAKEUP_EDIT,
     IDC_MONO,
+    IDC_ISOLATE,
     IDC_LISTEN,
     IDC_LISTEN_NOTE,
     IDC_METER,
@@ -143,6 +144,7 @@ HWND g_gain = nullptr;
 HWND g_makeupLabel = nullptr;
 HWND g_makeupEdit = nullptr;
 HWND g_mono = nullptr;
+HWND g_isolate = nullptr;
 HWND g_listen = nullptr;
 HWND g_listenNote = nullptr;
 HWND g_meter = nullptr;
@@ -314,6 +316,7 @@ void ClearSettingsEditor()
     SendMessageW(g_compressor, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessageW(g_gain, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessageW(g_mono, BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessageW(g_isolate, BM_SETCHECK, BST_UNCHECKED, 0);
     g_settingsLoading = false;
 }
 
@@ -351,6 +354,8 @@ void ShowSettingsForSelected()
                  settings.makeupEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(g_mono, BM_SETCHECK,
                  settings.mono ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(g_isolate, BM_SETCHECK,
+                 settings.isolateEffects ? BST_CHECKED : BST_UNCHECKED, 0);
     g_settingsLoading = false;
 }
 
@@ -387,6 +392,8 @@ bool CommitSettingsEditor()
         SendMessageW(g_gain, BM_GETCHECK, 0, 0) == BST_CHECKED;
     settings.mono =
         SendMessageW(g_mono, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    settings.isolateEffects =
+        SendMessageW(g_isolate, BM_GETCHECK, 0, 0) == BST_CHECKED;
     apo::ClampSettings(settings);
     g_endpoints[g_settingsIndex].settings = settings;
 
@@ -422,7 +429,7 @@ void EnableSettingsControls(bool enabled)
         g_compAttackLabel, g_compAttackEdit,
         g_compReleaseLabel, g_compReleaseEdit,
         g_gain, g_makeupLabel, g_makeupEdit,
-        g_mono, g_listen,
+        g_mono, g_isolate, g_listen,
     };
     for (HWND control : controls) {
         EnableWindow(control, enabled);
@@ -608,6 +615,13 @@ void UpdateDevicesUi()
     EnableSettingsControls(!g_busy && sectionEnabled && g_settingsIndex >= 0);
     EnableWindow(g_apply, !g_busy && sectionEnabled && HasChanges());
 
+    // The isolate option only changes how an effect-pack device is bound.
+    const bool isolateAvailable =
+        !g_busy && sectionEnabled && g_settingsIndex >= 0 &&
+        g_settingsIndex < static_cast<int>(g_endpoints.size()) &&
+        g_endpoints[g_settingsIndex].compositePresent;
+    EnableWindow(g_isolate, isolateAvailable);
+
     if (!sectionEnabled) {
         SetWindowTextW(g_hint, L"Install the APO files first.");
     } else if (g_endpoints.empty()) {
@@ -670,6 +684,9 @@ void Refresh()
                 notes += L"; ";
             }
             notes += L"effect pack";
+            if (endpoint.settings.isolateEffects && endpoint.Enabled()) {
+                notes += L"; other effects ignored";
+            }
         }
         if (endpoint.streamOurs) {
             if (!notes.empty()) {
@@ -813,6 +830,9 @@ void Layout(int width, int height)
     placeSettingPair(g_makeupLabel, g_makeupEdit, nullptr, nullptr);
 
     MoveWindow(g_mono, settingsX, settingsY, settingsWidth, Scale(20), TRUE);
+    settingsY += Scale(24);
+    MoveWindow(g_isolate, settingsX, settingsY, settingsWidth, Scale(20),
+               TRUE);
     settingsY += Scale(24);
     MoveWindow(g_listen, settingsX, settingsY, settingsWidth, Scale(20), TRUE);
     settingsY += Scale(24);
@@ -1015,6 +1035,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             CreateStatic(window, IDC_MAKEUP_LABEL, L"Makeup (dB)", SS_LEFT);
         g_makeupEdit = CreateEdit(window, IDC_MAKEUP_EDIT);
         g_mono = CreateCheck(window, IDC_MONO, L"Mono (left to all channels)");
+        g_isolate = CreateCheck(window, IDC_ISOLATE, L"Ignore other effects");
         g_listen = CreateCheck(window, IDC_LISTEN, L"Listen to this device");
         g_listenNote = CreateStatic(
             window, IDC_LISTEN_NOTE,
@@ -1040,7 +1061,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
     case WM_GETMINMAXINFO: {
         auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
         info->ptMinTrackSize.x = Scale(900);
-        info->ptMinTrackSize.y = Scale(760);
+        info->ptMinTrackSize.y = Scale(810);
         break;
     }
 
@@ -1086,6 +1107,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_COMPRESSOR:
         case IDC_GAIN:
         case IDC_MONO:
+        case IDC_ISOLATE:
             if (HIWORD(wParam) == BN_CLICKED) {
                 MarkSettingsDirty();
             }
@@ -1171,6 +1193,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
                 std::wstring text = g_endpoints[index].id;
                 if (g_endpoints[index].compositePresent) {
                     text += L"\r\nUses an effect pack (composite FX)";
+                }
+                if (g_endpoints[index].compositePresent &&
+                    g_endpoints[index].settings.isolateEffects) {
+                    text += L"\r\nOther effects are ignored on this device";
                 }
                 if (g_endpoints[index].compositeOurs) {
                     text += L"\r\nAlso bound in the composite stream chain";
@@ -1332,6 +1358,8 @@ int DumpStatus(const std::wstring& path)
                 (endpoint.settings.makeupEnabled ? L"on" : L"off") +
                 L" | makeup=" + FormatNumber(endpoint.settings.makeupDb) +
                 L" | mono=" + (endpoint.settings.mono ? L"on" : L"off") +
+                L" | isolate=" +
+                (endpoint.settings.isolateEffects ? L"on" : L"off") +
                 L"\r\n";
     }
 

@@ -46,6 +46,12 @@ struct ApoSettings
     // Copy the first (left) channel to every other channel after processing.
     // Useful for a mono source on a stereo interface.
     bool mono = false;
+
+    // GUI binding option for devices that publish composite FX entries: replace
+    // the driver's composite stream chain with only this APO instead of
+    // appending to it. The APO does not use this value while processing; it is
+    // read by the GUI from the same INI file.
+    bool isolateEffects = false;
 };
 
 // Clamp every field into a range the DSP can handle safely. Non-finite values

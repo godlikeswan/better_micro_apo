@@ -59,11 +59,16 @@ The INI keys are `gate_enabled`, `gate_threshold_db`, `gate_range_db`,
 `gate_attack_ms`, `gate_hold_ms`, `gate_release_ms`, `gate_lookahead_ms`,
 `compressor_enabled`, `compressor_threshold_db`, `compressor_ratio`,
 `compressor_attack_ms`, `compressor_release_ms`, `makeup_enabled`, `makeup_db`,
-and `mono`. Legacy keys (`threshold_db`,
+`mono`, and `isolate_effects`. Legacy keys (`threshold_db`,
 `ratio`, `attack_ms`, `release_ms`) are still read for the compressor. A legacy
 `input_gain_db` key is folded into the compressor threshold and makeup gain
 (`threshold -= input_gain`, `makeup += input_gain`) so settings written before
 the input gain stage was removed keep the same sound.
+
+`isolate_effects` is a GUI binding option rather than a DSP value: it tells the
+GUI to replace the composite stream chain with only this APO instead of
+appending to the driver's chain. The APO still reads it from the same INI file
+but does not use it while processing.
 
 The GUI writes the same files during `Apply`, inside the existing audio-stop
 section, then restarts the audio service once.
@@ -93,6 +98,12 @@ key, then restarts audio once:
   whose driver publishes composite FX entries. Windows ignores the single FX
   slots on those devices, so the APO CLSID is appended to the existing driver
   chain instead. The driver entries are preserved and restored on disable.
+
+The per-device `isolate_effects` option replaces that composite stream chain
+with only this APO's CLSID. Turning it off rebuilds the chain from the newest
+backup plus this APO, and disabling the device restores the driver chain without
+this APO. The option does not touch the effect pack's mode (`...,14`), endpoint
+(`...,15`), or keyword (`...,16`-`...,18`) chains.
 
 Before changing either slot the GUI exports the whole `FxProperties` key with
 `reg.exe` to `C:\ProgramData\better_micro_apo\backup`. Restore parses the

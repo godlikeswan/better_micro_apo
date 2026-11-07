@@ -310,6 +310,8 @@ bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
             ParseDouble(value, settings.makeupDb);
         } else if (EqualsIgnoreCase(key, L"mono")) {
             ParseBool(value, settings.mono);
+        } else if (EqualsIgnoreCase(key, L"isolate_effects")) {
+            ParseBool(value, settings.isolateEffects);
         }
     }
 
@@ -356,6 +358,8 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
             (settings.makeupEnabled ? "1" : "0") + "\n";
     text += "makeup_db=" + FormatDouble(settings.makeupDb) + "\n";
     text += std::string("mono=") + (settings.mono ? "1" : "0") + "\n";
+    text += std::string("isolate_effects=") +
+            (settings.isolateEffects ? "1" : "0") + "\n";
 
     return WriteFileText(SettingsPath(endpointId), text);
 }

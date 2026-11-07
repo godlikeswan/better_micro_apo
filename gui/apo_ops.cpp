@@ -467,6 +467,20 @@ std::vector<std::filesystem::path> FindBackups(const std::wstring& id)
     return files;
 }
 
+// Reads the composite stream chain from the newest backup. Returns false when
+// there is no backup or it has no composite value; the caller can then fall
+// back to the current registry value.
+bool ReadBackupComposite(const Endpoint& endpoint,
+                         std::vector<std::wstring>& values)
+{
+    const auto backups = FindBackups(endpoint.id);
+    if (backups.empty()) {
+        return false;
+    }
+    const std::wstring text = detail::ReadTextFile(backups.front().wstring());
+    return detail::ExtractRegMultiString(text, kCompositeStreamProp, values);
+}
+
 bool CreateBackup(const Endpoint& endpoint, std::wstring& file,
                   std::wstring& log)
 {
@@ -818,6 +832,16 @@ Result ApplyChanges(const std::vector<Change>& changes)
             continue;
         }
 
+        const bool wasEnabled = it->Enabled();
+        const bool bindingTransition = change.enable != wasEnabled;
+        const bool isolateChanged =
+            change.settingsChanged &&
+            it->settings.isolateEffects != change.settings.isolateEffects;
+        const bool isolateRebind = change.enable && wasEnabled &&
+                                   it->compositePresent && isolateChanged;
+        const ApoSettings& targetSettings =
+            change.settingsChanged ? change.settings : it->settings;
+
         if (change.settingsChanged) {
             if (SaveSettings(it->id, change.settings)) {
                 log += L"Saved settings for " + it->name + L".\r\n";
@@ -827,23 +851,39 @@ Result ApplyChanges(const std::vector<Change>& changes)
             }
         }
 
-        if (change.enable == it->Enabled()) {
+        if (!bindingTransition && !isolateRebind) {
             continue;
         }
 
         if (change.enable) {
-            std::wstring backup;
-            if (!CreateBackup(*it, backup, log)) {
-                result.ok = false;
-                continue;
+            // Capture the driver's chain before the first bind and before
+            // isolating it, so turning isolation off or disabling the device
+            // can always put the driver's effects back.
+            if (bindingTransition ||
+                (isolateRebind && targetSettings.isolateEffects)) {
+                std::wstring backup;
+                if (!CreateBackup(*it, backup, log)) {
+                    result.ok = false;
+                    continue;
+                }
             }
 
             const std::wstring fx = detail::FxSub(it->id);
             if (it->compositePresent) {
                 std::vector<std::wstring> chain;
-                detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
-                                           kCompositeStreamProp, chain);
-                if (!ContainsClsid(chain, kClsid)) {
+                if (targetSettings.isolateEffects) {
+                    chain.push_back(kClsid);
+                } else {
+                    if (bindingTransition) {
+                        detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
+                                                   kCompositeStreamProp, chain);
+                    } else if (!ReadBackupComposite(*it, chain)) {
+                        log += L"No composite backup for " + it->name +
+                               L"; keeping the current chain.\r\n";
+                        detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
+                                                   kCompositeStreamProp, chain);
+                    }
+                    RemoveClsid(chain, kClsid);
                     chain.push_back(kClsid);
                 }
                 if (!detail::RegWriteMultiString(HKEY_LOCAL_MACHINE, fx,
@@ -884,7 +924,9 @@ Result ApplyChanges(const std::vector<Change>& changes)
                 }
             }
 
-            log += L"Enabled on " + it->name + L".\r\n";
+            log += (bindingTransition ? L"Enabled on "
+                                      : L"Updated the effect binding on ") +
+                   it->name + L".\r\n";
         } else {
             if (!RestoreBackup(*it, log)) {
                 result.ok = false;
