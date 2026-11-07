@@ -103,7 +103,8 @@ The per-device `isolate_effects` option replaces the effect pack's composite
 chains with only this APO's CLSID. It sets the stream chain (`...,13`) to this
 APO and clears the mode (`...,14`), endpoint (`...,15`), keyword-detector
 (`...,16`-`...,18`), and offload (`...,19`-`...,20`) chains. Turning it off
-rebuilds every one of those values from the newest backup plus this APO, and
+rebuilds every one of those values from the newest backup that still has driver
+entries, plus this APO, and
 disabling the device restores the driver chains without this APO. If isolation
 is already saved but other composite chains are still present, `Apply` finishes
 the cleanup without requiring a checkbox toggle.

@@ -472,15 +472,42 @@ std::wstring CompositeProp(int index)
     return std::wstring(kFxPropBase) + L"," + std::to_wstring(index);
 }
 
-// Reads the newest backup for an endpoint. Returns false when there is no
-// backup file.
+// A backup taken while this APO was already the whole stream chain is not the
+// driver's original state. Prefer the newest backup that still has driver
+// entries, or no stream chain at all, when restoring.
+bool IsUsableDriverBackup(const std::wstring& text)
+{
+    std::vector<std::wstring> stream;
+    if (!detail::ExtractRegMultiString(text, kCompositeStreamProp, stream)) {
+        return true;
+    }
+    if (!ContainsClsid(stream, kClsid)) {
+        return true;
+    }
+    RemoveClsid(stream, kClsid);
+    return !stream.empty();
+}
+
+std::filesystem::path FindRestoreBackup(const std::wstring& id)
+{
+    const auto backups = FindBackups(id);
+    for (const auto& path : backups) {
+        if (IsUsableDriverBackup(detail::ReadTextFile(path.wstring()))) {
+            return path;
+        }
+    }
+    return backups.empty() ? std::filesystem::path{} : backups.front();
+}
+
+// Reads the best backup for an endpoint. Returns false when there is no backup
+// file.
 bool ReadNewestBackupText(const Endpoint& endpoint, std::wstring& text)
 {
-    const auto backups = FindBackups(endpoint.id);
-    if (backups.empty()) {
+    const auto path = FindRestoreBackup(endpoint.id);
+    if (path.empty()) {
         return false;
     }
-    text = detail::ReadTextFile(backups.front().wstring());
+    text = detail::ReadTextFile(path.wstring());
     return !text.empty();
 }
 
@@ -617,15 +644,15 @@ bool CreateBackup(const Endpoint& endpoint, std::wstring& file,
 bool RestoreBackup(const Endpoint& endpoint, std::wstring& log)
 {
     const std::wstring fx = detail::FxSub(endpoint.id);
-    const auto backups = FindBackups(endpoint.id);
 
-    // Always use the newest backup. It was taken immediately before the most
-    // recent change, so it has the driver's current effect chain. Any CLSID
-    // that points at this APO is stripped below.
+    // Prefer the newest backup that still represents the driver's chain. A
+    // backup taken while this APO was already the whole stream chain is not
+    // useful for restoring the driver's effects.
     std::wstring chosen;
     std::wstring text;
-    if (!backups.empty()) {
-        chosen = backups.front().wstring();
+    const auto restorePath = FindRestoreBackup(endpoint.id);
+    if (!restorePath.empty()) {
+        chosen = restorePath.wstring();
         text = detail::ReadTextFile(chosen);
     }
 
