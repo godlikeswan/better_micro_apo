@@ -198,6 +198,11 @@ int g_captureIndex = -1;
 apo::ApoSettings g_captureSettings;
 bool g_captureSucceeded = false;
 
+// Apply briefly stops the audio service, which also stops the monitor stream.
+// Remember the listening state so it can be restarted once Apply finishes.
+bool g_resumeListen = false;
+std::wstring g_resumeListenId;
+
 int Scale(int value)
 {
     return MulDiv(value, g_dpi, 96);
@@ -552,6 +557,13 @@ void UpdateMeter()
     }
 }
 
+bool IsListening()
+{
+    return g_listen != nullptr &&
+           SendMessageW(g_listen, BM_GETCHECK, 0, 0) == BST_CHECKED &&
+           apo::IsMonitorActive();
+}
+
 void StopListening()
 {
     KillTimer(g_window, kMonitorTimer);
@@ -626,7 +638,11 @@ void ResizeColumns()
 
 void UpdateFilesUi()
 {
-    SetWindowTextW(g_dllStatus, g_files.dllPresent ? L"present" : L"missing");
+    const bool stale = g_files.DllStale();
+    SetWindowTextW(g_dllStatus,
+                   !g_files.dllPresent
+                       ? L"missing"
+                       : (stale ? L"outdated" : L"present"));
     SetWindowTextW(g_comStatus,
                    g_files.comRegistered
                        ? L"registered"
@@ -635,12 +651,20 @@ void UpdateFilesUi()
     SetWindowTextW(g_apoStatus,
                    g_files.apoKeyPresent ? L"present" : L"missing");
 
-    SetWindowTextW(g_overall, g_files.FullyInstalled()
-                                  ? L"Installed"
-                                  : (g_files.AnyPresent() ? L"Partial"
-                                                          : L"Not installed"));
+    SetWindowTextW(
+        g_overall,
+        g_files.FullyInstalled()
+            ? (stale ? L"Installed (DLL outdated)" : L"Installed")
+            : (g_files.AnyPresent() ? L"Partial" : L"Not installed"));
 
-    EnableWindow(g_install, !g_busy && !g_files.FullyInstalled());
+    SetWindowTextW(g_install, stale ? L"Update" : L"Install");
+    SetWindowTextW(
+        g_filesNote,
+        stale ? L"The installed DLL is older than this app. Click Update to "
+                L"replace it; audio stops briefly."
+              : L"Install and Uninstall stop audio for about a second.");
+
+    EnableWindow(g_install, !g_busy && (!g_files.FullyInstalled() || stale));
     EnableWindow(g_uninstall, !g_busy && g_files.AnyPresent());
     EnableWindow(g_refresh, !g_busy);
     EnableWindow(g_logButton, !g_busy);
@@ -939,7 +963,9 @@ void DoInstall()
     }
 
     StopListening();
-    StartWork([] { return apo::InstallFiles(); }, L"Installing...");
+    const bool update = g_files.DllStale();
+    StartWork([] { return apo::InstallFiles(); },
+              update ? L"Updating..." : L"Installing...");
 }
 
 void DoUninstall()
@@ -982,7 +1008,17 @@ void DoApply()
         return;
     }
 
+    const bool wasListening = IsListening();
+    std::wstring listenId;
+    if (wasListening && g_settingsIndex >= 0 &&
+        g_settingsIndex < static_cast<int>(g_endpoints.size())) {
+        listenId = g_endpoints[g_settingsIndex].id;
+    }
+
     StopListening();
+    g_resumeListen = wasListening && !listenId.empty();
+    g_resumeListenId = g_resumeListen ? listenId : std::wstring();
+
     StartWork([changes] { return apo::ApplyChanges(changes); },
               L"Applying...");
 }
@@ -1454,6 +1490,23 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             Refresh();
         }
 
+        // Restart the audition stream if it was active before Apply. The
+        // endpoint id is checked so a disabled or removed device does not
+        // spring back to life.
+        if (kind == WorkKind::Generic && g_resumeListen) {
+            const std::wstring listenId = g_resumeListenId;
+            g_resumeListen = false;
+            g_resumeListenId.clear();
+            if (g_settingsIndex >= 0 &&
+                g_settingsIndex < static_cast<int>(g_endpoints.size()) &&
+                _wcsicmp(g_endpoints[g_settingsIndex].id.c_str(),
+                         listenId.c_str()) == 0 &&
+                g_endpoints[g_settingsIndex].Enabled()) {
+                SendMessageW(g_listen, BM_SETCHECK, BST_CHECKED, 0);
+                StartListening();
+            }
+        }
+
         SetWindowTextW(g_status, g_result.summary.c_str());
         if (!g_result.ok) {
             std::wstring details = g_result.details;
@@ -1522,6 +1575,10 @@ int DumpStatus(const std::wstring& path)
     text += apo::IsElevated() ? L"yes\r\n" : L"no\r\n";
     text += L"dll_present = ";
     text += files.dllPresent ? L"yes\r\n" : L"no\r\n";
+    text += L"dll_up_to_date = ";
+    text += !files.dllPresent
+                ? L"n/a\r\n"
+                : (files.dllUpToDate ? L"yes\r\n" : L"no\r\n");
     text += L"com_registered = ";
     text += files.comRegistered ? L"yes\r\n" : L"no\r\n";
     text += L"com_path = " + files.registeredPath + L"\r\n";
@@ -1529,7 +1586,8 @@ int DumpStatus(const std::wstring& path)
     text += files.apoKeyPresent ? L"yes\r\n" : L"no\r\n";
     text += L"overall = ";
     text += files.FullyInstalled()
-                ? L"installed\r\n"
+                ? (files.DllStale() ? L"installed (dll outdated)\r\n"
+                                    : L"installed\r\n")
                 : (files.AnyPresent() ? L"partial\r\n" : L"none\r\n");
     text += L"endpoints = " + std::to_wstring(endpoints.size()) + L"\r\n";
 

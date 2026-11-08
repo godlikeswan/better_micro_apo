@@ -1,12 +1,77 @@
 #include "apo.h"
 
 #include "apo_internal.h"
+#include "apo_resource.h"
 
 #include <algorithm>
 #include <iterator>
 
 namespace apo {
 namespace {
+
+constexpr unsigned long long kFnvOffset = 14695981039346656037ULL;
+constexpr unsigned long long kFnvPrime = 1099511628211ULL;
+
+unsigned long long HashUpdate(unsigned long long hash, const void* data,
+                              size_t size)
+{
+    const auto* bytes = static_cast<const unsigned char*>(data);
+    for (size_t i = 0; i < size; ++i) {
+        hash ^= bytes[i];
+        hash *= kFnvPrime;
+    }
+    return hash;
+}
+
+bool HashEmbeddedDll(unsigned long long& hash, unsigned long long& size)
+{
+    const HRSRC resource =
+        FindResourceW(nullptr, MAKEINTRESOURCEW(IDR_APO_DLL), RT_RCDATA);
+    if (resource == nullptr) {
+        return false;
+    }
+
+    size = SizeofResource(nullptr, resource);
+    const HGLOBAL handle = LoadResource(nullptr, resource);
+    const void* data = handle ? LockResource(handle) : nullptr;
+    if (data == nullptr || size == 0) {
+        return false;
+    }
+
+    hash = HashUpdate(kFnvOffset, data, static_cast<size_t>(size));
+    return true;
+}
+
+bool HashFileContents(const std::wstring& path, unsigned long long& hash,
+                      unsigned long long& size)
+{
+    const HANDLE file = CreateFileW(
+        path.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    hash = kFnvOffset;
+    size = 0;
+    unsigned char buffer[65536];
+    for (;;) {
+        DWORD count = 0;
+        if (!ReadFile(file, buffer, sizeof(buffer), &count, nullptr)) {
+            CloseHandle(file);
+            return false;
+        }
+        if (count == 0) {
+            break;
+        }
+        hash = HashUpdate(hash, buffer, count);
+        size += count;
+    }
+
+    CloseHandle(file);
+    return true;
+}
 
 bool HasCompositeFx(const std::wstring& fx)
 {
@@ -213,6 +278,18 @@ FilesStatus GetFilesStatus()
 {
     FilesStatus status;
     status.dllPresent = FileExists(kInstalledDll);
+
+    if (status.dllPresent) {
+        unsigned long long embeddedHash = 0;
+        unsigned long long embeddedSize = 0;
+        unsigned long long installedHash = 0;
+        unsigned long long installedSize = 0;
+        if (HashEmbeddedDll(embeddedHash, embeddedSize) &&
+            HashFileContents(kInstalledDll, installedHash, installedSize)) {
+            status.dllUpToDate = embeddedSize == installedSize &&
+                                 embeddedHash == installedHash;
+        }
+    }
 
     const std::wstring inproc = std::wstring(L"SOFTWARE\\Classes\\CLSID\\") +
                                 kClsid + L"\\InprocServer32";

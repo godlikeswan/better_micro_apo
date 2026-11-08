@@ -102,7 +102,9 @@ decays instead of holding the previous level. The GUI timer samples these
 counters every 100 ms and keeps a 500 ms history: the displayed peak is the
 maximum of that history and the RMS is
 `sqrt(sum(sumSquares) / sum(samples))`. Clip and drop counters are latched and
-reset when listening starts.
+reset when listening starts. **Apply** stops the monitor before it restarts the
+audio service and starts it again for the same endpoint when the work finishes,
+so auditioning survives a settings change.
 
 ## Noise profile capture
 
@@ -166,7 +168,10 @@ distributed. CMake stages the built DLL at
 `build/apo_embed/better_micro_apo.dll`, generates the resource script from
 `gui/apo_dll.rc.in`, and touches it after every DLL build so the resource
 compiler picks up the new bytes. `Install` extracts the resource to
-`C:\Program Files\better_micro_apo\better_micro_apo.dll` and registers it.
+`C:\Program Files\better_micro_apo\better_micro_apo.dll` and registers it. On
+every refresh the GUI compares the size and an FNV-1a hash of the embedded
+payload with the installed DLL; when they differ it reports the DLL as
+outdated and enables **Update** so the installed copy can be replaced.
 
 ## Further reading
 

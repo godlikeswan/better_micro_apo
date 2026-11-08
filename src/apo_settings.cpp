@@ -219,7 +219,7 @@ void ClampSettings(ApoSettings& settings)
 
     ClampFinite(settings.makeupDb, defaults.makeupDb, -24.0, 48.0);
     ClampFinite(settings.noise.reductionDb, defaults.noise.reductionDb, 0.0,
-                30.0);
+                70.0);
 }
 
 std::wstring SettingsDirectory()

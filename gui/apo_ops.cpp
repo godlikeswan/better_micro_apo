@@ -767,6 +767,7 @@ Result InstallFiles()
 {
     Result result;
     std::wstring log;
+    const bool updating = GetFilesStatus().FullyInstalled();
 
     AudioSession session;
     if (!StopAudio(session, log)) {
@@ -830,7 +831,7 @@ Result InstallFiles()
     }
 
     result.ok = true;
-    result.summary = L"Installed.";
+    result.summary = updating ? L"Updated." : L"Installed.";
     result.details = log;
     return result;
 }

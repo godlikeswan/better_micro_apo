@@ -61,9 +61,14 @@ struct Endpoint {
 
 struct FilesStatus {
     bool dllPresent = false;
+    bool dllUpToDate = false;
     bool comRegistered = false;
     bool apoKeyPresent = false;
     std::wstring registeredPath;
+
+    // The installed DLL differs from the copy embedded in this executable, so
+    // the user should run Install again to update it.
+    bool DllStale() const { return dllPresent && !dllUpToDate; }
 
     bool FullyInstalled() const
     {

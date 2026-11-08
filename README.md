@@ -21,7 +21,9 @@ file you need to distribute.
 
 1. Click **Install** to extract the embedded APO DLL to
    `C:\Program Files\better_micro_apo`, register its COM class, and restart
-   audio. Audio stops for about a second.
+   audio. Audio stops for about a second. If the installed DLL is older than
+   the GUI, the DLL row shows **outdated** and the button becomes **Update**;
+   click it to replace the DLL with the embedded copy.
 2. Check the capture devices to enable the effect on. Inactive devices are
    shown grayed out.
 3. Select a device and edit its settings in the panel on the right. Each
@@ -45,7 +47,8 @@ file you need to distribute.
 7. Check **Listen to this device** to hear the selected device through the
    default output. This is the quickest way to audition the applied settings.
    Use headphones to avoid feedback from speakers. Listening stops on its own
-   when you change the selection, apply, install, or uninstall. While
+   when you change the selection, install, or uninstall, and it restarts after
+   **Apply** so you can keep auditioning. While
    listening, **Peak** is the maximum level over the last 500 ms and **RMS** is
    the average level over the same window, both measured after the APO. **CLIP**
    latches when the peak reaches full scale, and **drops** counts gaps in the
@@ -139,7 +142,7 @@ The GUI clamps values to a safe range:
 
 | Setting | Range |
 | --- | --- |
-| Noise reduction | 0 to 30 dB |
+| Noise reduction | 0 to 70 dB |
 | Gate threshold | -80 to 0 dBFS |
 | Gate range | 0 to 96 dB |
 | Gate attack | 0.1 to 1000 ms |
