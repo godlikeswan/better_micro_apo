@@ -1,12 +1,17 @@
 #include "apo_settings.h"
 
+#include "dsp/dsp.h"
+
 #include <windows.h>
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <cwchar>
 #include <string>
+#include <vector>
 
 namespace apo {
 namespace {
@@ -213,6 +218,8 @@ void ClampSettings(ApoSettings& settings)
                 1.0, 5000.0);
 
     ClampFinite(settings.makeupDb, defaults.makeupDb, -24.0, 48.0);
+    ClampFinite(settings.noise.reductionDb, defaults.noise.reductionDb, 0.0,
+                30.0);
 }
 
 std::wstring SettingsDirectory()
@@ -312,6 +319,10 @@ bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
             ParseBool(value, settings.mono);
         } else if (EqualsIgnoreCase(key, L"isolate_effects")) {
             ParseBool(value, settings.isolateEffects);
+        } else if (EqualsIgnoreCase(key, L"noise_enabled")) {
+            ParseBool(value, settings.noise.enabled);
+        } else if (EqualsIgnoreCase(key, L"noise_reduction_db")) {
+            ParseDouble(value, settings.noise.reductionDb);
         }
     }
 
@@ -334,6 +345,10 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
 
     std::string text;
     text += "[dsp]\n";
+    text += std::string("noise_enabled=") +
+            (settings.noise.enabled ? "1" : "0") + "\n";
+    text += "noise_reduction_db=" +
+            FormatDouble(settings.noise.reductionDb) + "\n";
     text += std::string("gate_enabled=") +
             (settings.gate.enabled ? "1" : "0") + "\n";
     text += "gate_threshold_db=" + FormatDouble(settings.gate.thresholdDb) +
@@ -362,6 +377,138 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
             (settings.isolateEffects ? "1" : "0") + "\n";
 
     return WriteFileText(SettingsPath(endpointId), text);
+}
+
+namespace {
+
+#pragma pack(push, 1)
+struct NoiseFileHeader
+{
+    char magic[4];
+    std::uint32_t version;
+    std::uint32_t sampleRate;
+    std::uint32_t channels;
+    std::uint32_t frames;
+};
+#pragma pack(pop)
+
+constexpr std::uint32_t kNoiseFileVersion = 1;
+constexpr std::uint64_t kNoiseFileLimit = 64ull * 1024 * 1024;
+
+bool ValidNoiseHeader(const NoiseFileHeader& header)
+{
+    return std::memcmp(header.magic, "BMNP", 4) == 0 &&
+           header.version == kNoiseFileVersion && header.sampleRate > 0 &&
+           header.channels > 0 &&
+           header.frames >= apo::dsp::kNoiseFftSize;
+}
+
+} // namespace
+
+std::wstring NoiseProfilePath(const std::wstring& endpointId)
+{
+    return SettingsDirectory() + L"\\" + SanitizeId(endpointId) + L".noise";
+}
+
+bool SaveNoiseCapture(const std::wstring& endpointId, std::uint32_t sampleRate,
+                      std::uint32_t channels,
+                      const std::vector<float>& samples)
+{
+    if (sampleRate == 0 || channels == 0 || samples.empty() ||
+        samples.size() % channels != 0)
+    {
+        return false;
+    }
+
+    const std::uint64_t frames64 = samples.size() / channels;
+    if (frames64 > 0xFFFFFFFFull)
+    {
+        return false;
+    }
+
+    CreateDirectoryW(kDataDirectory, nullptr);
+    CreateDirectoryW(kDevicesDirectory, nullptr);
+
+    NoiseFileHeader header{};
+    std::memcpy(header.magic, "BMNP", 4);
+    header.version = kNoiseFileVersion;
+    header.sampleRate = sampleRate;
+    header.channels = channels;
+    header.frames = static_cast<std::uint32_t>(frames64);
+
+    const std::wstring path = NoiseProfilePath(endpointId);
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+    {
+        return false;
+    }
+
+    DWORD written = 0;
+    bool ok = WriteFile(file, &header, sizeof(header), &written, nullptr) &&
+              written == sizeof(header);
+    if (ok)
+    {
+        const DWORD bytes =
+            static_cast<DWORD>(samples.size() * sizeof(float));
+        ok = WriteFile(file, samples.data(), bytes, &written, nullptr) &&
+             written == bytes;
+    }
+    CloseHandle(file);
+
+    if (!ok)
+    {
+        DeleteFileW(path.c_str());
+    }
+    return ok;
+}
+
+bool LoadNoiseProfile(const std::wstring& endpointId, NoiseProfile& profile)
+{
+    profile = NoiseProfile{};
+
+    const std::wstring path = NoiseProfilePath(endpointId);
+    HANDLE file = CreateFileW(
+        path.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+    {
+        return false;
+    }
+
+    NoiseFileHeader header{};
+    DWORD read = 0;
+    bool ok = ReadFile(file, &header, sizeof(header), &read, nullptr) &&
+              read == sizeof(header) && ValidNoiseHeader(header);
+
+    if (ok)
+    {
+        const std::uint64_t bytes64 =
+            static_cast<std::uint64_t>(header.frames) * header.channels *
+            sizeof(float);
+        ok = bytes64 <= kNoiseFileLimit;
+        if (ok)
+        {
+            std::vector<float> samples(
+                static_cast<size_t>(header.frames) * header.channels);
+            const DWORD bytes = static_cast<DWORD>(bytes64);
+            ok = ReadFile(file, samples.data(), bytes, &read, nullptr) &&
+                 read == bytes;
+            if (ok)
+            {
+                profile.magnitudes = apo::dsp::AverageMagnitudeSpectrum(
+                    samples.data(), header.frames, header.channels);
+                profile.sampleRate = header.sampleRate;
+                profile.valid = !profile.magnitudes.empty();
+                ok = profile.valid;
+            }
+        }
+    }
+
+    CloseHandle(file);
+    return ok;
 }
 
 } // namespace apo

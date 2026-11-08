@@ -77,6 +77,48 @@ private:
     double m_gain = 1.0;
 };
 
+// Spectral noise reduction. The profile is measured once from the device and
+// subtracted from the short-time spectrum; a linked gain keeps the channel
+// image intact. The stage delays the stream by about one FFT window.
+class NoiseStage final : public Stage
+{
+public:
+    NoiseStage(const NoiseSettings& settings, const NoiseProfile& profile);
+
+    void Configure(const AudioFormat& format) override;
+    void Reset() override;
+    bool NeedsSilence() const override { return true; }
+    void Process(double* samples, UINT32 frames, UINT32 channels) override;
+
+private:
+    void ProcessHop();
+
+    NoiseSettings m_settings;
+    NoiseProfile m_profile;
+    FftPlan m_fft;
+    std::vector<double> m_window;
+    std::vector<double> m_profileBins;
+    std::vector<double> m_gain;
+    std::vector<double> m_rawGain;
+    double m_floorGain = 0.25;
+    double m_gainAttack = 0.5;
+    double m_gainRelease = 0.1;
+
+    UINT32 m_channels = 0;
+    UINT32 m_maxFrames = 0;
+    UINT32 m_inputFrames = 0;
+    UINT32 m_outputFrames = 0;
+
+    std::vector<double> m_input;
+    std::vector<double> m_output;
+    std::vector<double> m_history;
+    std::vector<double> m_ola;
+    std::vector<double> m_spectraReal;
+    std::vector<double> m_spectraImag;
+    std::vector<double> m_frameReal;
+    std::vector<double> m_frameImag;
+};
+
 // Copies the processed left channel to every other channel.
 class MonoStage final : public Stage
 {

@@ -88,6 +88,7 @@ private:
 
     std::wstring m_endpointId;
     apo::ApoSettings m_settings;
+    apo::NoiseProfile m_noiseProfile;
 
     apo::dsp::Chain m_chain;
     apo::dsp::AudioFormat m_formatInfo;

@@ -49,6 +49,39 @@ inline double TimeCoefficient(double milliseconds, double sampleRate)
     return 1.0 - std::exp(-1.0 / (seconds * sampleRate));
 }
 
+// Noise reduction uses one fixed analysis size so the profile and the running
+// stage always share the same frequency grid.
+constexpr size_t kNoiseFftSize = 512;
+constexpr size_t kNoiseHopSize = kNoiseFftSize / 2;
+
+// Precomputed radix-2 FFT. Construction allocates; the transforms themselves
+// are allocation-free and safe to call from the real-time path.
+class FftPlan
+{
+public:
+    explicit FftPlan(size_t size);
+
+    size_t Size() const { return m_size; }
+
+    // In-place transforms. `real` and `imag` must hold Size() values.
+    void Forward(double* real, double* imag) const;
+    void Inverse(double* real, double* imag) const;
+
+private:
+    void Transform(double* real, double* imag, bool inverse) const;
+
+    size_t m_size = 0;
+    std::vector<size_t> m_reverse;
+    std::vector<double> m_cos;
+    std::vector<double> m_sin;
+};
+
+// Average magnitude spectrum (bins 0..kNoiseFftSize/2) of interleaved float
+// samples, measured with the same window and hop as the noise stage. Returns
+// an empty vector for invalid input.
+std::vector<double> AverageMagnitudeSpectrum(const float* samples,
+                                             size_t frames, UINT32 channels);
+
 class Stage
 {
 public:

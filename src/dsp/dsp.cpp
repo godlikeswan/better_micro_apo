@@ -131,6 +131,176 @@ void EncodeSample(SampleFormat format, BYTE* buffer, size_t index,
     }
 }
 
+FftPlan::FftPlan(size_t size) : m_size(size)
+{
+    if (size < 2)
+    {
+        m_size = 0;
+        return;
+    }
+
+    size_t bits = 0;
+    while ((size_t{1} << bits) < size)
+    {
+        ++bits;
+    }
+    if ((size_t{1} << bits) != size)
+    {
+        // Not a power of two; leave the plan empty rather than mis-transform.
+        m_size = 0;
+        return;
+    }
+
+    m_reverse.resize(size);
+    for (size_t index = 0; index < size; ++index)
+    {
+        size_t reversed = 0;
+        size_t value = index;
+        for (size_t bit = 0; bit < bits; ++bit)
+        {
+            reversed = (reversed << 1) | (value & 1);
+            value >>= 1;
+        }
+        m_reverse[index] = reversed;
+    }
+
+    constexpr double kPi = 3.14159265358979323846;
+    m_cos.resize(size / 2);
+    m_sin.resize(size / 2);
+    for (size_t index = 0; index < size / 2; ++index)
+    {
+        const double angle =
+            2.0 * kPi * static_cast<double>(index) / static_cast<double>(size);
+        m_cos[index] = std::cos(angle);
+        m_sin[index] = std::sin(angle);
+    }
+}
+
+void FftPlan::Transform(double* real, double* imag, bool inverse) const
+{
+    if (m_size == 0)
+    {
+        return;
+    }
+
+    for (size_t index = 0; index < m_size; ++index)
+    {
+        const size_t reversed = m_reverse[index];
+        if (reversed > index)
+        {
+            std::swap(real[index], real[reversed]);
+            std::swap(imag[index], imag[reversed]);
+        }
+    }
+
+    for (size_t length = 2; length <= m_size; length <<= 1)
+    {
+        const size_t half = length >> 1;
+        const size_t step = m_size / length;
+        for (size_t start = 0; start < m_size; start += length)
+        {
+            for (size_t offset = 0; offset < half; ++offset)
+            {
+                const size_t twiddle = offset * step;
+                const double wr = m_cos[twiddle];
+                const double wi = inverse ? m_sin[twiddle] : -m_sin[twiddle];
+                const size_t a = start + offset;
+                const size_t b = a + half;
+                const double tr = real[b] * wr - imag[b] * wi;
+                const double ti = real[b] * wi + imag[b] * wr;
+                real[b] = real[a] - tr;
+                imag[b] = imag[a] - ti;
+                real[a] += tr;
+                imag[a] += ti;
+            }
+        }
+    }
+
+    if (inverse)
+    {
+        const double scale = 1.0 / static_cast<double>(m_size);
+        for (size_t index = 0; index < m_size; ++index)
+        {
+            real[index] *= scale;
+            imag[index] *= scale;
+        }
+    }
+}
+
+void FftPlan::Forward(double* real, double* imag) const
+{
+    Transform(real, imag, false);
+}
+
+void FftPlan::Inverse(double* real, double* imag) const
+{
+    Transform(real, imag, true);
+}
+
+std::vector<double> AverageMagnitudeSpectrum(const float* samples,
+                                             size_t frames, UINT32 channels)
+{
+    if (samples == nullptr || frames == 0 || channels == 0)
+    {
+        return {};
+    }
+
+    constexpr size_t kSize = kNoiseFftSize;
+    constexpr size_t kHop = kNoiseHopSize;
+    constexpr double kPi = 3.14159265358979323846;
+
+    FftPlan fft(kSize);
+    std::vector<double> window(kSize);
+    for (size_t index = 0; index < kSize; ++index)
+    {
+        const double hann =
+            0.5 - 0.5 * std::cos(2.0 * kPi * static_cast<double>(index) /
+                                 static_cast<double>(kSize));
+        window[index] = std::sqrt(std::max(0.0, hann));
+    }
+
+    std::vector<double> real(kSize, 0.0);
+    std::vector<double> imag(kSize, 0.0);
+    std::vector<double> sum(kSize / 2 + 1, 0.0);
+    size_t measured = 0;
+
+    for (size_t start = 0; start < frames; start += kHop)
+    {
+        const size_t available = std::min(kSize, frames - start);
+        for (UINT32 channel = 0; channel < channels; ++channel)
+        {
+            std::fill(real.begin(), real.end(), 0.0);
+            std::fill(imag.begin(), imag.end(), 0.0);
+            for (size_t index = 0; index < available; ++index)
+            {
+                real[index] =
+                    static_cast<double>(
+                        samples[(start + index) * channels + channel]) *
+                    window[index];
+            }
+
+            fft.Forward(real.data(), imag.data());
+            for (size_t bin = 0; bin <= kSize / 2; ++bin)
+            {
+                sum[bin] += std::sqrt(real[bin] * real[bin] +
+                                      imag[bin] * imag[bin]);
+            }
+            ++measured;
+        }
+    }
+
+    if (measured == 0)
+    {
+        return {};
+    }
+
+    for (double& value : sum)
+    {
+        value /= static_cast<double>(measured);
+    }
+    return sum;
+}
+
 void Chain::Add(std::unique_ptr<Stage> stage)
 {
     if (stage)

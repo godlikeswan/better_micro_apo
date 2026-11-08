@@ -172,6 +172,45 @@ BlockLevel BufferLevel(const BYTE* data, UINT32 frames, UINT32 channels,
     return level;
 }
 
+void AppendSamplesAsFloat(const BYTE* data, UINT32 frames, UINT32 channels,
+                          UINT32 sampleBytes, bool isFloat,
+                          std::vector<float>& out)
+{
+    const size_t count = static_cast<size_t>(frames) * channels;
+    out.reserve(out.size() + count);
+
+    if (isFloat && sampleBytes == 4) {
+        const float* samples = reinterpret_cast<const float*>(data);
+        out.insert(out.end(), samples, samples + count);
+    } else if (sampleBytes == 2) {
+        const int16_t* samples = reinterpret_cast<const int16_t*>(data);
+        for (size_t i = 0; i < count; ++i) {
+            out.push_back(static_cast<float>(
+                static_cast<double>(samples[i]) / 32768.0));
+        }
+    } else if (sampleBytes == 3) {
+        for (size_t i = 0; i < count; ++i) {
+            const BYTE* sample = data + i * 3;
+            int32_t raw = static_cast<int32_t>(sample[0]) |
+                          (static_cast<int32_t>(sample[1]) << 8) |
+                          (static_cast<int32_t>(sample[2]) << 16);
+            if ((raw & 0x00800000) != 0) {
+                raw |= ~0x00FFFFFF;
+            }
+            out.push_back(static_cast<float>(
+                static_cast<double>(raw) / 8388608.0));
+        }
+    } else if (sampleBytes == 4) {
+        const int32_t* samples = reinterpret_cast<const int32_t*>(data);
+        for (size_t i = 0; i < count; ++i) {
+            out.push_back(static_cast<float>(
+                static_cast<double>(samples[i]) / 2147483648.0));
+        }
+    } else {
+        out.insert(out.end(), count, 0.0f);
+    }
+}
+
 void AddSumSquares(double value)
 {
     double current = g_sumSquares.load(std::memory_order_relaxed);
@@ -452,6 +491,118 @@ void RunMonitor(Monitor& monitor)
     }
 }
 
+struct CaptureResult {
+    std::wstring error;
+    std::vector<float> samples;
+    unsigned sampleRate = 0;
+    unsigned channels = 0;
+};
+
+void RunCapture(Monitor& monitor, unsigned durationMs, CaptureResult& result)
+{
+    const unsigned rate =
+        (monitor.format != nullptr) ? monitor.format->nSamplesPerSec : 0;
+    if (rate == 0 || monitor.channels == 0) {
+        result.error = L"The capture format has no sample rate.";
+        return;
+    }
+
+    result.sampleRate = rate;
+    result.channels = monitor.channels;
+    const size_t targetFrames =
+        static_cast<size_t>(rate) * durationMs / 1000;
+    if (targetFrames == 0) {
+        result.error = L"The capture duration is too short.";
+        return;
+    }
+
+    const ULONGLONG deadline =
+        GetTickCount64() + durationMs + 5000;
+    while (result.samples.size() / result.channels < targetFrames &&
+           GetTickCount64() < deadline) {
+        UINT32 packet = 0;
+        while (SUCCEEDED(monitor.capture->GetNextPacketSize(&packet)) &&
+               packet != 0) {
+            BYTE* data = nullptr;
+            UINT32 frames = 0;
+            DWORD flags = 0;
+            if (FAILED(monitor.capture->GetBuffer(&data, &frames, &flags,
+                                                  nullptr, nullptr))) {
+                break;
+            }
+
+            if (frames != 0) {
+                if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0 ||
+                    data == nullptr) {
+                    result.samples.insert(
+                        result.samples.end(),
+                        static_cast<size_t>(frames) * result.channels, 0.0f);
+                } else {
+                    AppendSamplesAsFloat(data, frames, result.channels,
+                                         monitor.sampleBytes, monitor.isFloat,
+                                         result.samples);
+                }
+            }
+            monitor.capture->ReleaseBuffer(frames);
+
+            if (result.samples.size() / result.channels >= targetFrames) {
+                break;
+            }
+        }
+
+        // Keep the output stream fed with silence so the capture device is
+        // never played back into the room.
+        UINT32 padding = 0;
+        if (SUCCEEDED(monitor.renderClient->GetCurrentPadding(&padding))) {
+            const UINT32 available =
+                (padding < monitor.renderFrames)
+                    ? (monitor.renderFrames - padding)
+                    : 0;
+            if (available != 0) {
+                BYTE* output = nullptr;
+                if (SUCCEEDED(
+                        monitor.render->GetBuffer(available, &output)) &&
+                    output != nullptr) {
+                    monitor.render->ReleaseBuffer(
+                        available, AUDCLNT_BUFFERFLAGS_SILENT);
+                }
+            }
+        }
+
+        Sleep(5);
+    }
+
+    if (result.samples.size() / result.channels < targetFrames) {
+        result.error = L"Could not capture enough audio from the device.";
+        return;
+    }
+
+    result.samples.resize(targetFrames * result.channels);
+}
+
+void CaptureLoop(std::wstring endpointId, unsigned durationMs,
+                 std::promise<CaptureResult> ready)
+{
+    CaptureResult result;
+
+    ComInit com;
+    if (FAILED(com.hr)) {
+        result.error = HresultText(L"Could not initialize COM", com.hr);
+        ready.set_value(std::move(result));
+        return;
+    }
+
+    Monitor monitor;
+    result.error = OpenMonitor(endpointId, monitor);
+    if (!result.error.empty()) {
+        ready.set_value(std::move(result));
+        return;
+    }
+
+    RunCapture(monitor, durationMs, result);
+    ready.set_value(std::move(result));
+}
+
 void MonitorLoop(std::wstring endpointId, std::promise<std::wstring> ready)
 {
     ComInit com;
@@ -521,6 +672,34 @@ MonitorLevel TakeMonitorLevel()
     level.clipped = g_clipped.exchange(false, std::memory_order_relaxed);
     level.drops = g_drops.exchange(0, std::memory_order_relaxed);
     return level;
+}
+
+std::wstring CaptureNoise(const std::wstring& endpointId, unsigned durationMs,
+                          std::vector<float>& samples, unsigned& sampleRate,
+                          unsigned& channels)
+{
+    StopMonitor();
+
+    samples.clear();
+    sampleRate = 0;
+    channels = 0;
+
+    g_running = true;
+    std::promise<CaptureResult> promise;
+    std::future<CaptureResult> future = promise.get_future();
+    g_thread =
+        std::thread(CaptureLoop, endpointId, durationMs, std::move(promise));
+
+    CaptureResult result = future.get();
+    g_running = false;
+    if (g_thread.joinable()) {
+        g_thread.join();
+    }
+
+    samples = std::move(result.samples);
+    sampleRate = result.sampleRate;
+    channels = result.channels;
+    return result.error;
 }
 
 } // namespace apo

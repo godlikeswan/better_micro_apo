@@ -61,6 +61,7 @@ configure_file(gui/apo_dll.rc.in "${CMAKE_BINARY_DIR}/apo_dll.rc" @ONLY)
 
 add_executable(better_micro_apo_gui WIN32
     src/apo_settings.cpp
+    src/dsp/dsp.cpp
     gui/apo_monitor.cpp
     gui/apo_ops.cpp
     gui/apo_status.cpp

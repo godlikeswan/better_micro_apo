@@ -13,16 +13,16 @@ identity and aggregation are handled by ATL (`CComObjectRootEx`, `CComCoClass`,
 
 ## Processing
 
-- 1 input / 1 output, in-place. Latency is zero unless the gate lookahead is
-  enabled.
+- 1 input / 1 output, in-place. Latency is zero unless the gate lookahead or
+  noise reduction is enabled.
 - Supported sample formats: float32, PCM16, PCM24, PCM32 (container size must
   equal the valid-bit size).
 - The DSP is a chain of `apo::dsp::Stage` objects (`src/dsp`). `ConfigureDsp()`
   assembles it from the per-device settings:
 
   ```
-  optional GateStage -> optional CompressorStage -> optional GainStage (makeup)
-  -> optional MonoStage
+  optional NoiseStage -> optional GateStage -> optional CompressorStage
+  -> optional GainStage (makeup) -> optional MonoStage
   ```
 
   Adding or reordering a stage means writing one `Stage` subclass and changing
@@ -31,6 +31,15 @@ identity and aggregation are handled by ATL (`CComObjectRootEx`, `CComCoClass`,
   `double` scratch buffer, runs each stage in place, then encodes and clips the
   result. The scratch buffer is sized in `LockForProcess` from the connection's
   maximum frame count, so `APOProcess` stays allocation-free.
+- `NoiseStage` runs first so it sees the raw input. It performs a short-time
+  Fourier transform with a fixed 512-point FFT and a 256-sample hop, subtracts
+  the captured magnitude profile, and applies one gain per frequency bin to all
+  channels so the stereo image is preserved. The gain is limited by the
+  configured reduction and smoothed across bins and time. Analysis and
+  synthesis use a square-root Hann window with 50% overlap, so the stage adds
+  about 512 samples of latency. All buffers are allocated in `Configure`; the
+  stage reports `NeedsSilence() == true` so its overlap tail is flushed through
+  silent buffers.
 - `GateStage` can delay the audio by up to 300 ms while its detector watches the
   incoming signal, so the gate opens before a transient reaches the output. The
   delay line is allocated in `Configure`, cleared in `Reset`, and its state is
@@ -55,15 +64,25 @@ values, and precomputes the DSP coefficients. `APOProcess` only uses the
 cached instance state, so the real-time path does no file I/O and no
 allocation. Missing files fall back to the defaults.
 
-The INI keys are `gate_enabled`, `gate_threshold_db`, `gate_range_db`,
-`gate_attack_ms`, `gate_hold_ms`, `gate_release_ms`, `gate_lookahead_ms`,
-`compressor_enabled`, `compressor_threshold_db`, `compressor_ratio`,
-`compressor_attack_ms`, `compressor_release_ms`, `makeup_enabled`, `makeup_db`,
-`mono`, and `isolate_effects`. Legacy keys (`threshold_db`,
-`ratio`, `attack_ms`, `release_ms`) are still read for the compressor. A legacy
-`input_gain_db` key is folded into the compressor threshold and makeup gain
-(`threshold -= input_gain`, `makeup += input_gain`) so settings written before
-the input gain stage was removed keep the same sound.
+The INI keys are `noise_enabled`, `noise_reduction_db`, `gate_enabled`,
+`gate_threshold_db`, `gate_range_db`, `gate_attack_ms`, `gate_hold_ms`,
+`gate_release_ms`, `gate_lookahead_ms`, `compressor_enabled`,
+`compressor_threshold_db`, `compressor_ratio`, `compressor_attack_ms`,
+`compressor_release_ms`, `makeup_enabled`, `makeup_db`, `mono`, and
+`isolate_effects`. Legacy keys (`threshold_db`, `ratio`, `attack_ms`,
+`release_ms`) are still read for the compressor. A legacy `input_gain_db` key is
+folded into the compressor threshold and makeup gain (`threshold -= input_gain`,
+`makeup += input_gain`) so settings written before the input gain stage was
+removed keep the same sound.
+
+The captured noise profile is stored next to the settings as
+`C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.noise`. The file has a
+small `BMNP` header (version, sample rate, channel count, frame count) followed
+by the raw interleaved float32 capture. `LockForProcess` analyzes it with the
+same FFT size and window as `NoiseStage`, averages the magnitude spectrum across
+channels, and resamples the bins if the profile and the stream use different
+sample rates. A missing or invalid profile leaves the stage out of the chain
+even when `noise_enabled=1`.
 
 `isolate_effects` is a GUI binding option rather than a DSP value: it tells the
 GUI to replace the composite stream chain with only this APO instead of
@@ -84,6 +103,25 @@ counters every 100 ms and keeps a 500 ms history: the displayed peak is the
 maximum of that history and the RMS is
 `sqrt(sum(sumSquares) / sum(samples))`. Clip and drop counters are latched and
 reset when listening starts.
+
+## Noise profile capture
+
+**Capture noise profile** records the device without any of this APO's
+processing so the profile describes the raw room noise. The GUI saves a settings
+snapshot with the noise, gate, compressor, gain, and mono stages disabled, and
+applies it with the normal `ApplyChanges` path when the device is bound. The
+APO then runs an empty chain, which is a plain passthrough. The GUI reuses the
+listen monitor in a capture mode (`apo::CaptureNoise`): it records about three
+seconds of interleaved float32 samples, converts PCM formats on the fly, and
+renders silence to the default output so the room is not played back through
+speakers. The raw capture is written to the device's `.noise` file, then the
+real settings are restored with `noise_enabled=1` and applied again. If the
+capture or the save fails, the original settings are restored instead. Devices
+that are not bound are captured directly and only their settings file is
+written.
+
+The noise stage never reads files: `LockForProcess` loads and analyzes the
+profile before the stream starts, and `APOProcess` only uses the cached bins.
 
 ## Device binding
 

@@ -81,6 +81,11 @@ enum : int {
     IDC_LISTEN,
     IDC_LISTEN_NOTE,
     IDC_METER,
+    IDC_NOISE,
+    IDC_NOISE_REDUCTION_LABEL,
+    IDC_NOISE_REDUCTION_EDIT,
+    IDC_NOISE_CAPTURE,
+    IDC_NOISE_NOTE,
 };
 
 constexpr UINT WM_APP_WORK_DONE = WM_APP + 1;
@@ -148,6 +153,11 @@ HWND g_isolate = nullptr;
 HWND g_listen = nullptr;
 HWND g_listenNote = nullptr;
 HWND g_meter = nullptr;
+HWND g_noise = nullptr;
+HWND g_noiseReductionLabel = nullptr;
+HWND g_noiseReductionEdit = nullptr;
+HWND g_noiseCapture = nullptr;
+HWND g_noiseNote = nullptr;
 
 DWORD g_clipHoldUntil = 0;
 unsigned g_dropTotal = 0;
@@ -175,6 +185,18 @@ std::vector<apo::Endpoint> g_endpoints;
 apo::FilesStatus g_files;
 std::thread g_worker;
 apo::Result g_result;
+
+constexpr unsigned kNoiseCaptureMs = 3000;
+
+enum class WorkKind {
+    Generic,
+    CaptureNoise,
+};
+
+WorkKind g_workKind = WorkKind::Generic;
+int g_captureIndex = -1;
+apo::ApoSettings g_captureSettings;
+bool g_captureSucceeded = false;
 
 int Scale(int value)
 {
@@ -307,7 +329,7 @@ void ClearSettingsEditor()
         g_gateThresholdEdit, g_gateRangeEdit, g_gateAttackEdit,
         g_gateHoldEdit, g_gateReleaseEdit, g_gateLookaheadEdit,
         g_compThresholdEdit, g_compRatioEdit, g_compAttackEdit,
-        g_compReleaseEdit, g_makeupEdit,
+        g_compReleaseEdit, g_makeupEdit, g_noiseReductionEdit,
     };
     for (HWND edit : edits) {
         SetWindowTextW(edit, L"");
@@ -317,6 +339,8 @@ void ClearSettingsEditor()
     SendMessageW(g_gain, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessageW(g_mono, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessageW(g_isolate, BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessageW(g_noise, BM_SETCHECK, BST_UNCHECKED, 0);
+    SetWindowTextW(g_noiseNote, L"");
     g_settingsLoading = false;
 }
 
@@ -334,6 +358,7 @@ void ShowSettingsForSelected()
 
     g_settingsLoading = true;
     SetWindowTextW(g_settingsName, g_endpoints[selected].name.c_str());
+    SetEditNumber(g_noiseReductionEdit, settings.noise.reductionDb);
     SetEditNumber(g_gateThresholdEdit, settings.gate.thresholdDb);
     SetEditNumber(g_gateRangeEdit, settings.gate.rangeDb);
     SetEditNumber(g_gateAttackEdit, settings.gate.attackMs);
@@ -356,6 +381,18 @@ void ShowSettingsForSelected()
                  settings.mono ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(g_isolate, BM_SETCHECK,
                  settings.isolateEffects ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(g_noise, BM_SETCHECK,
+                 settings.noise.enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+
+    const bool hasProfile = apo::FileExists(
+        apo::NoiseProfilePath(g_endpoints[selected].id));
+    SetWindowTextW(
+        g_noiseNote,
+        hasProfile
+            ? L"Profile captured. Stay quiet for ~3 s to recapture.\r\n"
+              L"Audio stops briefly."
+            : L"Stay quiet for ~3 s while capturing.\r\n"
+              L"Audio stops briefly.");
     g_settingsLoading = false;
 }
 
@@ -367,7 +404,8 @@ bool CommitSettingsEditor()
     }
 
     apo::ApoSettings settings = g_endpoints[g_settingsIndex].settings;
-    if (!ReadEditNumber(g_gateThresholdEdit, settings.gate.thresholdDb) ||
+    if (!ReadEditNumber(g_noiseReductionEdit, settings.noise.reductionDb) ||
+        !ReadEditNumber(g_gateThresholdEdit, settings.gate.thresholdDb) ||
         !ReadEditNumber(g_gateRangeEdit, settings.gate.rangeDb) ||
         !ReadEditNumber(g_gateAttackEdit, settings.gate.attackMs) ||
         !ReadEditNumber(g_gateHoldEdit, settings.gate.holdMs) ||
@@ -394,6 +432,8 @@ bool CommitSettingsEditor()
         SendMessageW(g_mono, BM_GETCHECK, 0, 0) == BST_CHECKED;
     settings.isolateEffects =
         SendMessageW(g_isolate, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    settings.noise.enabled =
+        SendMessageW(g_noise, BM_GETCHECK, 0, 0) == BST_CHECKED;
     apo::ClampSettings(settings);
     g_endpoints[g_settingsIndex].settings = settings;
 
@@ -409,6 +449,7 @@ bool CommitSettingsEditor()
     SetEditNumber(g_compAttackEdit, settings.compressor.attackMs);
     SetEditNumber(g_compReleaseEdit, settings.compressor.releaseMs);
     SetEditNumber(g_makeupEdit, settings.makeupDb);
+    SetEditNumber(g_noiseReductionEdit, settings.noise.reductionDb);
     g_settingsLoading = false;
     return true;
 }
@@ -429,6 +470,8 @@ void EnableSettingsControls(bool enabled)
         g_compAttackLabel, g_compAttackEdit,
         g_compReleaseLabel, g_compReleaseEdit,
         g_gain, g_makeupLabel, g_makeupEdit,
+        g_noise, g_noiseReductionLabel, g_noiseReductionEdit,
+        g_noiseCapture, g_noiseNote,
         g_mono, g_isolate, g_listen,
     };
     for (HWND control : controls) {
@@ -769,8 +812,8 @@ void Layout(int width, int height)
 
     y += filesHeight + Scale(12);
     int devicesHeight = height - y - Scale(52);
-    if (devicesHeight < Scale(440)) {
-        devicesHeight = Scale(440);
+    if (devicesHeight < Scale(570)) {
+        devicesHeight = Scale(570);
     }
     MoveWindow(g_groupDevices, margin, y, width - 2 * margin, devicesHeight,
                TRUE);
@@ -811,6 +854,20 @@ void Layout(int width, int height)
         }
         settingsY += Scale(28);
     };
+
+    MoveWindow(g_noise, settingsX, settingsY, settingsWidth, Scale(20), TRUE);
+    settingsY += Scale(24);
+    MoveWindow(g_noiseReductionLabel, settingsX, settingsY, settingLabelWidth,
+               Scale(20), TRUE);
+    MoveWindow(g_noiseReductionEdit, settingsX + settingLabelWidth, settingsY,
+               settingEditWidth, Scale(22), TRUE);
+    const int noiseButtonX = settingsX + columnWidth + columnGap;
+    MoveWindow(g_noiseCapture, noiseButtonX, settingsY,
+               settingsWidth - columnWidth - columnGap, Scale(26), TRUE);
+    settingsY += Scale(32);
+    MoveWindow(g_noiseNote, settingsX, settingsY, settingsWidth, Scale(36),
+               TRUE);
+    settingsY += Scale(40);
 
     MoveWindow(g_gate, settingsX, settingsY, settingsWidth, Scale(20), TRUE);
     settingsY += Scale(28);
@@ -928,6 +985,124 @@ void DoApply()
     StopListening();
     StartWork([changes] { return apo::ApplyChanges(changes); },
               L"Applying...");
+}
+
+void DoCaptureNoiseProfile()
+{
+    if (g_busy) {
+        return;
+    }
+    if (!CommitSettingsEditor()) {
+        return;
+    }
+    if (g_settingsIndex < 0 ||
+        g_settingsIndex >= static_cast<int>(g_endpoints.size())) {
+        return;
+    }
+    if (!apo::IsDeviceActive(g_endpoints[g_settingsIndex].state)) {
+        MessageBoxW(g_window,
+                    L"This device is not active. Enable it in Windows and try "
+                    L"again.",
+                    L"Better Micro APO", MB_ICONWARNING);
+        return;
+    }
+
+    const int index = g_settingsIndex;
+    const std::wstring id = g_endpoints[index].id;
+    const bool bound = g_endpoints[index].Enabled();
+    const apo::ApoSettings original = g_endpoints[index].settings;
+
+    // The profile must be raw room noise: the noise stage runs first, before
+    // the compressor and makeup gain. Disabling every stage makes the APO a
+    // plain passthrough for the duration of the capture.
+    apo::ApoSettings snapshot = original;
+    snapshot.noise.enabled = false;
+    snapshot.gate.enabled = false;
+    snapshot.compressor.enabled = false;
+    snapshot.makeupEnabled = false;
+    snapshot.mono = false;
+
+    StopListening();
+
+    g_workKind = WorkKind::CaptureNoise;
+    g_captureIndex = index;
+    g_captureSettings = original;
+    g_captureSucceeded = false;
+    g_busy = true;
+    SetWindowTextW(g_status, L"Capturing noise profile...");
+    UpdateFilesUi();
+    UpdateDevicesUi();
+
+    g_worker = std::thread([id, bound, original, snapshot] {
+        apo::Result result;
+        std::wstring error;
+
+        auto applySettings = [&](const apo::ApoSettings& settings) {
+            apo::Change change;
+            change.id = id;
+            change.enable = true;
+            change.settingsChanged = true;
+            change.settings = settings;
+            return apo::ApplyChanges({change});
+        };
+
+        if (bound) {
+            const apo::Result prepared = applySettings(snapshot);
+            if (!prepared.ok) {
+                // The snapshot may have been saved before the failure, so put
+                // the real settings back before reporting the error.
+                applySettings(original);
+                result = prepared;
+                result.summary =
+                    L"Could not prepare the device for noise capture.";
+                g_captureSettings = original;
+                g_result = result;
+                PostMessageW(g_window, WM_APP_WORK_DONE, 0, 0);
+                return;
+            }
+        }
+
+        std::vector<float> samples;
+        unsigned sampleRate = 0;
+        unsigned channels = 0;
+        error = apo::CaptureNoise(id, kNoiseCaptureMs, samples, sampleRate,
+                                  channels);
+        bool captured = error.empty();
+        if (captured &&
+            !apo::SaveNoiseCapture(id, sampleRate, channels, samples)) {
+            error = L"Could not save the noise profile file.";
+            captured = false;
+        }
+
+        apo::ApoSettings final = original;
+        if (captured) {
+            final.noise.enabled = true;
+        }
+
+        if (bound) {
+            const apo::Result restored = applySettings(final);
+            if (!restored.ok) {
+                if (error.empty()) {
+                    error = L"Profile saved, but applying the settings failed.";
+                    result = restored;
+                }
+            }
+        } else if (!apo::SaveSettings(id, final) && error.empty()) {
+            error = L"Could not save the settings file.";
+        }
+
+        g_captureSettings = final;
+        g_captureSucceeded = error.empty();
+        result.ok = error.empty();
+        result.summary =
+            error.empty() ? L"Noise profile captured."
+                          : L"Noise profile capture failed.";
+        if (!error.empty()) {
+            result.details = error;
+        }
+        g_result = result;
+        PostMessageW(g_window, WM_APP_WORK_DONE, 0, 0);
+    });
 }
 
 void DoOpenLog()
@@ -1049,6 +1224,14 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         g_meter = CreateStatic(window, IDC_METER, L"Peak: --  RMS: --",
                                SS_LEFT);
 
+        g_noise = CreateCheck(window, IDC_NOISE, L"Noise reduction");
+        g_noiseReductionLabel = CreateStatic(
+            window, IDC_NOISE_REDUCTION_LABEL, L"Reduction (dB)", SS_LEFT);
+        g_noiseReductionEdit = CreateEdit(window, IDC_NOISE_REDUCTION_EDIT);
+        g_noiseCapture =
+            CreateButton(window, IDC_NOISE_CAPTURE, L"Capture noise profile");
+        g_noiseNote = CreateStatic(window, IDC_NOISE_NOTE, L"", SS_LEFT);
+
         g_status = CreateStatic(window, IDC_STATUS, L"", SS_LEFT);
         g_logButton = CreateButton(window, IDC_LOG, L"Open log");
 
@@ -1065,7 +1248,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
     case WM_GETMINMAXINFO: {
         auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
         info->ptMinTrackSize.x = Scale(900);
-        info->ptMinTrackSize.y = Scale(810);
+        info->ptMinTrackSize.y = Scale(900);
         break;
     }
 
@@ -1103,6 +1286,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_COMP_ATTACK_EDIT:
         case IDC_COMP_RELEASE_EDIT:
         case IDC_MAKEUP_EDIT:
+        case IDC_NOISE_REDUCTION_EDIT:
             if (HIWORD(wParam) == EN_CHANGE) {
                 MarkSettingsDirty();
             }
@@ -1112,8 +1296,14 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_GAIN:
         case IDC_MONO:
         case IDC_ISOLATE:
+        case IDC_NOISE:
             if (HIWORD(wParam) == BN_CLICKED) {
                 MarkSettingsDirty();
+            }
+            break;
+        case IDC_NOISE_CAPTURE:
+            if (HIWORD(wParam) == BN_CLICKED) {
+                DoCaptureNoiseProfile();
             }
             break;
         case IDC_LISTEN:
@@ -1237,12 +1427,33 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         break;
     }
 
-    case WM_APP_WORK_DONE:
+    case WM_APP_WORK_DONE: {
         if (g_worker.joinable()) {
             g_worker.join();
         }
         g_busy = false;
-        Refresh();
+
+        const WorkKind kind = g_workKind;
+        const int captureIndex = g_captureIndex;
+        const bool captureOk = g_captureSucceeded;
+        g_workKind = WorkKind::Generic;
+        g_captureIndex = -1;
+        g_captureSucceeded = false;
+
+        if (kind == WorkKind::CaptureNoise && captureOk &&
+            captureIndex >= 0 &&
+            captureIndex < static_cast<int>(g_endpoints.size())) {
+            // Keep unsaved edits on the other devices. The captured device was
+            // saved by the worker, so it is no longer dirty.
+            g_endpoints[captureIndex].settings = g_captureSettings;
+            g_endpoints[captureIndex].settingsDirty = false;
+            ShowSettingsForSelected();
+            UpdateFilesUi();
+            UpdateDevicesUi();
+        } else {
+            Refresh();
+        }
+
         SetWindowTextW(g_status, g_result.summary.c_str());
         if (!g_result.ok) {
             std::wstring details = g_result.details;
@@ -1254,6 +1465,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
                         MB_ICONERROR);
         }
         break;
+    }
 
     case WM_TIMER:
         if (wParam == kMonitorTimer) {
@@ -1364,6 +1576,13 @@ int DumpStatus(const std::wstring& path)
                 (endpoint.settings.makeupEnabled ? L"on" : L"off") +
                 L" | makeup=" + FormatNumber(endpoint.settings.makeupDb) +
                 L" | mono=" + (endpoint.settings.mono ? L"on" : L"off") +
+                L" | noise=" +
+                (endpoint.settings.noise.enabled ? L"on" : L"off") +
+                L" | noise_reduction=" +
+                FormatNumber(endpoint.settings.noise.reductionDb) +
+                L" | noise_profile=" +
+                (apo::FileExists(apo::NoiseProfilePath(endpoint.id)) ? L"yes"
+                                                                   : L"no") +
                 L" | isolate=" +
                 (endpoint.settings.isolateEffects ? L"on" : L"off") +
                 L" | isolate_pending=" +
@@ -1461,7 +1680,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show)
     HWND window = CreateWindowExW(
         0, windowClass.lpszClassName, L"Better Micro APO",
         WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, Scale(1020),
-        Scale(820), nullptr, nullptr, instance, nullptr);
+        Scale(930), nullptr, nullptr, instance, nullptr);
     if (!window) {
         return 1;
     }

@@ -1,8 +1,27 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 namespace apo {
+
+// Spectral noise reduction driven by a profile captured from the device.
+// `reductionDb` is the maximum attenuation applied to a frequency bin.
+struct NoiseSettings
+{
+    bool enabled = false;
+    double reductionDb = 12.0;
+};
+
+// Analyzed noise profile. `magnitudes` holds one value per bin from 0 through
+// kNoiseFftSize/2 at `sampleRate`, averaged across the captured channels.
+struct NoiseProfile
+{
+    bool valid = false;
+    std::uint32_t sampleRate = 0;
+    std::vector<double> magnitudes;
+};
 
 struct GateSettings
 {
@@ -35,6 +54,7 @@ struct CompressorSettings
 // threshold and makeup gain.
 struct ApoSettings
 {
+    NoiseSettings noise;
     GateSettings gate;
     CompressorSettings compressor;
 
@@ -70,5 +90,17 @@ bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings);
 
 // Writes the endpoint's settings, creating the directory if needed.
 bool SaveSettings(const std::wstring& endpointId, const ApoSettings& settings);
+
+// C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.noise
+std::wstring NoiseProfilePath(const std::wstring& endpointId);
+
+// Writes a raw capture (BMNP header plus interleaved float32 samples).
+bool SaveNoiseCapture(const std::wstring& endpointId, std::uint32_t sampleRate,
+                      std::uint32_t channels,
+                      const std::vector<float>& samples);
+
+// Reads and analyzes the endpoint's noise profile. Missing or invalid files
+// leave `profile` invalid and return false.
+bool LoadNoiseProfile(const std::wstring& endpointId, NoiseProfile& profile);
 
 } // namespace apo

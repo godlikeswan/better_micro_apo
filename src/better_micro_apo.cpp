@@ -294,9 +294,14 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
     }
 
     m_settings = apo::ApoSettings{};
+    m_noiseProfile = apo::NoiseProfile{};
     if (!m_endpointId.empty())
     {
         apo::LoadSettings(m_endpointId, m_settings);
+        if (m_settings.noise.enabled)
+        {
+            apo::LoadNoiseProfile(m_endpointId, m_noiseProfile);
+        }
     }
     apo::ClampSettings(m_settings);
 
@@ -320,10 +325,12 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
         return E_OUTOFMEMORY;
     }
 
-    Log(L"LockForProcess ok: format=%s channels=%u rate=%u containerBytes=%u maxFrames=%u endpoint=%s gate=%d gateThreshold=%.2fdB gateRange=%.2fdB gateAttack=%.2fms gateHold=%.2fms gateRelease=%.2fms gateLookahead=%.2fms compressor=%d threshold=%.2fdB ratio=%.2f:1 attack=%.2fms release=%.2fms makeup=%d makeupGain=%.2fdB mono=%d",
+    Log(L"LockForProcess ok: format=%s channels=%u rate=%u containerBytes=%u maxFrames=%u endpoint=%s noise=%d noiseReduction=%.2fdB noiseProfile=%d gate=%d gateThreshold=%.2fdB gateRange=%.2fdB gateAttack=%.2fms gateHold=%.2fms gateRelease=%.2fms gateLookahead=%.2fms compressor=%d threshold=%.2fdB ratio=%.2f:1 attack=%.2fms release=%.2fms makeup=%d makeupGain=%.2fdB mono=%d",
         apo::dsp::FormatName(m_formatInfo.sample), m_formatInfo.channels,
         m_formatInfo.sampleRate, m_formatInfo.bytesPerSample, m_maxFrames,
         m_endpointId.empty() ? L"<unknown>" : m_endpointId.c_str(),
+        m_settings.noise.enabled ? 1 : 0, m_settings.noise.reductionDb,
+        m_noiseProfile.valid ? 1 : 0,
         m_settings.gate.enabled ? 1 : 0, m_settings.gate.thresholdDb,
         m_settings.gate.rangeDb, m_settings.gate.attackMs,
         m_settings.gate.holdMs, m_settings.gate.releaseMs,
@@ -341,6 +348,7 @@ STDMETHODIMP BetterMicroApo::UnlockForProcess()
     const HRESULT hr = CBaseAudioProcessingObject::UnlockForProcess();
 
     m_chain.Clear();
+    m_noiseProfile = apo::NoiseProfile{};
     m_formatInfo = apo::dsp::AudioFormat{};
     m_maxFrames = 0;
     std::vector<double>().swap(m_scratch);
@@ -436,6 +444,12 @@ void BetterMicroApo::ConfigureDsp()
 
     m_chain.Clear();
 
+    // Noise reduction must see the raw input, so it is the first stage.
+    if (m_settings.noise.enabled && m_noiseProfile.valid)
+    {
+        m_chain.Add(
+            std::make_unique<NoiseStage>(m_settings.noise, m_noiseProfile));
+    }
     if (m_settings.gate.enabled)
     {
         m_chain.Add(std::make_unique<GateStage>(m_settings.gate));

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace apo {
 
@@ -28,5 +29,13 @@ struct MonitorLevel {
 // since the previous call and resets them. Safe to call while the monitor is
 // running.
 MonitorLevel TakeMonitorLevel();
+
+// Captures about `durationMs` of raw audio from the endpoint into `samples`
+// (interleaved float32). The monitor renders silence during the capture so the
+// room noise is not played back through the output. Returns an empty string on
+// success, or a user-facing error message.
+std::wstring CaptureNoise(const std::wstring& endpointId, unsigned durationMs,
+                          std::vector<float>& samples, unsigned& sampleRate,
+                          unsigned& channels);
 
 } // namespace apo
