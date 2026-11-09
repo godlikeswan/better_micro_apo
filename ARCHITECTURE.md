@@ -107,6 +107,34 @@ but does not use it while processing.
 The GUI writes the same files during `Apply`, inside the existing audio-stop
 section, then restarts the audio service once.
 
+## GUI structure
+
+`gui/main.cpp` is split into three tabbed views. The tab order also expresses
+the prerequisite chain, so a later tab stays disabled until the earlier step is
+done: **Install** is always available, **Devices** requires the APO files or at
+least one bound device, and **Effects** requires a full install and at least one
+bound device. The app opens on the most advanced available tab and falls back
+when an operation removes a prerequisite.
+
+The **Devices** view owns binding and the per-device `isolate_effects` option.
+Its Apply writes only bindings and isolation; effect edits are left for the
+Effects view. **Reset** restores the persisted checkboxes and reloads only the
+saved isolation value, so effect edits made in the other view survive.
+
+The **Effects** view lists bound devices in a dropdown and shows every optional
+stage in a checked list. The checkboxes map directly to the enable flags in
+`ApoSettings`; selecting a row swaps the parameter panel on the right. Its Apply
+validates and clamps the editor, saves the changed devices, and restarts audio
+once. **Reset** reloads the persisted effect settings while preserving any
+pending isolation edit.
+
+Each view tracks its own pending state. `Endpoint::settingsDirty` covers effect
+edits, while `isolateSaved`/`isolationDirty` cover the isolation checkbox. When
+effect edits are pending the device dropdown is locked and the Apply button is
+highlighted, so a half-edited device cannot be abandoned. A Devices Apply keeps
+unsaved effect edits in memory across the endpoint refresh instead of silently
+discarding them.
+
 ## Listen monitor
 
 `gui/apo_monitor.cpp` opens the selected capture endpoint in shared mode and

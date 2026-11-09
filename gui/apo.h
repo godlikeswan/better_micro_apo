@@ -56,7 +56,16 @@ struct Endpoint {
 
     // Per-device settings, loaded from ProgramData and edited by the GUI.
     ApoSettings settings;
+
+    // Effect edits pending Apply. Kept separate from the binding/isolation
+    // edits so the Devices and Effects views can track their own dirty state.
     bool settingsDirty = false;
+
+    // Persisted isolation value, plus the GUI-only pending edit. The APO
+    // itself only reads isolateEffects; the GUI uses these to decide whether
+    // the Devices Apply button has work to do.
+    bool isolateSaved = false;
+    bool isolationDirty = false;
 };
 
 struct FilesStatus {
