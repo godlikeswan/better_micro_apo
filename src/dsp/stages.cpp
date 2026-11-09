@@ -178,6 +178,138 @@ void CompressorStage::Process(double* samples, UINT32 frames, UINT32 channels)
     }
 }
 
+void DynamicStage::Configure(const AudioFormat& format)
+{
+    constexpr double kPi = 3.14159265358979323846;
+    const double sampleRate = EffectiveSampleRate(format);
+
+    // Topology-preserving state-variable filter (Simper). `k` is the damping
+    // and equals 1/Q; the bandpass output `v1` has a peak gain of Q, so it is
+    // scaled by k to normalize the band to unity at the center frequency.
+    double frequency = m_settings.frequencyHz;
+    const double maxFrequency = sampleRate * 0.49;
+    frequency = std::max(20.0, std::min(frequency, maxFrequency));
+    const double q = std::max(0.1, m_settings.q);
+    const double g = std::tan(kPi * frequency / sampleRate);
+    m_k = 1.0 / q;
+    m_a1 = 1.0 / (1.0 + g * (g + m_k));
+    m_a2 = g * m_a1;
+    m_a3 = g * m_a2;
+
+    m_thresholdDb = m_settings.thresholdDb;
+    m_thresholdLinear = DecibelsToLinear(m_thresholdDb);
+    m_ratio = std::max(1.0, m_settings.ratio);
+    m_rangeDb = std::max(0.0, m_settings.rangeDb);
+    m_expand = m_settings.expand;
+    m_attackCoeff = TimeCoefficient(m_settings.attackMs, sampleRate);
+    m_releaseCoeff = TimeCoefficient(m_settings.releaseMs, sampleRate);
+
+    // A separate fast-attack / slow-release envelope smooths the band peak so
+    // the gain does not pulse at the signal's own zero crossings.
+    m_detectorAttack = TimeCoefficient(1.0, sampleRate);
+    m_detectorRelease = TimeCoefficient(100.0, sampleRate);
+
+    m_channels = format.channels;
+    m_ic1.assign(m_channels, 0.0);
+    m_ic2.assign(m_channels, 0.0);
+    m_band.assign(m_channels, 0.0);
+
+    Reset();
+}
+
+void DynamicStage::Reset()
+{
+    m_gainDb = 0.0;
+    m_detectorEnvelope = 0.0;
+    std::fill(m_ic1.begin(), m_ic1.end(), 0.0);
+    std::fill(m_ic2.begin(), m_ic2.end(), 0.0);
+    std::fill(m_band.begin(), m_band.end(), 0.0);
+}
+
+void DynamicStage::Process(double* samples, UINT32 frames, UINT32 channels)
+{
+    if (channels != m_channels || m_ic1.size() < channels)
+    {
+        return;
+    }
+
+    const double slope = 1.0 - 1.0 / m_ratio;
+
+    for (UINT32 frame = 0; frame < frames; ++frame)
+    {
+        double* values = samples + static_cast<size_t>(frame) * channels;
+
+        // Isolate the band around the configured frequency and track its peak
+        // across channels so the stereo image stays intact.
+        double peak = 0.0;
+        for (UINT32 channel = 0; channel < channels; ++channel)
+        {
+            const double input = values[channel];
+            const double v3 = input - m_ic2[channel];
+            const double v1 = m_a1 * m_ic1[channel] + m_a2 * v3;
+            const double v2 = m_ic2[channel] + m_a2 * m_ic1[channel] +
+                              m_a3 * v3;
+            m_ic1[channel] = 2.0 * v1 - m_ic1[channel];
+            m_ic2[channel] = 2.0 * v2 - m_ic2[channel];
+
+            const double band = m_k * v1;
+            m_band[channel] = band;
+            const double magnitude = std::fabs(band);
+            if (magnitude > peak)
+            {
+                peak = magnitude;
+            }
+        }
+
+        const double detectorCoefficient =
+            (peak > m_detectorEnvelope) ? m_detectorAttack
+                                        : m_detectorRelease;
+        m_detectorEnvelope +=
+            (peak - m_detectorEnvelope) * detectorCoefficient;
+        const double level = m_detectorEnvelope;
+
+        double targetDb = 0.0;
+        if (m_expand)
+        {
+            // Extend: lift the band when it is quiet, so quiet lows (the
+            // proximity effect at a distance) become fuller. Silence has
+            // nothing to lift, so only non-zero bands above the floor count.
+            if (level > 0.0 && level < m_thresholdLinear)
+            {
+                const double levelDb = 20.0 * std::log10(level);
+                const double amount = (m_thresholdDb - levelDb) * slope;
+                if (amount > 0.0)
+                {
+                    targetDb = std::min(amount, m_rangeDb);
+                }
+            }
+        }
+        else if (level > m_thresholdLinear)
+        {
+            // Reduce: cut the band when it is loud, taming a strong
+            // proximity effect up close.
+            const double levelDb = 20.0 * std::log10(level);
+            const double amount = (levelDb - m_thresholdDb) * slope;
+            if (amount > 0.0)
+            {
+                targetDb = -std::min(amount, m_rangeDb);
+            }
+        }
+
+        // Attack when the effect deepens, release when it returns to zero.
+        const double coefficient =
+            (std::fabs(targetDb) > std::fabs(m_gainDb)) ? m_attackCoeff
+                                                        : m_releaseCoeff;
+        m_gainDb += (targetDb - m_gainDb) * coefficient;
+
+        const double bandGain = DecibelsToLinear(m_gainDb) - 1.0;
+        for (UINT32 channel = 0; channel < channels; ++channel)
+        {
+            values[channel] += m_band[channel] * bandGain;
+        }
+    }
+}
+
 void GainStage::Configure(const AudioFormat& format)
 {
     (void)format;

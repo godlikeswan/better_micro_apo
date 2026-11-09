@@ -3,8 +3,9 @@
 Better Micro APO (internally `better_micro_apo`) is a simple microphone effect
 for Windows. Its main goal is to raise the input level without distortion: a
 peak compressor tames the peaks and makeup gain lifts the result. An optional
-gate silences the input between phrases, and optional noise reduction subtracts
-a captured room-noise profile.
+gate silences the input between phrases, optional noise reduction subtracts a
+captured room-noise profile, and a frequency-selective dynamic processor can
+tame or extend the proximity effect.
 
 ![Better Micro APO GUI](docs/screenshot.png)
 
@@ -88,8 +89,8 @@ The chain order is fixed; stages can be disabled, and makeup and mono are
 optional:
 
 ```
-optional noise reduction -> optional gate -> peak compressor -> optional makeup
-gain -> optional mono copy
+optional noise reduction -> optional gate -> optional dynamic (proximity) ->
+peak compressor -> optional makeup gain -> optional mono copy
 ```
 
 - **Noise reduction** subtracts the captured room-noise spectrum from the input.
@@ -106,6 +107,14 @@ gain -> optional mono copy
   by default.
 - **Compressor** uses a linked peak detector, so a stereo source keeps its
   image.
+- **Dynamic** is a frequency-selective compressor/expander aimed at the
+  proximity effect. `Frequency` and `Q` choose the band; a broad Q behaves like
+  a dynamic low shelf. In the default reduce mode it cuts the band when it is
+  loud, taming a strong proximity effect up close. Check **Extend quiet lows**
+  to do the opposite: lift the band when it is quiet, making distant or thin
+  lows fuller. `Threshold`, `Ratio`, `Range`, `Attack`, and `Release` control
+  how much and how fast. It runs before the broadband compressor so it sees the
+  input dynamics. It is off by default.
 - **Gain** enables the makeup gain stage. The configured value is kept while
   the checkbox is off, so it can be bypassed without losing it.
 - **Makeup** gain is applied after the compressor.
@@ -125,6 +134,10 @@ Default settings:
 | Compressor | Threshold | Ratio | Attack | Release | Makeup |
 | --- | --- | --- | --- | --- | --- |
 | enabled | -58 dBFS | 3:1 | 5 ms | 100 ms | +28 dB |
+
+| Dynamic | Mode | Frequency | Q | Threshold | Ratio | Range | Attack | Release |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| off | reduce | 120 Hz | 0.7 | -45 dBFS | 4:1 | 18 dB | 10 ms | 150 ms |
 
 Gain is enabled by default.
 
@@ -153,6 +166,13 @@ The GUI clamps values to a safe range:
 | Compressor ratio | 1:1 to 20:1 |
 | Compressor attack | 0.1 to 1000 ms |
 | Compressor release | 1 to 5000 ms |
+| Dynamic frequency | 20 to 2000 Hz |
+| Dynamic Q | 0.1 to 10 |
+| Dynamic threshold | -80 to 0 dBFS |
+| Dynamic ratio | 1:1 to 20:1 |
+| Dynamic range | 0 to 36 dB |
+| Dynamic attack | 0.1 to 1000 ms |
+| Dynamic release | 1 to 5000 ms |
 | Makeup gain | -24 to +48 dB |
 
 ## Known limitations

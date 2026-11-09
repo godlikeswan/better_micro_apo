@@ -86,6 +86,22 @@ enum : int {
     IDC_NOISE_REDUCTION_EDIT,
     IDC_NOISE_CAPTURE,
     IDC_NOISE_NOTE,
+    IDC_DYNAMIC,
+    IDC_DYNAMIC_EXTEND,
+    IDC_DYN_FREQUENCY_LABEL,
+    IDC_DYN_FREQUENCY_EDIT,
+    IDC_DYN_Q_LABEL,
+    IDC_DYN_Q_EDIT,
+    IDC_DYN_THRESHOLD_LABEL,
+    IDC_DYN_THRESHOLD_EDIT,
+    IDC_DYN_RATIO_LABEL,
+    IDC_DYN_RATIO_EDIT,
+    IDC_DYN_RANGE_LABEL,
+    IDC_DYN_RANGE_EDIT,
+    IDC_DYN_ATTACK_LABEL,
+    IDC_DYN_ATTACK_EDIT,
+    IDC_DYN_RELEASE_LABEL,
+    IDC_DYN_RELEASE_EDIT,
 };
 
 constexpr UINT WM_APP_WORK_DONE = WM_APP + 1;
@@ -158,6 +174,22 @@ HWND g_noiseReductionLabel = nullptr;
 HWND g_noiseReductionEdit = nullptr;
 HWND g_noiseCapture = nullptr;
 HWND g_noiseNote = nullptr;
+HWND g_dynamic = nullptr;
+HWND g_dynamicExtend = nullptr;
+HWND g_dynFrequencyLabel = nullptr;
+HWND g_dynFrequencyEdit = nullptr;
+HWND g_dynQLabel = nullptr;
+HWND g_dynQEdit = nullptr;
+HWND g_dynThresholdLabel = nullptr;
+HWND g_dynThresholdEdit = nullptr;
+HWND g_dynRatioLabel = nullptr;
+HWND g_dynRatioEdit = nullptr;
+HWND g_dynRangeLabel = nullptr;
+HWND g_dynRangeEdit = nullptr;
+HWND g_dynAttackLabel = nullptr;
+HWND g_dynAttackEdit = nullptr;
+HWND g_dynReleaseLabel = nullptr;
+HWND g_dynReleaseEdit = nullptr;
 
 DWORD g_clipHoldUntil = 0;
 unsigned g_dropTotal = 0;
@@ -335,6 +367,8 @@ void ClearSettingsEditor()
         g_gateHoldEdit, g_gateReleaseEdit, g_gateLookaheadEdit,
         g_compThresholdEdit, g_compRatioEdit, g_compAttackEdit,
         g_compReleaseEdit, g_makeupEdit, g_noiseReductionEdit,
+        g_dynFrequencyEdit, g_dynQEdit, g_dynThresholdEdit, g_dynRatioEdit,
+        g_dynRangeEdit, g_dynAttackEdit, g_dynReleaseEdit,
     };
     for (HWND edit : edits) {
         SetWindowTextW(edit, L"");
@@ -345,6 +379,8 @@ void ClearSettingsEditor()
     SendMessageW(g_mono, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessageW(g_isolate, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessageW(g_noise, BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessageW(g_dynamic, BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessageW(g_dynamicExtend, BM_SETCHECK, BST_UNCHECKED, 0);
     SetWindowTextW(g_noiseNote, L"");
     g_settingsLoading = false;
 }
@@ -375,6 +411,13 @@ void ShowSettingsForSelected()
     SetEditNumber(g_compAttackEdit, settings.compressor.attackMs);
     SetEditNumber(g_compReleaseEdit, settings.compressor.releaseMs);
     SetEditNumber(g_makeupEdit, settings.makeupDb);
+    SetEditNumber(g_dynFrequencyEdit, settings.dynamics.frequencyHz);
+    SetEditNumber(g_dynQEdit, settings.dynamics.q);
+    SetEditNumber(g_dynThresholdEdit, settings.dynamics.thresholdDb);
+    SetEditNumber(g_dynRatioEdit, settings.dynamics.ratio);
+    SetEditNumber(g_dynRangeEdit, settings.dynamics.rangeDb);
+    SetEditNumber(g_dynAttackEdit, settings.dynamics.attackMs);
+    SetEditNumber(g_dynReleaseEdit, settings.dynamics.releaseMs);
     SendMessageW(g_gate, BM_SETCHECK,
                  settings.gate.enabled ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(g_compressor, BM_SETCHECK,
@@ -382,6 +425,10 @@ void ShowSettingsForSelected()
                  0);
     SendMessageW(g_gain, BM_SETCHECK,
                  settings.makeupEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(g_dynamic, BM_SETCHECK,
+                 settings.dynamics.enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(g_dynamicExtend, BM_SETCHECK,
+                 settings.dynamics.expand ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(g_mono, BM_SETCHECK,
                  settings.mono ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(g_isolate, BM_SETCHECK,
@@ -421,7 +468,15 @@ bool CommitSettingsEditor()
         !ReadEditNumber(g_compRatioEdit, settings.compressor.ratio) ||
         !ReadEditNumber(g_compAttackEdit, settings.compressor.attackMs) ||
         !ReadEditNumber(g_compReleaseEdit, settings.compressor.releaseMs) ||
-        !ReadEditNumber(g_makeupEdit, settings.makeupDb)) {
+        !ReadEditNumber(g_makeupEdit, settings.makeupDb) ||
+        !ReadEditNumber(g_dynFrequencyEdit, settings.dynamics.frequencyHz) ||
+        !ReadEditNumber(g_dynQEdit, settings.dynamics.q) ||
+        !ReadEditNumber(g_dynThresholdEdit,
+                        settings.dynamics.thresholdDb) ||
+        !ReadEditNumber(g_dynRatioEdit, settings.dynamics.ratio) ||
+        !ReadEditNumber(g_dynRangeEdit, settings.dynamics.rangeDb) ||
+        !ReadEditNumber(g_dynAttackEdit, settings.dynamics.attackMs) ||
+        !ReadEditNumber(g_dynReleaseEdit, settings.dynamics.releaseMs)) {
         MessageBoxW(g_window, L"Enter a valid number in every setting.",
                     L"Better Micro APO", MB_ICONWARNING);
         return false;
@@ -433,6 +488,10 @@ bool CommitSettingsEditor()
         SendMessageW(g_compressor, BM_GETCHECK, 0, 0) == BST_CHECKED;
     settings.makeupEnabled =
         SendMessageW(g_gain, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    settings.dynamics.enabled =
+        SendMessageW(g_dynamic, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    settings.dynamics.expand =
+        SendMessageW(g_dynamicExtend, BM_GETCHECK, 0, 0) == BST_CHECKED;
     settings.mono =
         SendMessageW(g_mono, BM_GETCHECK, 0, 0) == BST_CHECKED;
     settings.isolateEffects =
@@ -455,6 +514,13 @@ bool CommitSettingsEditor()
     SetEditNumber(g_compReleaseEdit, settings.compressor.releaseMs);
     SetEditNumber(g_makeupEdit, settings.makeupDb);
     SetEditNumber(g_noiseReductionEdit, settings.noise.reductionDb);
+    SetEditNumber(g_dynFrequencyEdit, settings.dynamics.frequencyHz);
+    SetEditNumber(g_dynQEdit, settings.dynamics.q);
+    SetEditNumber(g_dynThresholdEdit, settings.dynamics.thresholdDb);
+    SetEditNumber(g_dynRatioEdit, settings.dynamics.ratio);
+    SetEditNumber(g_dynRangeEdit, settings.dynamics.rangeDb);
+    SetEditNumber(g_dynAttackEdit, settings.dynamics.attackMs);
+    SetEditNumber(g_dynReleaseEdit, settings.dynamics.releaseMs);
     g_settingsLoading = false;
     return true;
 }
@@ -475,6 +541,14 @@ void EnableSettingsControls(bool enabled)
         g_compAttackLabel, g_compAttackEdit,
         g_compReleaseLabel, g_compReleaseEdit,
         g_gain, g_makeupLabel, g_makeupEdit,
+        g_dynamic, g_dynamicExtend,
+        g_dynFrequencyLabel, g_dynFrequencyEdit,
+        g_dynQLabel, g_dynQEdit,
+        g_dynThresholdLabel, g_dynThresholdEdit,
+        g_dynRatioLabel, g_dynRatioEdit,
+        g_dynRangeLabel, g_dynRangeEdit,
+        g_dynAttackLabel, g_dynAttackEdit,
+        g_dynReleaseLabel, g_dynReleaseEdit,
         g_noise, g_noiseReductionLabel, g_noiseReductionEdit,
         g_noiseCapture, g_noiseNote,
         g_mono, g_isolate, g_listen,
@@ -836,8 +910,8 @@ void Layout(int width, int height)
 
     y += filesHeight + Scale(12);
     int devicesHeight = height - y - Scale(52);
-    if (devicesHeight < Scale(570)) {
-        devicesHeight = Scale(570);
+    if (devicesHeight < Scale(694)) {
+        devicesHeight = Scale(694);
     }
     MoveWindow(g_groupDevices, margin, y, width - 2 * margin, devicesHeight,
                TRUE);
@@ -846,7 +920,7 @@ void Layout(int width, int height)
     const int settingsWidth = Scale(360);
     const int listWidth =
         width - 2 * margin - Scale(32) - settingsWidth - gap;
-    const int listHeight = devicesHeight - Scale(76);
+    const int listHeight = devicesHeight - Scale(104);
     MoveWindow(g_list, listX, y + Scale(24), listWidth, listHeight, TRUE);
 
     const int settingsX = listX + listWidth + gap;
@@ -913,6 +987,18 @@ void Layout(int width, int height)
     settingsY += Scale(28);
     placeSettingPair(g_makeupLabel, g_makeupEdit, nullptr, nullptr);
 
+    MoveWindow(g_dynamic, settingsX, settingsY, columnWidth, Scale(20), TRUE);
+    MoveWindow(g_dynamicExtend, settingsX + columnWidth + columnGap,
+               settingsY, columnWidth, Scale(20), TRUE);
+    settingsY += Scale(28);
+    placeSettingPair(g_dynFrequencyLabel, g_dynFrequencyEdit, g_dynQLabel,
+                     g_dynQEdit);
+    placeSettingPair(g_dynThresholdLabel, g_dynThresholdEdit, g_dynRatioLabel,
+                     g_dynRatioEdit);
+    placeSettingPair(g_dynRangeLabel, g_dynRangeEdit, g_dynAttackLabel,
+                     g_dynAttackEdit);
+    placeSettingPair(g_dynReleaseLabel, g_dynReleaseEdit, nullptr, nullptr);
+
     MoveWindow(g_mono, settingsX, settingsY, settingsWidth, Scale(20), TRUE);
     settingsY += Scale(24);
     MoveWindow(g_isolate, settingsX, settingsY, settingsWidth, Scale(20),
@@ -923,8 +1009,9 @@ void Layout(int width, int height)
     MoveWindow(g_listenNote, settingsX, settingsY, settingsWidth, Scale(36),
                TRUE);
     settingsY += Scale(40);
-    MoveWindow(g_meter, settingsX, settingsY, settingsWidth, Scale(20), TRUE);
 
+    MoveWindow(g_meter, listX, y + devicesHeight - Scale(72), listWidth,
+               Scale(20), TRUE);
     MoveWindow(g_hint, listX, y + devicesHeight - Scale(42),
                listWidth - Scale(130), Scale(20), TRUE);
     MoveWindow(g_apply, width - margin - Scale(16) - Scale(120),
@@ -1054,6 +1141,7 @@ void DoCaptureNoiseProfile()
     apo::ApoSettings snapshot = original;
     snapshot.noise.enabled = false;
     snapshot.gate.enabled = false;
+    snapshot.dynamics.enabled = false;
     snapshot.compressor.enabled = false;
     snapshot.makeupEnabled = false;
     snapshot.mono = false;
@@ -1249,6 +1337,29 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         g_makeupLabel =
             CreateStatic(window, IDC_MAKEUP_LABEL, L"Makeup (dB)", SS_LEFT);
         g_makeupEdit = CreateEdit(window, IDC_MAKEUP_EDIT);
+        g_dynamic = CreateCheck(window, IDC_DYNAMIC, L"Dynamic");
+        g_dynamicExtend =
+            CreateCheck(window, IDC_DYNAMIC_EXTEND, L"Extend quiet lows");
+        g_dynFrequencyLabel = CreateStatic(
+            window, IDC_DYN_FREQUENCY_LABEL, L"Frequency (Hz)", SS_LEFT);
+        g_dynFrequencyEdit = CreateEdit(window, IDC_DYN_FREQUENCY_EDIT);
+        g_dynQLabel = CreateStatic(window, IDC_DYN_Q_LABEL, L"Q", SS_LEFT);
+        g_dynQEdit = CreateEdit(window, IDC_DYN_Q_EDIT);
+        g_dynThresholdLabel = CreateStatic(
+            window, IDC_DYN_THRESHOLD_LABEL, L"Threshold (dBFS)", SS_LEFT);
+        g_dynThresholdEdit = CreateEdit(window, IDC_DYN_THRESHOLD_EDIT);
+        g_dynRatioLabel =
+            CreateStatic(window, IDC_DYN_RATIO_LABEL, L"Ratio (:1)", SS_LEFT);
+        g_dynRatioEdit = CreateEdit(window, IDC_DYN_RATIO_EDIT);
+        g_dynRangeLabel =
+            CreateStatic(window, IDC_DYN_RANGE_LABEL, L"Range (dB)", SS_LEFT);
+        g_dynRangeEdit = CreateEdit(window, IDC_DYN_RANGE_EDIT);
+        g_dynAttackLabel = CreateStatic(window, IDC_DYN_ATTACK_LABEL,
+                                        L"Attack (ms)", SS_LEFT);
+        g_dynAttackEdit = CreateEdit(window, IDC_DYN_ATTACK_EDIT);
+        g_dynReleaseLabel = CreateStatic(window, IDC_DYN_RELEASE_LABEL,
+                                         L"Release (ms)", SS_LEFT);
+        g_dynReleaseEdit = CreateEdit(window, IDC_DYN_RELEASE_EDIT);
         g_mono = CreateCheck(window, IDC_MONO, L"Mono (left to all channels)");
         g_isolate = CreateCheck(window, IDC_ISOLATE, L"Ignore other effects");
         g_listen = CreateCheck(window, IDC_LISTEN, L"Listen to this device");
@@ -1284,7 +1395,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
     case WM_GETMINMAXINFO: {
         auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
         info->ptMinTrackSize.x = Scale(900);
-        info->ptMinTrackSize.y = Scale(900);
+        info->ptMinTrackSize.y = Scale(990);
         break;
     }
 
@@ -1323,6 +1434,13 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_COMP_RELEASE_EDIT:
         case IDC_MAKEUP_EDIT:
         case IDC_NOISE_REDUCTION_EDIT:
+        case IDC_DYN_FREQUENCY_EDIT:
+        case IDC_DYN_Q_EDIT:
+        case IDC_DYN_THRESHOLD_EDIT:
+        case IDC_DYN_RATIO_EDIT:
+        case IDC_DYN_RANGE_EDIT:
+        case IDC_DYN_ATTACK_EDIT:
+        case IDC_DYN_RELEASE_EDIT:
             if (HIWORD(wParam) == EN_CHANGE) {
                 MarkSettingsDirty();
             }
@@ -1330,6 +1448,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_GATE:
         case IDC_COMPRESSOR:
         case IDC_GAIN:
+        case IDC_DYNAMIC:
+        case IDC_DYNAMIC_EXTEND:
         case IDC_MONO:
         case IDC_ISOLATE:
         case IDC_NOISE:
@@ -1620,6 +1740,24 @@ int DumpStatus(const std::wstring& path)
                 FormatNumber(endpoint.settings.gate.releaseMs) +
                 L" | gate_lookahead=" +
                 FormatNumber(endpoint.settings.gate.lookaheadMs) +
+                L" | dynamic=" +
+                (endpoint.settings.dynamics.enabled ? L"on" : L"off") +
+                L" | dynamic_mode=" +
+                (endpoint.settings.dynamics.expand ? L"extend" : L"reduce") +
+                L" | dynamic_frequency=" +
+                FormatNumber(endpoint.settings.dynamics.frequencyHz) +
+                L" | dynamic_q=" +
+                FormatNumber(endpoint.settings.dynamics.q) +
+                L" | dynamic_threshold=" +
+                FormatNumber(endpoint.settings.dynamics.thresholdDb) +
+                L" | dynamic_ratio=" +
+                FormatNumber(endpoint.settings.dynamics.ratio) +
+                L" | dynamic_range=" +
+                FormatNumber(endpoint.settings.dynamics.rangeDb) +
+                L" | dynamic_attack=" +
+                FormatNumber(endpoint.settings.dynamics.attackMs) +
+                L" | dynamic_release=" +
+                FormatNumber(endpoint.settings.dynamics.releaseMs) +
                 L" | compressor=" +
                 (endpoint.settings.compressor.enabled ? L"on" : L"off") +
                 L" | threshold=" +
@@ -1738,7 +1876,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show)
     HWND window = CreateWindowExW(
         0, windowClass.lpszClassName, L"Better Micro APO",
         WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, Scale(1020),
-        Scale(930), nullptr, nullptr, instance, nullptr);
+        Scale(1010), nullptr, nullptr, instance, nullptr);
     if (!window) {
         return 1;
     }

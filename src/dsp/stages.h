@@ -62,6 +62,45 @@ private:
     double m_envelopeDb = 0.0;
 };
 
+// Frequency-selective dynamics for the proximity effect. A state-variable
+// bandpass isolates a band around `frequencyHz`; its envelope drives a cut of
+// loud lows (compress) or a boost of quiet lows (expand) applied back to that
+// band only. A broad Q behaves like a dynamic low shelf.
+class DynamicStage final : public Stage
+{
+public:
+    explicit DynamicStage(const DynamicSettings& settings)
+        : m_settings(settings)
+    {
+    }
+
+    void Configure(const AudioFormat& format) override;
+    void Reset() override;
+    void Process(double* samples, UINT32 frames, UINT32 channels) override;
+
+private:
+    DynamicSettings m_settings;
+    double m_a1 = 0.0;
+    double m_a2 = 0.0;
+    double m_a3 = 0.0;
+    double m_k = 1.0;
+    double m_thresholdDb = 0.0;
+    double m_thresholdLinear = 1.0;
+    double m_ratio = 1.0;
+    double m_rangeDb = 0.0;
+    bool m_expand = false;
+    double m_attackCoeff = 0.0;
+    double m_releaseCoeff = 0.0;
+    double m_detectorAttack = 0.0;
+    double m_detectorRelease = 0.0;
+    double m_detectorEnvelope = 0.0;
+    double m_gainDb = 0.0;
+    UINT32 m_channels = 0;
+    std::vector<double> m_ic1;
+    std::vector<double> m_ic2;
+    std::vector<double> m_band;
+};
+
 // Flat gain, used for makeup gain.
 class GainStage final : public Stage
 {

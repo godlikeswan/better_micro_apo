@@ -325,7 +325,7 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
         return E_OUTOFMEMORY;
     }
 
-    Log(L"LockForProcess ok: format=%s channels=%u rate=%u containerBytes=%u maxFrames=%u endpoint=%s noise=%d noiseReduction=%.2fdB noiseProfile=%d gate=%d gateThreshold=%.2fdB gateRange=%.2fdB gateAttack=%.2fms gateHold=%.2fms gateRelease=%.2fms gateLookahead=%.2fms compressor=%d threshold=%.2fdB ratio=%.2f:1 attack=%.2fms release=%.2fms makeup=%d makeupGain=%.2fdB mono=%d",
+    Log(L"LockForProcess ok: format=%s channels=%u rate=%u containerBytes=%u maxFrames=%u endpoint=%s noise=%d noiseReduction=%.2fdB noiseProfile=%d gate=%d gateThreshold=%.2fdB gateRange=%.2fdB gateAttack=%.2fms gateHold=%.2fms gateRelease=%.2fms gateLookahead=%.2fms dynamic=%d dynamicMode=%s dynamicFrequency=%.2fHz dynamicQ=%.2f dynamicThreshold=%.2fdB dynamicRatio=%.2f dynamicRange=%.2fdB dynamicAttack=%.2fms dynamicRelease=%.2fms compressor=%d threshold=%.2fdB ratio=%.2f:1 attack=%.2fms release=%.2fms makeup=%d makeupGain=%.2fdB mono=%d",
         apo::dsp::FormatName(m_formatInfo.sample), m_formatInfo.channels,
         m_formatInfo.sampleRate, m_formatInfo.bytesPerSample, m_maxFrames,
         m_endpointId.empty() ? L"<unknown>" : m_endpointId.c_str(),
@@ -335,6 +335,12 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
         m_settings.gate.rangeDb, m_settings.gate.attackMs,
         m_settings.gate.holdMs, m_settings.gate.releaseMs,
         m_settings.gate.lookaheadMs,
+        m_settings.dynamics.enabled ? 1 : 0,
+        m_settings.dynamics.expand ? L"extend" : L"reduce",
+        m_settings.dynamics.frequencyHz, m_settings.dynamics.q,
+        m_settings.dynamics.thresholdDb, m_settings.dynamics.ratio,
+        m_settings.dynamics.rangeDb, m_settings.dynamics.attackMs,
+        m_settings.dynamics.releaseMs,
         m_settings.compressor.enabled ? 1 : 0,
         m_settings.compressor.thresholdDb, m_settings.compressor.ratio,
         m_settings.compressor.attackMs, m_settings.compressor.releaseMs,
@@ -453,6 +459,12 @@ void BetterMicroApo::ConfigureDsp()
     if (m_settings.gate.enabled)
     {
         m_chain.Add(std::make_unique<GateStage>(m_settings.gate));
+    }
+    // Frequency-selective dynamics run before the broadband compressor so they
+    // see the input dynamics, not the compressed signal.
+    if (m_settings.dynamics.enabled)
+    {
+        m_chain.Add(std::make_unique<DynamicStage>(m_settings.dynamics));
     }
     if (m_settings.compressor.enabled)
     {

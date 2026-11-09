@@ -217,6 +217,19 @@ void ClampSettings(ApoSettings& settings)
     ClampFinite(settings.compressor.releaseMs, defaults.compressor.releaseMs,
                 1.0, 5000.0);
 
+    ClampFinite(settings.dynamics.frequencyHz, defaults.dynamics.frequencyHz,
+                20.0, 2000.0);
+    ClampFinite(settings.dynamics.q, defaults.dynamics.q, 0.1, 10.0);
+    ClampFinite(settings.dynamics.thresholdDb,
+                defaults.dynamics.thresholdDb, -80.0, 0.0);
+    ClampFinite(settings.dynamics.ratio, defaults.dynamics.ratio, 1.0, 20.0);
+    ClampFinite(settings.dynamics.rangeDb, defaults.dynamics.rangeDb, 0.0,
+                36.0);
+    ClampFinite(settings.dynamics.attackMs, defaults.dynamics.attackMs, 0.1,
+                1000.0);
+    ClampFinite(settings.dynamics.releaseMs, defaults.dynamics.releaseMs, 1.0,
+                5000.0);
+
     ClampFinite(settings.makeupDb, defaults.makeupDb, -24.0, 48.0);
     ClampFinite(settings.noise.reductionDb, defaults.noise.reductionDb, 0.0,
                 70.0);
@@ -311,6 +324,24 @@ bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
         } else if (EqualsIgnoreCase(key, L"compressor_release_ms") ||
                    EqualsIgnoreCase(key, L"release_ms")) {
             ParseDouble(value, settings.compressor.releaseMs);
+        } else if (EqualsIgnoreCase(key, L"dynamic_enabled")) {
+            ParseBool(value, settings.dynamics.enabled);
+        } else if (EqualsIgnoreCase(key, L"dynamic_expand")) {
+            ParseBool(value, settings.dynamics.expand);
+        } else if (EqualsIgnoreCase(key, L"dynamic_frequency_hz")) {
+            ParseDouble(value, settings.dynamics.frequencyHz);
+        } else if (EqualsIgnoreCase(key, L"dynamic_q")) {
+            ParseDouble(value, settings.dynamics.q);
+        } else if (EqualsIgnoreCase(key, L"dynamic_threshold_db")) {
+            ParseDouble(value, settings.dynamics.thresholdDb);
+        } else if (EqualsIgnoreCase(key, L"dynamic_ratio")) {
+            ParseDouble(value, settings.dynamics.ratio);
+        } else if (EqualsIgnoreCase(key, L"dynamic_range_db")) {
+            ParseDouble(value, settings.dynamics.rangeDb);
+        } else if (EqualsIgnoreCase(key, L"dynamic_attack_ms")) {
+            ParseDouble(value, settings.dynamics.attackMs);
+        } else if (EqualsIgnoreCase(key, L"dynamic_release_ms")) {
+            ParseDouble(value, settings.dynamics.releaseMs);
         } else if (EqualsIgnoreCase(key, L"makeup_enabled")) {
             ParseBool(value, settings.makeupEnabled);
         } else if (EqualsIgnoreCase(key, L"makeup_db")) {
@@ -369,6 +400,22 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
             FormatDouble(settings.compressor.attackMs) + "\n";
     text += "compressor_release_ms=" +
             FormatDouble(settings.compressor.releaseMs) + "\n";
+    text += std::string("dynamic_enabled=") +
+            (settings.dynamics.enabled ? "1" : "0") + "\n";
+    text += std::string("dynamic_expand=") +
+            (settings.dynamics.expand ? "1" : "0") + "\n";
+    text += "dynamic_frequency_hz=" +
+            FormatDouble(settings.dynamics.frequencyHz) + "\n";
+    text += "dynamic_q=" + FormatDouble(settings.dynamics.q) + "\n";
+    text += "dynamic_threshold_db=" +
+            FormatDouble(settings.dynamics.thresholdDb) + "\n";
+    text += "dynamic_ratio=" + FormatDouble(settings.dynamics.ratio) + "\n";
+    text += "dynamic_range_db=" + FormatDouble(settings.dynamics.rangeDb) +
+            "\n";
+    text += "dynamic_attack_ms=" +
+            FormatDouble(settings.dynamics.attackMs) + "\n";
+    text += "dynamic_release_ms=" +
+            FormatDouble(settings.dynamics.releaseMs) + "\n";
     text += std::string("makeup_enabled=") +
             (settings.makeupEnabled ? "1" : "0") + "\n";
     text += "makeup_db=" + FormatDouble(settings.makeupDb) + "\n";

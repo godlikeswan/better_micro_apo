@@ -21,8 +21,9 @@ identity and aggregation are handled by ATL (`CComObjectRootEx`, `CComCoClass`,
   assembles it from the per-device settings:
 
   ```
-  optional NoiseStage -> optional GateStage -> optional CompressorStage
-  -> optional GainStage (makeup) -> optional MonoStage
+  optional NoiseStage -> optional GateStage -> optional DynamicStage
+  -> optional CompressorStage -> optional GainStage (makeup) -> optional
+  MonoStage
   ```
 
   Adding or reordering a stage means writing one `Stage` subclass and changing
@@ -47,6 +48,17 @@ identity and aggregation are handled by ATL (`CComObjectRootEx`, `CComCoClass`,
   `Chain::ProcessSilence`) so buffered audio is not replayed later.
 - The gate and compressor both use a linked peak detector across channels, so a
   stereo source keeps its image.
+- `DynamicStage` is a frequency-selective compressor/expander for the proximity
+  effect. A topology-preserving state-variable bandpass (Simper) isolates a band
+  around `frequencyHz`; the band is normalized to unity at its center so a broad
+  Q acts like a dynamic low shelf. The linked band peak feeds a fast-attack,
+  slow-release envelope, and the resulting gain is added back to the band only
+  (`out = x + band * (gain - 1)`). Reduce mode cuts the band above the threshold;
+  extend mode boosts it below the threshold. The gain itself is smoothed with
+  the configured attack/release and limited by `rangeDb`. The stage is
+  allocation-free in `Process`; filter and envelope state are allocated and
+  cleared in `Configure`/`Reset`. It runs before the broadband compressor so it
+  sees the input dynamics.
 - Optional mono mode copies the processed left channel to every other channel,
   for a mono source connected to input 1 of a stereo interface.
 
@@ -68,9 +80,12 @@ The INI keys are `noise_enabled`, `noise_reduction_db`, `gate_enabled`,
 `gate_threshold_db`, `gate_range_db`, `gate_attack_ms`, `gate_hold_ms`,
 `gate_release_ms`, `gate_lookahead_ms`, `compressor_enabled`,
 `compressor_threshold_db`, `compressor_ratio`, `compressor_attack_ms`,
-`compressor_release_ms`, `makeup_enabled`, `makeup_db`, `mono`, and
-`isolate_effects`. Legacy keys (`threshold_db`, `ratio`, `attack_ms`,
-`release_ms`) are still read for the compressor. A legacy `input_gain_db` key is
+`compressor_release_ms`, `dynamic_enabled`, `dynamic_expand`,
+`dynamic_frequency_hz`, `dynamic_q`, `dynamic_threshold_db`, `dynamic_ratio`,
+`dynamic_range_db`, `dynamic_attack_ms`, `dynamic_release_ms`,
+`makeup_enabled`, `makeup_db`, `mono`, and `isolate_effects`. Legacy keys
+(`threshold_db`, `ratio`, `attack_ms`, `release_ms`) are still read for the
+compressor. A legacy `input_gain_db` key is
 folded into the compressor threshold and makeup gain (`threshold -= input_gain`,
 `makeup += input_gain`) so settings written before the input gain stage was
 removed keep the same sound.

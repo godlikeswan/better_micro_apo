@@ -49,6 +49,26 @@ struct CompressorSettings
     double releaseMs = 100.0;
 };
 
+// Frequency-selective dynamics. The detector watches a band around
+// `frequencyHz`; `expand` selects the extend mode (boost quiet lows, which
+// strengthens a distant proximity effect) instead of the reduce mode (cut loud
+// lows, which tames a close proximity effect). A broad Q makes it behave like
+// a dynamic low shelf.
+struct DynamicSettings
+{
+    bool enabled = false;
+    bool expand = false;
+    double frequencyHz = 120.0;
+    double q = 0.7;
+    double thresholdDb = -45.0;
+    double ratio = 4.0;
+
+    // Maximum cut (compress) or boost (expand) applied to the band.
+    double rangeDb = 18.0;
+    double attackMs = 10.0;
+    double releaseMs = 150.0;
+};
+
 // Per-endpoint DSP settings. Defaults match the tuned sound that used to be
 // compiled into the APO: the old +28 dB input gain now lives in the compressor
 // threshold and makeup gain.
@@ -57,6 +77,7 @@ struct ApoSettings
     NoiseSettings noise;
     GateSettings gate;
     CompressorSettings compressor;
+    DynamicSettings dynamics;
 
     // Flat makeup gain. `makeupEnabled` lets the stage be bypassed without
     // losing the configured value.
