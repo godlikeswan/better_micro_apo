@@ -125,6 +125,7 @@ constexpr UINT_PTR kMonitorTimer = 1;
 constexpr DWORD kMeterWindowMs = 500;
 
 constexpr wchar_t kWindowClass[] = L"BetterMicroApoInstaller";
+constexpr wchar_t kPageClass[] = L"BetterMicroApoPage";
 constexpr wchar_t kInstanceMutex[] = L"Local\\better_micro_apo_gui_instance";
 
 HINSTANCE g_instance = nullptr;
@@ -134,6 +135,7 @@ HWND g_window = nullptr;
 HWND g_title = nullptr;
 HWND g_refresh = nullptr;
 HWND g_tabs = nullptr;
+HWND g_pageBackground = nullptr;
 HWND g_status = nullptr;
 HWND g_logButton = nullptr;
 
@@ -321,9 +323,9 @@ void ApplyFont(HWND control, HFONT font)
 HWND CreateStatic(HWND parent, int id, const wchar_t* text, DWORD style)
 {
     HWND control = CreateWindowExW(
-        0, WC_STATICW, text, WS_CHILD | WS_VISIBLE | style, 0, 0, 0, 0,
-        parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance,
-        nullptr);
+        0, WC_STATICW, text,
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | style, 0, 0, 0, 0, parent,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
     ApplyFont(control, g_font);
     return control;
 }
@@ -332,20 +334,88 @@ HWND CreateButton(HWND parent, int id, const wchar_t* text)
 {
     HWND control = CreateWindowExW(
         0, WC_BUTTONW, text,
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 0, 0,
-        parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance,
-        nullptr);
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | BS_PUSHBUTTON,
+        0, 0, 0, 0, parent,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
     ApplyFont(control, g_font);
     return control;
+}
+
+// The system draws a group box frame but leaves its interior to the parent.
+// The page panel uses WS_CLIPCHILDREN, so its erase never reaches the area
+// under a group box, and hiding an effect control leaves its pixels behind.
+// Paint the face background and frame ourselves so every redraw clears it.
+LRESULT CALLBACK GroupFrameProc(HWND window, UINT message, WPARAM wParam,
+                                LPARAM lParam, UINT_PTR, DWORD_PTR)
+{
+    if (message == WM_ERASEBKGND) {
+        return 1;
+    }
+    if (message != WM_PAINT) {
+        return DefSubclassProc(window, message, wParam, lParam);
+    }
+
+    PAINTSTRUCT paint{};
+    HDC dc = BeginPaint(window, &paint);
+
+    RECT client{};
+    GetClientRect(window, &client);
+    FillRect(dc, &client, GetSysColorBrush(COLOR_BTNFACE));
+
+    wchar_t caption[128]{};
+    GetWindowTextW(window, caption, static_cast<int>(std::size(caption)));
+
+    HFONT font = reinterpret_cast<HFONT>(
+        SendMessageW(window, WM_GETFONT, 0, 0));
+    HGDIOBJ oldFont = nullptr;
+    if (font != nullptr) {
+        oldFont = SelectObject(dc, font);
+    }
+
+    SIZE text{};
+    GetTextExtentPoint32W(dc, caption, static_cast<int>(wcslen(caption)),
+                          &text);
+
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
+
+    const int gap = Scale(8);
+    const int lineY = text.cy / 2;
+
+    RECT captionRect{client.left + gap, 0, client.left + gap + text.cx,
+                     text.cy};
+    DrawTextW(dc, caption, -1, &captionRect,
+              DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+    const int afterCaption = captionRect.right + gap;
+    const HBRUSH line = GetSysColorBrush(COLOR_BTNSHADOW);
+    RECT topLeft{client.left, lineY, client.left + gap, lineY + 1};
+    RECT topRight{afterCaption, lineY, client.right, lineY + 1};
+    RECT left{client.left, lineY, client.left + 1, client.bottom - 1};
+    RECT right{client.right - 1, lineY, client.right, client.bottom - 1};
+    RECT bottom{client.left, client.bottom - 1, client.right, client.bottom};
+    FillRect(dc, &topLeft, line);
+    FillRect(dc, &topRight, line);
+    FillRect(dc, &left, line);
+    FillRect(dc, &right, line);
+    FillRect(dc, &bottom, line);
+
+    if (oldFont != nullptr) {
+        SelectObject(dc, oldFont);
+    }
+    EndPaint(window, &paint);
+    return 0;
 }
 
 HWND CreateGroup(HWND parent, int id, const wchar_t* text)
 {
     HWND control = CreateWindowExW(
-        0, WC_BUTTONW, text, WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 0, 0, 0, 0,
+        0, WC_BUTTONW, text,
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_GROUPBOX, 0, 0, 0, 0,
         parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance,
         nullptr);
     ApplyFont(control, g_font);
+    SetWindowSubclass(control, GroupFrameProc, 1, 0);
     return control;
 }
 
@@ -353,9 +423,10 @@ HWND CreateEdit(HWND parent, int id)
 {
     HWND control = CreateWindowExW(
         WS_EX_CLIENTEDGE, WC_EDITW, L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_RIGHT, 0, 0,
-        0, 0, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
-        g_instance, nullptr);
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | ES_AUTOHSCROLL |
+            ES_RIGHT,
+        0, 0, 0, 0, parent,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
     ApplyFont(control, g_font);
     return control;
 }
@@ -364,9 +435,9 @@ HWND CreateCheck(HWND parent, int id, const wchar_t* text)
 {
     HWND control = CreateWindowExW(
         0, WC_BUTTONW, text,
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0,
-        parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance,
-        nullptr);
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | BS_AUTOCHECKBOX,
+        0, 0, 0, 0, parent,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
     ApplyFont(control, g_font);
     return control;
 }
@@ -995,6 +1066,22 @@ void SetApplyHighlight(HWND button, bool dirty)
     InvalidateRect(button, nullptr, TRUE);
 }
 
+// Sibling controls do not always repaint when the tab body or a dropdown
+// closes over them. Redraw the window and every child after layout changes.
+void RepaintAll()
+{
+    if (g_window == nullptr) {
+        return;
+    }
+    RedrawWindow(g_window, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+    if (g_pageBackground != nullptr) {
+        RedrawWindow(g_pageBackground, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN |
+                         RDW_UPDATENOW);
+    }
+}
+
 void UpdateFilesUi()
 {
     const bool stale = g_files.DllStale();
@@ -1375,6 +1462,7 @@ void Refresh()
     if (g_tabs != nullptr) {
         InvalidateRect(g_tabs, nullptr, TRUE);
     }
+    RepaintAll();
 }
 
 // ---------------------------------------------------------------------------
@@ -1626,15 +1714,20 @@ void Layout(int width, int height)
     const int contentWidth = content.right - content.left;
     const int contentHeight = content.bottom - content.top;
 
+    MoveWindow(g_pageBackground, contentX, contentY, contentWidth,
+               contentHeight, TRUE);
+
+    // The view controls are children of the page panel, so their coordinates
+    // are relative to its client area.
     switch (g_view) {
     case View::Install:
-        LayoutInstall(contentX, contentY, contentWidth, contentHeight);
+        LayoutInstall(0, 0, contentWidth, contentHeight);
         break;
     case View::Devices:
-        LayoutDevices(contentX, contentY, contentWidth, contentHeight);
+        LayoutDevices(0, 0, contentWidth, contentHeight);
         break;
     case View::Effects:
-        LayoutEffects(contentX, contentY, contentWidth, contentHeight);
+        LayoutEffects(0, 0, contentWidth, contentHeight);
         break;
     }
 
@@ -1653,6 +1746,7 @@ void Relayout()
     RECT rect{};
     GetClientRect(g_window, &rect);
     Layout(rect.right, rect.bottom);
+    RepaintAll();
 }
 
 // ---------------------------------------------------------------------------
@@ -1950,8 +2044,13 @@ void DoOpenLog()
 // Window procedure
 // ---------------------------------------------------------------------------
 
-void CreateControls(HWND window)
+void CreateControls(HWND root)
 {
+    // The tab and its header belong to the root window. Everything below the
+    // tab header is created as a child of the page panel, so the tab can never
+    // paint over the view controls.
+    HWND window = root;
+
     g_title = CreateStatic(window, IDC_TITLE, L"Better Micro APO", SS_LEFT);
     ApplyFont(g_title, g_titleFont);
     g_refresh = CreateButton(window, IDC_REFRESH, L"Refresh");
@@ -1972,6 +2071,22 @@ void CreateControls(HWND window)
         item.pszText = const_cast<wchar_t*>(tabNames[i]);
         TabCtrl_InsertItem(g_tabs, i, &item);
     }
+
+    // The tab control paints its body behind the view controls. This plain
+    // panel sits between the two: it gives the controls a stable background
+    // and stops the tab from repainting over its siblings.
+    g_pageBackground = CreateWindowExW(
+        0, kPageClass, L"",
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN, 0, 0, 0, 0,
+        window, nullptr, g_instance, nullptr);
+
+    // From here on the view controls are children of the page panel.
+    window = g_pageBackground;
+
+    // Keep the tab at the bottom of the sibling z-order so it can never paint
+    // its body over the panel or the view controls.
+    SetWindowPos(g_tabs, HWND_BOTTOM, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
     // Install view.
     g_groupFiles = CreateGroup(window, IDC_GROUP_FILES, L"Files");
@@ -2151,7 +2266,19 @@ void CreateControls(HWND window)
     g_effectsApply = CreateButton(window, IDC_EFFECTS_APPLY, L"Apply");
     g_effectsReset = CreateButton(window, IDC_EFFECTS_RESET, L"Reset");
 
-    // Shared status bar.
+    // Child windows are inserted at the top of the sibling z-order as they are
+    // created, so each group box ended up in front of the controls it frames.
+    // WS_CLIPSIBLINGS then clipped those controls away. Push every frame to
+    // the bottom so its contents always draw above it.
+    const HWND groupBoxes[] = {g_groupFiles, g_groupDevices, g_effectListGroup,
+                               g_effectGroup};
+    for (HWND group : groupBoxes) {
+        SetWindowPos(group, HWND_BOTTOM, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+
+    // Shared status bar (outside the tab).
+    window = root;
     g_status = CreateStatic(window, IDC_STATUS, L"", SS_LEFT);
     g_logButton = CreateButton(window, IDC_LOG, L"Open log");
 }
@@ -2235,6 +2362,7 @@ void OnEffectComboChanged()
 
     ShowEffectForSelected();
     UpdateEffectsUi();
+    RepaintAll();
 }
 
 LRESULT HandleNotify(LPARAM lParam)
@@ -2370,6 +2498,54 @@ LRESULT HandleNotify(LPARAM lParam)
     return 0;
 }
 
+LRESULT HandleStaticColor(WPARAM wParam, LPARAM lParam)
+{
+    HDC dc = reinterpret_cast<HDC>(wParam);
+    SetBkMode(dc, TRANSPARENT);
+    const int id = GetDlgCtrlID(reinterpret_cast<HWND>(lParam));
+    SetTextColor(dc, (id == IDC_EFFECTS_UNSAVED || id == IDC_DEVICES_UNSAVED)
+                         ? RGB(200, 0, 0)
+                         : GetSysColor(COLOR_BTNTEXT));
+    return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_BTNFACE));
+}
+
+LRESULT HandleButtonColor(WPARAM wParam)
+{
+    HDC dc = reinterpret_cast<HDC>(wParam);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
+    return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_BTNFACE));
+}
+
+// The page panel is the parent of every view control, so it receives their
+// WM_CTLCOLORSTATIC messages. Handle them here instead of in WindowProc.
+LRESULT CALLBACK PageProc(HWND window, UINT message, WPARAM wParam,
+                          LPARAM lParam)
+{
+    if (message == WM_CTLCOLORSTATIC) {
+        return HandleStaticColor(wParam, lParam);
+    }
+    if (message == WM_CTLCOLORBTN) {
+        return HandleButtonColor(wParam);
+    }
+
+    // The page panel owns the view controls, so their command and
+    // notification messages arrive here. The main window proc still handles
+    // them.
+    switch (message) {
+    case WM_COMMAND:
+    case WM_NOTIFY:
+    case WM_DRAWITEM:
+    case WM_MEASUREITEM:
+    case WM_COMPAREITEM:
+        return SendMessageW(GetParent(window), message, wParam, lParam);
+    default:
+        break;
+    }
+
+    return DefWindowProcW(window, message, wParam, lParam);
+}
+
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
                             LPARAM lParam)
 {
@@ -2381,12 +2557,14 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         UpdateViewVisibility();
         Refresh();
         SetActiveView(DefaultView());
+        RepaintAll();
         return 0;
     }
 
     case WM_SIZE:
         if (g_list) {
             Layout(LOWORD(lParam), HIWORD(lParam));
+            RepaintAll();
         }
         break;
 
@@ -2397,17 +2575,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         break;
     }
 
-    case WM_CTLCOLORSTATIC: {
-        HDC dc = reinterpret_cast<HDC>(wParam);
-        SetBkMode(dc, TRANSPARENT);
-        HWND control = reinterpret_cast<HWND>(lParam);
-        if (control == g_effectsUnsaved || control == g_devicesUnsaved) {
-            SetTextColor(dc, RGB(200, 0, 0));
-        } else {
-            SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
-        }
-        return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_BTNFACE));
-    }
+    case WM_CTLCOLORSTATIC:
+        return HandleStaticColor(wParam, lParam);
+
+    case WM_CTLCOLORBTN:
+        return HandleButtonColor(wParam);
 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
@@ -2440,6 +2612,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_EFFECT_DEVICE_COMBO:
             if (HIWORD(wParam) == CBN_SELCHANGE) {
                 OnEffectComboChanged();
+            } else if (HIWORD(wParam) == CBN_CLOSEUP) {
+                RepaintAll();
             }
             break;
         case IDC_GATE_THRESHOLD_EDIT:
@@ -2805,6 +2979,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show)
         return 1;
     }
 
+    WNDCLASSEXW pageClass{};
+    pageClass.cbSize = sizeof(pageClass);
+    pageClass.lpfnWndProc = PageProc;
+    pageClass.hInstance = instance;
+    pageClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    pageClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+    pageClass.lpszClassName = kPageClass;
+    if (!RegisterClassExW(&pageClass)) {
+        return 1;
+    }
+
     HWND window = CreateWindowExW(
         0, windowClass.lpszClassName, L"Better Micro APO",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
@@ -2815,6 +3000,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show)
 
     ShowWindow(window, show);
     UpdateWindow(window);
+    Relayout();
 
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
