@@ -67,6 +67,10 @@ add_executable(better_micro_apo_gui WIN32
     gui/apo_status.cpp
     gui/apo_util.cpp
     gui/main.cpp
+    gui/ui/structure.cpp
+    gui/ui/theme.cpp
+    gui/ui/ui_state.cpp
+    gui/ui/widgets.cpp
     "${CMAKE_BINARY_DIR}/apo_dll.rc"
 )
 
@@ -80,7 +84,7 @@ target_compile_options(better_micro_apo_gui PRIVATE
     /W4 /permissive- /EHsc /utf-8
 )
 target_link_libraries(better_micro_apo_gui PRIVATE
-    comctl32 advapi32 shell32 user32 gdi32 ole32 mmdevapi
+    comctl32 advapi32 shell32 user32 gdi32 ole32 mmdevapi uxtheme
 )
 
 # The GUI writes HKLM and controls Audiosrv, so it always asks for elevation.

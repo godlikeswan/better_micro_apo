@@ -3,6 +3,11 @@
 #include "apo_internal.h"
 #include "apo_monitor.h"
 
+#include "ui/structure.h"
+#include "ui/theme.h"
+#include "ui/ui_state.h"
+#include "ui/widgets.h"
+
 #include <commctrl.h>
 #include <shellapi.h>
 
@@ -27,199 +32,18 @@
 
 namespace {
 
-enum : int {
-    IDC_TITLE = 100,
-    IDC_REFRESH,
-    IDC_TABS,
-
-    // Install view.
-    IDC_GROUP_FILES,
-    IDC_DLL_LABEL,
-    IDC_DLL_VALUE,
-    IDC_DLL_STATUS,
-    IDC_COM_LABEL,
-    IDC_COM_VALUE,
-    IDC_COM_STATUS,
-    IDC_APO_LABEL,
-    IDC_APO_VALUE,
-    IDC_APO_STATUS,
-    IDC_OVERALL,
-    IDC_FILES_NOTE,
-    IDC_INSTALL,
-    IDC_UNINSTALL,
-
-    // Devices view.
-    IDC_GROUP_DEVICES,
-    IDC_LIST,
-    IDC_ISOLATE,
-    IDC_HINT,
-    IDC_DEVICES_UNSAVED,
-    IDC_DEVICES_APPLY,
-    IDC_DEVICES_RESET,
-
-    // Effects view.
-    IDC_EFFECT_DEVICE_LABEL,
-    IDC_EFFECT_DEVICE_COMBO,
-    IDC_EFFECT_LIST_GROUP,
-    IDC_EFFECT_LIST,
-    IDC_EFFECT_GROUP,
-    IDC_EFFECT_HEADING,
-    IDC_EFFECTS_UNSAVED,
-    IDC_EFFECTS_APPLY,
-    IDC_EFFECTS_RESET,
-    IDC_MONO_NOTE,
-
-    // Effect parameters.
-    IDC_GATE_THRESHOLD_LABEL,
-    IDC_GATE_THRESHOLD_EDIT,
-    IDC_GATE_RANGE_LABEL,
-    IDC_GATE_RANGE_EDIT,
-    IDC_GATE_ATTACK_LABEL,
-    IDC_GATE_ATTACK_EDIT,
-    IDC_GATE_HOLD_LABEL,
-    IDC_GATE_HOLD_EDIT,
-    IDC_GATE_RELEASE_LABEL,
-    IDC_GATE_RELEASE_EDIT,
-    IDC_GATE_LOOKAHEAD_LABEL,
-    IDC_GATE_LOOKAHEAD_EDIT,
-    IDC_COMP_THRESHOLD_LABEL,
-    IDC_COMP_THRESHOLD_EDIT,
-    IDC_COMP_RATIO_LABEL,
-    IDC_COMP_RATIO_EDIT,
-    IDC_COMP_ATTACK_LABEL,
-    IDC_COMP_ATTACK_EDIT,
-    IDC_COMP_RELEASE_LABEL,
-    IDC_COMP_RELEASE_EDIT,
-    IDC_MAKEUP_LABEL,
-    IDC_MAKEUP_EDIT,
-    IDC_DYNAMIC_EXTEND,
-    IDC_DYN_FREQUENCY_LABEL,
-    IDC_DYN_FREQUENCY_EDIT,
-    IDC_DYN_Q_LABEL,
-    IDC_DYN_Q_EDIT,
-    IDC_DYN_THRESHOLD_LABEL,
-    IDC_DYN_THRESHOLD_EDIT,
-    IDC_DYN_RATIO_LABEL,
-    IDC_DYN_RATIO_EDIT,
-    IDC_DYN_RANGE_LABEL,
-    IDC_DYN_RANGE_EDIT,
-    IDC_DYN_ATTACK_LABEL,
-    IDC_DYN_ATTACK_EDIT,
-    IDC_DYN_RELEASE_LABEL,
-    IDC_DYN_RELEASE_EDIT,
-    IDC_NOISE_REDUCTION_LABEL,
-    IDC_NOISE_REDUCTION_EDIT,
-    IDC_NOISE_CAPTURE,
-    IDC_NOISE_NOTE,
-    IDC_LISTEN,
-    IDC_LISTEN_NOTE,
-    IDC_METER,
-
-    // Shared status bar.
-    IDC_STATUS,
-    IDC_LOG,
-};
+using ui::FormatNumber;
+using ui::GetNumber;
+using ui::Scale;
+using ui::SetNumber;
 
 constexpr UINT WM_APP_WORK_DONE = WM_APP + 1;
 constexpr UINT_PTR kMonitorTimer = 1;
 constexpr DWORD kMeterWindowMs = 500;
 
 constexpr wchar_t kWindowClass[] = L"BetterMicroApoInstaller";
-constexpr wchar_t kPageClass[] = L"BetterMicroApoPage";
 constexpr wchar_t kInstanceMutex[] = L"Local\\better_micro_apo_gui_instance";
 
-HINSTANCE g_instance = nullptr;
-HWND g_window = nullptr;
-
-// Always-visible chrome.
-HWND g_title = nullptr;
-HWND g_refresh = nullptr;
-HWND g_tabs = nullptr;
-HWND g_pageBackground = nullptr;
-HWND g_status = nullptr;
-HWND g_logButton = nullptr;
-
-// Install view.
-HWND g_groupFiles = nullptr;
-HWND g_dllLabel = nullptr;
-HWND g_dllValue = nullptr;
-HWND g_dllStatus = nullptr;
-HWND g_comLabel = nullptr;
-HWND g_comValue = nullptr;
-HWND g_comStatus = nullptr;
-HWND g_apoLabel = nullptr;
-HWND g_apoValue = nullptr;
-HWND g_apoStatus = nullptr;
-HWND g_overall = nullptr;
-HWND g_filesNote = nullptr;
-HWND g_install = nullptr;
-HWND g_uninstall = nullptr;
-
-// Devices view.
-HWND g_groupDevices = nullptr;
-HWND g_list = nullptr;
-HWND g_isolate = nullptr;
-HWND g_hint = nullptr;
-HWND g_devicesUnsaved = nullptr;
-HWND g_devicesApply = nullptr;
-HWND g_devicesReset = nullptr;
-
-// Effects view.
-HWND g_effectDeviceLabel = nullptr;
-HWND g_effectDeviceCombo = nullptr;
-HWND g_effectListGroup = nullptr;
-HWND g_effectList = nullptr;
-HWND g_effectGroup = nullptr;
-HWND g_effectHeading = nullptr;
-HWND g_effectsUnsaved = nullptr;
-HWND g_effectsApply = nullptr;
-HWND g_effectsReset = nullptr;
-HWND g_monoNote = nullptr;
-
-HWND g_gateThresholdLabel = nullptr;
-HWND g_gateThresholdEdit = nullptr;
-HWND g_gateRangeLabel = nullptr;
-HWND g_gateRangeEdit = nullptr;
-HWND g_gateAttackLabel = nullptr;
-HWND g_gateAttackEdit = nullptr;
-HWND g_gateHoldLabel = nullptr;
-HWND g_gateHoldEdit = nullptr;
-HWND g_gateReleaseLabel = nullptr;
-HWND g_gateReleaseEdit = nullptr;
-HWND g_gateLookaheadLabel = nullptr;
-HWND g_gateLookaheadEdit = nullptr;
-HWND g_compThresholdLabel = nullptr;
-HWND g_compThresholdEdit = nullptr;
-HWND g_compRatioLabel = nullptr;
-HWND g_compRatioEdit = nullptr;
-HWND g_compAttackLabel = nullptr;
-HWND g_compAttackEdit = nullptr;
-HWND g_compReleaseLabel = nullptr;
-HWND g_compReleaseEdit = nullptr;
-HWND g_makeupLabel = nullptr;
-HWND g_makeupEdit = nullptr;
-HWND g_dynamicExtend = nullptr;
-HWND g_dynFrequencyLabel = nullptr;
-HWND g_dynFrequencyEdit = nullptr;
-HWND g_dynQLabel = nullptr;
-HWND g_dynQEdit = nullptr;
-HWND g_dynThresholdLabel = nullptr;
-HWND g_dynThresholdEdit = nullptr;
-HWND g_dynRatioLabel = nullptr;
-HWND g_dynRatioEdit = nullptr;
-HWND g_dynRangeLabel = nullptr;
-HWND g_dynRangeEdit = nullptr;
-HWND g_dynAttackLabel = nullptr;
-HWND g_dynAttackEdit = nullptr;
-HWND g_dynReleaseLabel = nullptr;
-HWND g_dynReleaseEdit = nullptr;
-HWND g_noiseReductionLabel = nullptr;
-HWND g_noiseReductionEdit = nullptr;
-HWND g_noiseCapture = nullptr;
-HWND g_noiseNote = nullptr;
-HWND g_listen = nullptr;
-HWND g_listenNote = nullptr;
-HWND g_meter = nullptr;
 
 DWORD g_clipHoldUntil = 0;
 unsigned g_dropTotal = 0;
@@ -234,11 +58,6 @@ struct MeterEntry {
 std::deque<MeterEntry> g_meterHistory;
 std::wstring g_meterText;
 
-HFONT g_font = nullptr;
-HFONT g_boldFont = nullptr;
-HFONT g_titleFont = nullptr;
-
-int g_dpi = 96;
 bool g_busy = false;
 bool g_loading = false;         // Guard for the device list.
 bool g_effectLoading = false;   // Guard for the effect list/editor.
@@ -255,26 +74,6 @@ int g_effectIndex = -1;   // Selected endpoint in the Effects combo.
 
 constexpr unsigned kNoiseCaptureMs = 3000;
 
-// The effect list rows, in display order. Each row maps to one optional stage.
-enum class EffectKind : int {
-    Noise = 0,
-    Gate,
-    Dynamic,
-    Compressor,
-    Gain,
-    Mono,
-    Count,
-};
-
-EffectKind g_effectKind = EffectKind::Noise;
-
-enum class View : int {
-    Install = 0,
-    Devices,
-    Effects,
-};
-
-View g_view = View::Install;
 
 enum class WorkKind {
     Generic,
@@ -307,223 +106,6 @@ void UpdateViewAvailability();
 void SetActiveView(View view);
 void UpdateDevicesUi();
 void UpdateEffectsUi();
-void Relayout();
-void ResizeColumns();
-
-int Scale(int value)
-{
-    return MulDiv(value, g_dpi, 96);
-}
-
-void ApplyFont(HWND control, HFONT font)
-{
-    SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-}
-
-HWND CreateStatic(HWND parent, int id, const wchar_t* text, DWORD style)
-{
-    HWND control = CreateWindowExW(
-        0, WC_STATICW, text,
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | style, 0, 0, 0, 0, parent,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
-    ApplyFont(control, g_font);
-    return control;
-}
-
-HWND CreateButton(HWND parent, int id, const wchar_t* text)
-{
-    HWND control = CreateWindowExW(
-        0, WC_BUTTONW, text,
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | BS_PUSHBUTTON,
-        0, 0, 0, 0, parent,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
-    ApplyFont(control, g_font);
-    return control;
-}
-
-// The system draws a group box frame but leaves its interior to the parent.
-// The page panel uses WS_CLIPCHILDREN, so its erase never reaches the area
-// under a group box, and hiding an effect control leaves its pixels behind.
-// Paint the face background and frame ourselves so every redraw clears it.
-LRESULT CALLBACK GroupFrameProc(HWND window, UINT message, WPARAM wParam,
-                                LPARAM lParam, UINT_PTR, DWORD_PTR)
-{
-    if (message == WM_ERASEBKGND) {
-        return 1;
-    }
-    if (message != WM_PAINT) {
-        return DefSubclassProc(window, message, wParam, lParam);
-    }
-
-    PAINTSTRUCT paint{};
-    HDC dc = BeginPaint(window, &paint);
-
-    RECT client{};
-    GetClientRect(window, &client);
-    FillRect(dc, &client, GetSysColorBrush(COLOR_BTNFACE));
-
-    wchar_t caption[128]{};
-    GetWindowTextW(window, caption, static_cast<int>(std::size(caption)));
-
-    HFONT font = reinterpret_cast<HFONT>(
-        SendMessageW(window, WM_GETFONT, 0, 0));
-    HGDIOBJ oldFont = nullptr;
-    if (font != nullptr) {
-        oldFont = SelectObject(dc, font);
-    }
-
-    SIZE text{};
-    GetTextExtentPoint32W(dc, caption, static_cast<int>(wcslen(caption)),
-                          &text);
-
-    SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
-
-    const int gap = Scale(8);
-    const int lineY = text.cy / 2;
-
-    RECT captionRect{client.left + gap, 0, client.left + gap + text.cx,
-                     text.cy};
-    DrawTextW(dc, caption, -1, &captionRect,
-              DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-
-    const int afterCaption = captionRect.right + gap;
-    const HBRUSH line = GetSysColorBrush(COLOR_BTNSHADOW);
-    RECT topLeft{client.left, lineY, client.left + gap, lineY + 1};
-    RECT topRight{afterCaption, lineY, client.right, lineY + 1};
-    RECT left{client.left, lineY, client.left + 1, client.bottom - 1};
-    RECT right{client.right - 1, lineY, client.right, client.bottom - 1};
-    RECT bottom{client.left, client.bottom - 1, client.right, client.bottom};
-    FillRect(dc, &topLeft, line);
-    FillRect(dc, &topRight, line);
-    FillRect(dc, &left, line);
-    FillRect(dc, &right, line);
-    FillRect(dc, &bottom, line);
-
-    if (oldFont != nullptr) {
-        SelectObject(dc, oldFont);
-    }
-    EndPaint(window, &paint);
-    return 0;
-}
-
-HWND CreateGroup(HWND parent, int id, const wchar_t* text)
-{
-    HWND control = CreateWindowExW(
-        0, WC_BUTTONW, text,
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_GROUPBOX, 0, 0, 0, 0,
-        parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance,
-        nullptr);
-    ApplyFont(control, g_font);
-    SetWindowSubclass(control, GroupFrameProc, 1, 0);
-    return control;
-}
-
-HWND CreateEdit(HWND parent, int id)
-{
-    HWND control = CreateWindowExW(
-        WS_EX_CLIENTEDGE, WC_EDITW, L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | ES_AUTOHSCROLL |
-            ES_RIGHT,
-        0, 0, 0, 0, parent,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
-    ApplyFont(control, g_font);
-    return control;
-}
-
-HWND CreateCheck(HWND parent, int id, const wchar_t* text)
-{
-    HWND control = CreateWindowExW(
-        0, WC_BUTTONW, text,
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | BS_AUTOCHECKBOX,
-        0, 0, 0, 0, parent,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
-    ApplyFont(control, g_font);
-    return control;
-}
-
-void CreateFonts()
-{
-    g_font = CreateFontW(
-        -MulDiv(9, g_dpi, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    g_boldFont = CreateFontW(
-        -MulDiv(9, g_dpi, 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    g_titleFont = CreateFontW(
-        -MulDiv(14, g_dpi, 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-}
-
-void AddColumn(int index, const wchar_t* text, int width)
-{
-    LVCOLUMNW column{};
-    column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
-    column.iSubItem = index;
-    column.cx = Scale(width);
-    column.pszText = const_cast<wchar_t*>(text);
-    ListView_InsertColumn(g_list, index, &column);
-}
-
-std::wstring FormatNumber(double value)
-{
-    wchar_t text[32]{};
-    swprintf_s(text, std::size(text), L"%g", value);
-    return text;
-}
-
-void SetEditNumber(HWND edit, double value)
-{
-    SetWindowTextW(edit, FormatNumber(value).c_str());
-}
-
-bool ReadEditNumber(HWND edit, double& value)
-{
-    wchar_t text[64]{};
-    GetWindowTextW(edit, text, static_cast<int>(std::size(text)));
-
-    wchar_t* end = nullptr;
-    const double parsed = std::wcstod(text, &end);
-    if (end == text) {
-        return false;
-    }
-    while (*end == L' ' || *end == L'\t') {
-        ++end;
-    }
-    if (*end != L'\0' || !std::isfinite(parsed)) {
-        return false;
-    }
-
-    value = parsed;
-    return true;
-}
-
-// ---------------------------------------------------------------------------
-// Effect list model
-// ---------------------------------------------------------------------------
-
-const wchar_t* EffectName(EffectKind kind)
-{
-    switch (kind) {
-    case EffectKind::Noise:
-        return L"Noise reduction";
-    case EffectKind::Gate:
-        return L"Gate";
-    case EffectKind::Dynamic:
-        return L"Dynamic";
-    case EffectKind::Compressor:
-        return L"Compressor";
-    case EffectKind::Gain:
-        return L"Gain";
-    case EffectKind::Mono:
-        return L"Mono";
-    default:
-        return L"";
-    }
-}
 
 bool EffectEnabled(const apo::ApoSettings& settings, EffectKind kind)
 {
@@ -816,25 +398,25 @@ void ShowEffectForSelected()
     const apo::ApoSettings& settings = g_endpoints[g_effectIndex].settings;
 
     g_effectLoading = true;
-    SetEditNumber(g_noiseReductionEdit, settings.noise.reductionDb);
-    SetEditNumber(g_gateThresholdEdit, settings.gate.thresholdDb);
-    SetEditNumber(g_gateRangeEdit, settings.gate.rangeDb);
-    SetEditNumber(g_gateAttackEdit, settings.gate.attackMs);
-    SetEditNumber(g_gateHoldEdit, settings.gate.holdMs);
-    SetEditNumber(g_gateReleaseEdit, settings.gate.releaseMs);
-    SetEditNumber(g_gateLookaheadEdit, settings.gate.lookaheadMs);
-    SetEditNumber(g_compThresholdEdit, settings.compressor.thresholdDb);
-    SetEditNumber(g_compRatioEdit, settings.compressor.ratio);
-    SetEditNumber(g_compAttackEdit, settings.compressor.attackMs);
-    SetEditNumber(g_compReleaseEdit, settings.compressor.releaseMs);
-    SetEditNumber(g_makeupEdit, settings.makeupDb);
-    SetEditNumber(g_dynFrequencyEdit, settings.dynamics.frequencyHz);
-    SetEditNumber(g_dynQEdit, settings.dynamics.q);
-    SetEditNumber(g_dynThresholdEdit, settings.dynamics.thresholdDb);
-    SetEditNumber(g_dynRatioEdit, settings.dynamics.ratio);
-    SetEditNumber(g_dynRangeEdit, settings.dynamics.rangeDb);
-    SetEditNumber(g_dynAttackEdit, settings.dynamics.attackMs);
-    SetEditNumber(g_dynReleaseEdit, settings.dynamics.releaseMs);
+    SetNumber(g_noiseReductionEdit, settings.noise.reductionDb);
+    SetNumber(g_gateThresholdEdit, settings.gate.thresholdDb);
+    SetNumber(g_gateRangeEdit, settings.gate.rangeDb);
+    SetNumber(g_gateAttackEdit, settings.gate.attackMs);
+    SetNumber(g_gateHoldEdit, settings.gate.holdMs);
+    SetNumber(g_gateReleaseEdit, settings.gate.releaseMs);
+    SetNumber(g_gateLookaheadEdit, settings.gate.lookaheadMs);
+    SetNumber(g_compThresholdEdit, settings.compressor.thresholdDb);
+    SetNumber(g_compRatioEdit, settings.compressor.ratio);
+    SetNumber(g_compAttackEdit, settings.compressor.attackMs);
+    SetNumber(g_compReleaseEdit, settings.compressor.releaseMs);
+    SetNumber(g_makeupEdit, settings.makeupDb);
+    SetNumber(g_dynFrequencyEdit, settings.dynamics.frequencyHz);
+    SetNumber(g_dynQEdit, settings.dynamics.q);
+    SetNumber(g_dynThresholdEdit, settings.dynamics.thresholdDb);
+    SetNumber(g_dynRatioEdit, settings.dynamics.ratio);
+    SetNumber(g_dynRangeEdit, settings.dynamics.rangeDb);
+    SetNumber(g_dynAttackEdit, settings.dynamics.attackMs);
+    SetNumber(g_dynReleaseEdit, settings.dynamics.releaseMs);
     SendMessageW(g_dynamicExtend, BM_SETCHECK,
                  settings.dynamics.expand ? BST_CHECKED : BST_UNCHECKED, 0);
 
@@ -869,27 +451,27 @@ bool CommitEffectEditor()
     }
 
     apo::ApoSettings settings = g_endpoints[g_effectIndex].settings;
-    if (!ReadEditNumber(g_noiseReductionEdit, settings.noise.reductionDb) ||
-        !ReadEditNumber(g_gateThresholdEdit, settings.gate.thresholdDb) ||
-        !ReadEditNumber(g_gateRangeEdit, settings.gate.rangeDb) ||
-        !ReadEditNumber(g_gateAttackEdit, settings.gate.attackMs) ||
-        !ReadEditNumber(g_gateHoldEdit, settings.gate.holdMs) ||
-        !ReadEditNumber(g_gateReleaseEdit, settings.gate.releaseMs) ||
-        !ReadEditNumber(g_gateLookaheadEdit, settings.gate.lookaheadMs) ||
-        !ReadEditNumber(g_compThresholdEdit,
+    if (!GetNumber(g_noiseReductionEdit, settings.noise.reductionDb) ||
+        !GetNumber(g_gateThresholdEdit, settings.gate.thresholdDb) ||
+        !GetNumber(g_gateRangeEdit, settings.gate.rangeDb) ||
+        !GetNumber(g_gateAttackEdit, settings.gate.attackMs) ||
+        !GetNumber(g_gateHoldEdit, settings.gate.holdMs) ||
+        !GetNumber(g_gateReleaseEdit, settings.gate.releaseMs) ||
+        !GetNumber(g_gateLookaheadEdit, settings.gate.lookaheadMs) ||
+        !GetNumber(g_compThresholdEdit,
                         settings.compressor.thresholdDb) ||
-        !ReadEditNumber(g_compRatioEdit, settings.compressor.ratio) ||
-        !ReadEditNumber(g_compAttackEdit, settings.compressor.attackMs) ||
-        !ReadEditNumber(g_compReleaseEdit, settings.compressor.releaseMs) ||
-        !ReadEditNumber(g_makeupEdit, settings.makeupDb) ||
-        !ReadEditNumber(g_dynFrequencyEdit, settings.dynamics.frequencyHz) ||
-        !ReadEditNumber(g_dynQEdit, settings.dynamics.q) ||
-        !ReadEditNumber(g_dynThresholdEdit,
+        !GetNumber(g_compRatioEdit, settings.compressor.ratio) ||
+        !GetNumber(g_compAttackEdit, settings.compressor.attackMs) ||
+        !GetNumber(g_compReleaseEdit, settings.compressor.releaseMs) ||
+        !GetNumber(g_makeupEdit, settings.makeupDb) ||
+        !GetNumber(g_dynFrequencyEdit, settings.dynamics.frequencyHz) ||
+        !GetNumber(g_dynQEdit, settings.dynamics.q) ||
+        !GetNumber(g_dynThresholdEdit,
                         settings.dynamics.thresholdDb) ||
-        !ReadEditNumber(g_dynRatioEdit, settings.dynamics.ratio) ||
-        !ReadEditNumber(g_dynRangeEdit, settings.dynamics.rangeDb) ||
-        !ReadEditNumber(g_dynAttackEdit, settings.dynamics.attackMs) ||
-        !ReadEditNumber(g_dynReleaseEdit, settings.dynamics.releaseMs)) {
+        !GetNumber(g_dynRatioEdit, settings.dynamics.ratio) ||
+        !GetNumber(g_dynRangeEdit, settings.dynamics.rangeDb) ||
+        !GetNumber(g_dynAttackEdit, settings.dynamics.attackMs) ||
+        !GetNumber(g_dynReleaseEdit, settings.dynamics.releaseMs)) {
         MessageBoxW(g_window, L"Enter a valid number in every setting.",
                     L"Better Micro APO", MB_ICONWARNING);
         return false;
@@ -902,25 +484,25 @@ bool CommitEffectEditor()
 
     // Show the clamped values so the user sees what will be saved.
     g_effectLoading = true;
-    SetEditNumber(g_noiseReductionEdit, settings.noise.reductionDb);
-    SetEditNumber(g_gateThresholdEdit, settings.gate.thresholdDb);
-    SetEditNumber(g_gateRangeEdit, settings.gate.rangeDb);
-    SetEditNumber(g_gateAttackEdit, settings.gate.attackMs);
-    SetEditNumber(g_gateHoldEdit, settings.gate.holdMs);
-    SetEditNumber(g_gateReleaseEdit, settings.gate.releaseMs);
-    SetEditNumber(g_gateLookaheadEdit, settings.gate.lookaheadMs);
-    SetEditNumber(g_compThresholdEdit, settings.compressor.thresholdDb);
-    SetEditNumber(g_compRatioEdit, settings.compressor.ratio);
-    SetEditNumber(g_compAttackEdit, settings.compressor.attackMs);
-    SetEditNumber(g_compReleaseEdit, settings.compressor.releaseMs);
-    SetEditNumber(g_makeupEdit, settings.makeupDb);
-    SetEditNumber(g_dynFrequencyEdit, settings.dynamics.frequencyHz);
-    SetEditNumber(g_dynQEdit, settings.dynamics.q);
-    SetEditNumber(g_dynThresholdEdit, settings.dynamics.thresholdDb);
-    SetEditNumber(g_dynRatioEdit, settings.dynamics.ratio);
-    SetEditNumber(g_dynRangeEdit, settings.dynamics.rangeDb);
-    SetEditNumber(g_dynAttackEdit, settings.dynamics.attackMs);
-    SetEditNumber(g_dynReleaseEdit, settings.dynamics.releaseMs);
+    SetNumber(g_noiseReductionEdit, settings.noise.reductionDb);
+    SetNumber(g_gateThresholdEdit, settings.gate.thresholdDb);
+    SetNumber(g_gateRangeEdit, settings.gate.rangeDb);
+    SetNumber(g_gateAttackEdit, settings.gate.attackMs);
+    SetNumber(g_gateHoldEdit, settings.gate.holdMs);
+    SetNumber(g_gateReleaseEdit, settings.gate.releaseMs);
+    SetNumber(g_gateLookaheadEdit, settings.gate.lookaheadMs);
+    SetNumber(g_compThresholdEdit, settings.compressor.thresholdDb);
+    SetNumber(g_compRatioEdit, settings.compressor.ratio);
+    SetNumber(g_compAttackEdit, settings.compressor.attackMs);
+    SetNumber(g_compReleaseEdit, settings.compressor.releaseMs);
+    SetNumber(g_makeupEdit, settings.makeupDb);
+    SetNumber(g_dynFrequencyEdit, settings.dynamics.frequencyHz);
+    SetNumber(g_dynQEdit, settings.dynamics.q);
+    SetNumber(g_dynThresholdEdit, settings.dynamics.thresholdDb);
+    SetNumber(g_dynRatioEdit, settings.dynamics.ratio);
+    SetNumber(g_dynRangeEdit, settings.dynamics.rangeDb);
+    SetNumber(g_dynAttackEdit, settings.dynamics.attackMs);
+    SetNumber(g_dynReleaseEdit, settings.dynamics.releaseMs);
     g_effectLoading = false;
     return true;
 }
@@ -1066,21 +648,6 @@ void SetApplyHighlight(HWND button, bool dirty)
     InvalidateRect(button, nullptr, TRUE);
 }
 
-// Sibling controls do not always repaint when the tab body or a dropdown
-// closes over them. Redraw the window and every child after layout changes.
-void RepaintAll()
-{
-    if (g_window == nullptr) {
-        return;
-    }
-    RedrawWindow(g_window, nullptr, nullptr,
-                 RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
-    if (g_pageBackground != nullptr) {
-        RedrawWindow(g_pageBackground, nullptr, nullptr,
-                     RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN |
-                         RDW_UPDATENOW);
-    }
-}
 
 void UpdateFilesUi()
 {
@@ -1128,7 +695,7 @@ void UpdateDevicesUi()
         g_deviceIndex < static_cast<int>(g_endpoints.size());
     const bool dirty = DevicesDirty();
 
-    EnableWindow(g_list, !g_busy && available);
+    EnableWindow(g_list, available);
     EnableWindow(g_isolate,
                  !g_busy && available && hasDevice &&
                      (g_endpoints[g_deviceIndex].compositePresent ||
@@ -1158,7 +725,10 @@ void UpdateEffectsUi()
     // Lock the device selector while edits are pending so a half-edited
     // device cannot be left behind. Apply or Reset unlocks it.
     EnableWindow(g_effectDeviceCombo, !g_busy && available && !dirty);
-    EnableWindow(g_effectList, !g_busy && available && hasDevice);
+    // Keep the list enabled while busy: the native disabled state repaints the
+    // whole control light. Interaction is rejected in the notification
+    // handler instead.
+    EnableWindow(g_effectList, available && hasDevice);
     EnableEffectControls(!g_busy && available && hasDevice);
     EnableWindow(g_listen, !g_busy && hasDevice);
     EnableWindow(g_effectsApply, !g_busy && available && dirty);
@@ -1179,19 +749,32 @@ void ShowDeviceForSelected()
     g_loading = false;
 }
 
+// Store each tab's availability in its item parameter. The custom dark-mode
+// tab painter reads it to gray out unreachable tabs, and the notification
+// handler uses it to refuse selection changes.
+void UpdateTabAvailability()
+{
+    if (g_tabs == nullptr) {
+        return;
+    }
+    const int count = TabCtrl_GetItemCount(g_tabs);
+    for (int i = 0; i < count; ++i) {
+        TCITEMW item{};
+        item.mask = TCIF_PARAM;
+        item.lParam = TabAvailable(i) ? 1 : 0;
+        TabCtrl_SetItem(g_tabs, i, &item);
+    }
+    InvalidateRect(g_tabs, nullptr, TRUE);
+}
+
 void UpdateViewAvailability()
 {
     if (g_view == View::Effects && !EffectsAvailable()) {
         SetActiveView(DevicesAvailable() ? View::Devices : View::Install);
-        return;
-    }
-    if (g_view == View::Devices && !DevicesAvailable()) {
+    } else if (g_view == View::Devices && !DevicesAvailable()) {
         SetActiveView(View::Install);
-        return;
     }
-    if (g_tabs != nullptr) {
-        InvalidateRect(g_tabs, nullptr, TRUE);
-    }
+    UpdateTabAvailability();
 }
 
 void SetActiveView(View view)
@@ -1291,6 +874,7 @@ void ResetEffects()
 void RebuildDeviceList(const std::wstring& selectedId)
 {
     g_loading = true;
+    SendMessageW(g_list, WM_SETREDRAW, FALSE, 0);
     ListView_DeleteAllItems(g_list);
     for (size_t i = 0; i < g_endpoints.size(); ++i) {
         const apo::Endpoint& endpoint = g_endpoints[i];
@@ -1353,12 +937,15 @@ void RebuildDeviceList(const std::wstring& selectedId)
         ListView_EnsureVisible(g_list, selectedRow, FALSE);
     }
     g_deviceIndex = selectedRow;
+    SendMessageW(g_list, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(g_list, nullptr, TRUE);
     g_loading = false;
 }
 
 void RebuildEffectCombo(const std::wstring& selectedId)
 {
     g_comboLoading = true;
+    SendMessageW(g_effectDeviceCombo, WM_SETREDRAW, FALSE, 0);
     SendMessageW(g_effectDeviceCombo, CB_RESETCONTENT, 0, 0);
 
     int selectedItem = -1;
@@ -1398,6 +985,8 @@ void RebuildEffectCombo(const std::wstring& selectedId)
     } else {
         g_effectIndex = -1;
     }
+    SendMessageW(g_effectDeviceCombo, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(g_effectDeviceCombo, nullptr, TRUE);
     g_comboLoading = false;
 }
 
@@ -1459,295 +1048,10 @@ void Refresh()
     UpdateDevicesUi();
     UpdateEffectsUi();
     ResizeColumns();
-    if (g_tabs != nullptr) {
-        InvalidateRect(g_tabs, nullptr, TRUE);
-    }
+    UpdateTabAvailability();
     RepaintAll();
 }
 
-// ---------------------------------------------------------------------------
-// Layout
-// ---------------------------------------------------------------------------
-
-void ResizeColumns()
-{
-    if (!g_list) {
-        return;
-    }
-
-    RECT rect{};
-    GetClientRect(g_list, &rect);
-    int total = rect.right - rect.left - GetSystemMetrics(SM_CXVSCROLL) -
-                Scale(2);
-    const int stateWidth = Scale(90);
-    const int apoWidth = Scale(130);
-    const int notesWidth = Scale(170);
-    int deviceWidth = total - stateWidth - apoWidth - notesWidth;
-    if (deviceWidth < Scale(140)) {
-        deviceWidth = Scale(140);
-    }
-
-    ListView_SetColumnWidth(g_list, 0, deviceWidth);
-    ListView_SetColumnWidth(g_list, 1, stateWidth);
-    ListView_SetColumnWidth(g_list, 2, apoWidth);
-    ListView_SetColumnWidth(g_list, 3, notesWidth);
-}
-
-void ResizeEffectColumns()
-{
-    if (!g_effectList) {
-        return;
-    }
-
-    RECT rect{};
-    GetClientRect(g_effectList, &rect);
-    int width = rect.right - rect.left - GetSystemMetrics(SM_CXVSCROLL) -
-                Scale(2);
-    if (width < Scale(80)) {
-        width = Scale(80);
-    }
-    ListView_SetColumnWidth(g_effectList, 0, width);
-}
-
-void LayoutInstall(int x, int y, int width, int height)
-{
-    const int gap = Scale(8);
-    int filesHeight = Scale(176);
-    if (filesHeight > height) {
-        filesHeight = height;
-    }
-    MoveWindow(g_groupFiles, x, y, width, filesHeight, TRUE);
-
-    const int innerX = x + Scale(16);
-    const int labelWidth = Scale(110);
-    const int statusWidth = Scale(110);
-    const int statusX = x + width - Scale(16) - statusWidth;
-    const int valueWidth = statusX - (innerX + labelWidth) - Scale(12);
-    int rowY = y + Scale(24);
-
-    auto placeRow = [&](HWND label, HWND value, HWND status) {
-        MoveWindow(label, innerX, rowY, labelWidth, Scale(20), TRUE);
-        MoveWindow(value, innerX + labelWidth, rowY, valueWidth, Scale(20),
-                   TRUE);
-        MoveWindow(status, statusX, rowY, statusWidth, Scale(20), TRUE);
-        rowY += Scale(26);
-    };
-    placeRow(g_dllLabel, g_dllValue, g_dllStatus);
-    placeRow(g_comLabel, g_comValue, g_comStatus);
-    placeRow(g_apoLabel, g_apoValue, g_apoStatus);
-    MoveWindow(g_filesNote, innerX, rowY, statusX + statusWidth - innerX,
-               Scale(20), TRUE);
-
-    const int buttonWidth = Scale(110);
-    const int buttonY = y + filesHeight - Scale(46);
-    MoveWindow(g_overall, innerX, buttonY + Scale(6), Scale(280), Scale(22),
-               TRUE);
-    MoveWindow(g_install,
-               x + width - Scale(16) - 2 * buttonWidth - gap, buttonY,
-               buttonWidth, Scale(30), TRUE);
-    MoveWindow(g_uninstall, x + width - Scale(16) - buttonWidth, buttonY,
-               buttonWidth, Scale(30), TRUE);
-}
-
-void LayoutDevices(int x, int y, int width, int height)
-{
-    const int gap = Scale(8);
-    MoveWindow(g_groupDevices, x, y, width, height, TRUE);
-
-    const int innerX = x + Scale(16);
-    const int innerWidth = width - Scale(32);
-    const int buttonWidth = Scale(120);
-    const int buttonY = y + height - Scale(46);
-    const int listHeight = height - Scale(24) - Scale(88);
-
-    MoveWindow(g_list, innerX, y + Scale(24), innerWidth, listHeight, TRUE);
-    MoveWindow(g_isolate, innerX, y + height - Scale(78),
-               innerWidth - Scale(260), Scale(22), TRUE);
-    MoveWindow(g_devicesUnsaved, x + width - Scale(16) - Scale(240),
-               y + height - Scale(78), Scale(240), Scale(22), TRUE);
-    MoveWindow(g_hint, innerX, y + height - Scale(42),
-               innerWidth - 2 * buttonWidth - gap - Scale(16), Scale(20),
-               TRUE);
-    MoveWindow(g_devicesReset,
-               x + width - Scale(16) - 2 * buttonWidth - gap, buttonY,
-               buttonWidth, Scale(30), TRUE);
-    MoveWindow(g_devicesApply, x + width - Scale(16) - buttonWidth, buttonY,
-               buttonWidth, Scale(30), TRUE);
-
-    ResizeColumns();
-}
-
-void LayoutEffectParams(int x, int y, int width)
-{
-    const int columnGap = Scale(16);
-    const int columnWidth = (width - columnGap) / 2;
-    const int labelWidth = Scale(110);
-    const int editWidth = std::max(Scale(50), columnWidth - labelWidth);
-
-    auto placePair = [&](HWND leftLabel, HWND leftEdit, HWND rightLabel,
-                         HWND rightEdit) {
-        MoveWindow(leftLabel, x, y, labelWidth, Scale(20), TRUE);
-        MoveWindow(leftEdit, x + labelWidth, y, editWidth, Scale(22), TRUE);
-        if (rightLabel != nullptr) {
-            const int rightX = x + columnWidth + columnGap;
-            MoveWindow(rightLabel, rightX, y, labelWidth, Scale(20), TRUE);
-            MoveWindow(rightEdit, rightX + labelWidth, y, editWidth,
-                       Scale(22), TRUE);
-        }
-        y += Scale(30);
-    };
-
-    switch (g_effectKind) {
-    case EffectKind::Noise:
-        MoveWindow(g_noiseReductionLabel, x, y, labelWidth, Scale(20), TRUE);
-        MoveWindow(g_noiseReductionEdit, x + labelWidth, y, editWidth,
-                   Scale(22), TRUE);
-        MoveWindow(g_noiseCapture, x + columnWidth + columnGap, y,
-                   columnWidth, Scale(28), TRUE);
-        y += Scale(34);
-        MoveWindow(g_noiseNote, x, y, width, Scale(36), TRUE);
-        break;
-    case EffectKind::Gate:
-        placePair(g_gateThresholdLabel, g_gateThresholdEdit,
-                  g_gateRangeLabel, g_gateRangeEdit);
-        placePair(g_gateAttackLabel, g_gateAttackEdit, g_gateHoldLabel,
-                  g_gateHoldEdit);
-        placePair(g_gateReleaseLabel, g_gateReleaseEdit,
-                  g_gateLookaheadLabel, g_gateLookaheadEdit);
-        break;
-    case EffectKind::Dynamic:
-        MoveWindow(g_dynamicExtend, x, y, columnWidth, Scale(22), TRUE);
-        y += Scale(30);
-        placePair(g_dynFrequencyLabel, g_dynFrequencyEdit, g_dynQLabel,
-                  g_dynQEdit);
-        placePair(g_dynThresholdLabel, g_dynThresholdEdit, g_dynRatioLabel,
-                  g_dynRatioEdit);
-        placePair(g_dynRangeLabel, g_dynRangeEdit, g_dynAttackLabel,
-                  g_dynAttackEdit);
-        placePair(g_dynReleaseLabel, g_dynReleaseEdit, nullptr, nullptr);
-        break;
-    case EffectKind::Compressor:
-        placePair(g_compThresholdLabel, g_compThresholdEdit,
-                  g_compRatioLabel, g_compRatioEdit);
-        placePair(g_compAttackLabel, g_compAttackEdit, g_compReleaseLabel,
-                  g_compReleaseEdit);
-        break;
-    case EffectKind::Gain:
-        placePair(g_makeupLabel, g_makeupEdit, nullptr, nullptr);
-        break;
-    case EffectKind::Mono:
-        MoveWindow(g_monoNote, x, y, width, Scale(40), TRUE);
-        break;
-    default:
-        break;
-    }
-}
-
-void LayoutEffects(int x, int y, int width, int height)
-{
-    const int gap = Scale(8);
-    const int labelWidth = Scale(60);
-    const int comboWidth = Scale(320);
-
-    MoveWindow(g_effectDeviceLabel, x, y + Scale(3), labelWidth, Scale(20),
-               TRUE);
-    MoveWindow(g_effectDeviceCombo, x + labelWidth, y, comboWidth,
-               Scale(200), TRUE);
-
-    const int top = y + Scale(34);
-    const int bottomHeight = Scale(100);
-    const int panelHeight = height - Scale(34) - bottomHeight;
-    const int listWidth = Scale(220);
-
-    MoveWindow(g_effectListGroup, x, top, listWidth, panelHeight, TRUE);
-    MoveWindow(g_effectList, x + Scale(12), top + Scale(24),
-               listWidth - Scale(24), panelHeight - Scale(36), TRUE);
-
-    const int paramX = x + listWidth + gap;
-    const int paramWidth = width - listWidth - gap;
-    MoveWindow(g_effectGroup, paramX, top, paramWidth, panelHeight, TRUE);
-
-    const int innerX = paramX + Scale(14);
-    const int innerY = top + Scale(24);
-    const int innerWidth = paramWidth - Scale(28);
-    MoveWindow(g_effectHeading, innerX, innerY, innerWidth, Scale(22), TRUE);
-    LayoutEffectParams(innerX, innerY + Scale(28), innerWidth);
-
-    const int bottomY = top + panelHeight + gap;
-    MoveWindow(g_listen, x, bottomY, Scale(230), Scale(22), TRUE);
-    MoveWindow(g_meter, x + Scale(240), bottomY, Scale(320), Scale(22),
-               TRUE);
-    MoveWindow(g_effectsUnsaved, x + width - Scale(240), bottomY,
-               Scale(240), Scale(22), TRUE);
-    MoveWindow(g_listenNote, x, bottomY + Scale(24),
-               width - 2 * Scale(120) - Scale(24), Scale(36), TRUE);
-
-    const int buttonWidth = Scale(120);
-    const int buttonY = y + height - Scale(46);
-    MoveWindow(g_effectsReset,
-               x + width - Scale(16) - 2 * buttonWidth - gap, buttonY,
-               buttonWidth, Scale(30), TRUE);
-    MoveWindow(g_effectsApply, x + width - Scale(16) - buttonWidth, buttonY,
-               buttonWidth, Scale(30), TRUE);
-
-    ResizeEffectColumns();
-}
-
-void Layout(int width, int height)
-{
-    const int margin = Scale(16);
-    int y = margin;
-
-    MoveWindow(g_title, margin, y, Scale(320), Scale(26), TRUE);
-    MoveWindow(g_refresh, width - margin - Scale(96), y, Scale(96),
-               Scale(28), TRUE);
-    y += Scale(40);
-
-    const int statusHeight = Scale(38);
-    const int tabsHeight = height - y - statusHeight;
-    MoveWindow(g_tabs, margin, y, width - 2 * margin, tabsHeight, TRUE);
-
-    RECT content{0, 0, width - 2 * margin, tabsHeight};
-    TabCtrl_AdjustRect(g_tabs, FALSE, &content);
-    const int contentX = margin + content.left;
-    const int contentY = y + content.top;
-    const int contentWidth = content.right - content.left;
-    const int contentHeight = content.bottom - content.top;
-
-    MoveWindow(g_pageBackground, contentX, contentY, contentWidth,
-               contentHeight, TRUE);
-
-    // The view controls are children of the page panel, so their coordinates
-    // are relative to its client area.
-    switch (g_view) {
-    case View::Install:
-        LayoutInstall(0, 0, contentWidth, contentHeight);
-        break;
-    case View::Devices:
-        LayoutDevices(0, 0, contentWidth, contentHeight);
-        break;
-    case View::Effects:
-        LayoutEffects(0, 0, contentWidth, contentHeight);
-        break;
-    }
-
-    const int statusY = height - statusHeight;
-    MoveWindow(g_status, margin, statusY + Scale(7),
-               width - 2 * margin - Scale(120), Scale(20), TRUE);
-    MoveWindow(g_logButton, width - margin - Scale(104), statusY, Scale(104),
-               Scale(28), TRUE);
-}
-
-void Relayout()
-{
-    if (g_window == nullptr) {
-        return;
-    }
-    RECT rect{};
-    GetClientRect(g_window, &rect);
-    Layout(rect.right, rect.bottom);
-    RepaintAll();
-}
 
 // ---------------------------------------------------------------------------
 // Operations
@@ -2044,244 +1348,6 @@ void DoOpenLog()
 // Window procedure
 // ---------------------------------------------------------------------------
 
-void CreateControls(HWND root)
-{
-    // The tab and its header belong to the root window. Everything below the
-    // tab header is created as a child of the page panel, so the tab can never
-    // paint over the view controls.
-    HWND window = root;
-
-    g_title = CreateStatic(window, IDC_TITLE, L"Better Micro APO", SS_LEFT);
-    ApplyFont(g_title, g_titleFont);
-    g_refresh = CreateButton(window, IDC_REFRESH, L"Refresh");
-
-    // The tab control must exist before the view controls so the view content
-    // is drawn on top of its body area.
-    g_tabs = CreateWindowExW(
-        0, WC_TABCONTROLW, L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | TCS_HOTTRACK,
-        0, 0, 0, 0,
-        window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_TABS)),
-        g_instance, nullptr);
-    ApplyFont(g_tabs, g_font);
-    const wchar_t* tabNames[] = {L"Install", L"Devices", L"Effects"};
-    for (int i = 0; i < 3; ++i) {
-        TCITEMW item{};
-        item.mask = TCIF_TEXT;
-        item.pszText = const_cast<wchar_t*>(tabNames[i]);
-        TabCtrl_InsertItem(g_tabs, i, &item);
-    }
-
-    // The tab control paints its body behind the view controls. This plain
-    // panel sits between the two: it gives the controls a stable background
-    // and stops the tab from repainting over its siblings.
-    g_pageBackground = CreateWindowExW(
-        0, kPageClass, L"",
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN, 0, 0, 0, 0,
-        window, nullptr, g_instance, nullptr);
-
-    // From here on the view controls are children of the page panel.
-    window = g_pageBackground;
-
-    // Keep the tab at the bottom of the sibling z-order so it can never paint
-    // its body over the panel or the view controls.
-    SetWindowPos(g_tabs, HWND_BOTTOM, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-
-    // Install view.
-    g_groupFiles = CreateGroup(window, IDC_GROUP_FILES, L"Files");
-    g_dllLabel = CreateStatic(window, IDC_DLL_LABEL, L"DLL", SS_LEFT);
-    g_dllValue = CreateStatic(window, IDC_DLL_VALUE, apo::kInstalledDll,
-                              SS_LEFT | SS_PATHELLIPSIS);
-    g_dllStatus = CreateStatic(window, IDC_DLL_STATUS, L"", SS_RIGHT);
-    g_comLabel = CreateStatic(window, IDC_COM_LABEL, L"COM class", SS_LEFT);
-    g_comValue = CreateStatic(window, IDC_COM_VALUE, apo::kClsid, SS_LEFT);
-    g_comStatus = CreateStatic(window, IDC_COM_STATUS, L"", SS_RIGHT);
-    g_apoLabel =
-        CreateStatic(window, IDC_APO_LABEL, L"APO registration", SS_LEFT);
-    g_apoValue = CreateStatic(window, IDC_APO_VALUE,
-                              L"AudioEngine\\AudioProcessingObjects",
-                              SS_LEFT | SS_PATHELLIPSIS);
-    g_apoStatus = CreateStatic(window, IDC_APO_STATUS, L"", SS_RIGHT);
-    g_overall = CreateStatic(window, IDC_OVERALL, L"", SS_LEFT);
-    ApplyFont(g_overall, g_boldFont);
-    g_filesNote = CreateStatic(
-        window, IDC_FILES_NOTE,
-        L"Install and Uninstall stop audio for about a second.", SS_LEFT);
-    g_install = CreateButton(window, IDC_INSTALL, L"Install");
-    g_uninstall = CreateButton(window, IDC_UNINSTALL, L"Uninstall");
-
-    // Devices view.
-    g_groupDevices =
-        CreateGroup(window, IDC_GROUP_DEVICES, L"Devices (PreMix)");
-    g_list = CreateWindowExW(
-        WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SHOWSELALWAYS |
-            LVS_SINGLESEL,
-        0, 0, 0, 0, window,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LIST)), g_instance,
-        nullptr);
-    ListView_SetExtendedListViewStyle(
-        g_list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
-                    LVS_EX_INFOTIP);
-    ApplyFont(g_list, g_font);
-    AddColumn(0, L"Device", 300);
-    AddColumn(1, L"State", 90);
-    AddColumn(2, L"APO", 130);
-    AddColumn(3, L"Notes", 170);
-    g_isolate = CreateCheck(window, IDC_ISOLATE, L"Ignore other effects");
-    g_hint = CreateStatic(window, IDC_HINT, L"", SS_LEFT);
-    g_devicesUnsaved =
-        CreateStatic(window, IDC_DEVICES_UNSAVED, L"", SS_RIGHT);
-    g_devicesApply = CreateButton(window, IDC_DEVICES_APPLY, L"Apply");
-    g_devicesReset = CreateButton(window, IDC_DEVICES_RESET, L"Reset");
-
-    // Effects view.
-    g_effectDeviceLabel =
-        CreateStatic(window, IDC_EFFECT_DEVICE_LABEL, L"Device:", SS_LEFT);
-    g_effectDeviceCombo = CreateWindowExW(
-        0, WC_COMBOBOXW, L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST,
-        0, 0, 0, 0, window,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_EFFECT_DEVICE_COMBO)),
-        g_instance, nullptr);
-    ApplyFont(g_effectDeviceCombo, g_font);
-
-    g_effectListGroup =
-        CreateGroup(window, IDC_EFFECT_LIST_GROUP, L"Effects");
-    g_effectList = CreateWindowExW(
-        WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL |
-            LVS_SHOWSELALWAYS | LVS_NOCOLUMNHEADER,
-        0, 0, 0, 0, window,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_EFFECT_LIST)),
-        g_instance, nullptr);
-    ListView_SetExtendedListViewStyle(
-        g_effectList,
-        LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-    ApplyFont(g_effectList, g_font);
-    {
-        LVCOLUMNW column{};
-        column.mask = LVCF_TEXT | LVCF_WIDTH;
-        column.cx = Scale(180);
-        column.pszText = const_cast<wchar_t*>(L"Effect");
-        ListView_InsertColumn(g_effectList, 0, &column);
-    }
-    for (int i = 0; i < static_cast<int>(EffectKind::Count); ++i) {
-        LVITEMW item{};
-        item.mask = LVIF_TEXT;
-        item.iItem = i;
-        item.pszText =
-            const_cast<wchar_t*>(EffectName(static_cast<EffectKind>(i)));
-        ListView_InsertItem(g_effectList, &item);
-    }
-
-    g_effectGroup =
-        CreateGroup(window, IDC_EFFECT_GROUP, L"Effect parameters");
-    g_effectHeading =
-        CreateStatic(window, IDC_EFFECT_HEADING, L"Noise reduction", SS_LEFT);
-    ApplyFont(g_effectHeading, g_boldFont);
-    g_monoNote = CreateStatic(
-        window, IDC_MONO_NOTE,
-        L"Copies the processed left channel to every other channel.",
-        SS_LEFT);
-
-    g_gateThresholdLabel = CreateStatic(
-        window, IDC_GATE_THRESHOLD_LABEL, L"Threshold (dBFS)", SS_LEFT);
-    g_gateThresholdEdit = CreateEdit(window, IDC_GATE_THRESHOLD_EDIT);
-    g_gateRangeLabel =
-        CreateStatic(window, IDC_GATE_RANGE_LABEL, L"Range (dB)", SS_LEFT);
-    g_gateRangeEdit = CreateEdit(window, IDC_GATE_RANGE_EDIT);
-    g_gateAttackLabel =
-        CreateStatic(window, IDC_GATE_ATTACK_LABEL, L"Attack (ms)", SS_LEFT);
-    g_gateAttackEdit = CreateEdit(window, IDC_GATE_ATTACK_EDIT);
-    g_gateHoldLabel =
-        CreateStatic(window, IDC_GATE_HOLD_LABEL, L"Hold (ms)", SS_LEFT);
-    g_gateHoldEdit = CreateEdit(window, IDC_GATE_HOLD_EDIT);
-    g_gateReleaseLabel = CreateStatic(window, IDC_GATE_RELEASE_LABEL,
-                                      L"Release (ms)", SS_LEFT);
-    g_gateReleaseEdit = CreateEdit(window, IDC_GATE_RELEASE_EDIT);
-    g_gateLookaheadLabel = CreateStatic(
-        window, IDC_GATE_LOOKAHEAD_LABEL, L"Lookahead (ms)", SS_LEFT);
-    g_gateLookaheadEdit = CreateEdit(window, IDC_GATE_LOOKAHEAD_EDIT);
-
-    g_compThresholdLabel = CreateStatic(
-        window, IDC_COMP_THRESHOLD_LABEL, L"Threshold (dBFS)", SS_LEFT);
-    g_compThresholdEdit = CreateEdit(window, IDC_COMP_THRESHOLD_EDIT);
-    g_compRatioLabel =
-        CreateStatic(window, IDC_COMP_RATIO_LABEL, L"Ratio (:1)", SS_LEFT);
-    g_compRatioEdit = CreateEdit(window, IDC_COMP_RATIO_EDIT);
-    g_compAttackLabel = CreateStatic(window, IDC_COMP_ATTACK_LABEL,
-                                     L"Attack (ms)", SS_LEFT);
-    g_compAttackEdit = CreateEdit(window, IDC_COMP_ATTACK_EDIT);
-    g_compReleaseLabel = CreateStatic(window, IDC_COMP_RELEASE_LABEL,
-                                      L"Release (ms)", SS_LEFT);
-    g_compReleaseEdit = CreateEdit(window, IDC_COMP_RELEASE_EDIT);
-
-    g_makeupLabel =
-        CreateStatic(window, IDC_MAKEUP_LABEL, L"Makeup (dB)", SS_LEFT);
-    g_makeupEdit = CreateEdit(window, IDC_MAKEUP_EDIT);
-
-    g_dynamicExtend =
-        CreateCheck(window, IDC_DYNAMIC_EXTEND, L"Extend quiet lows");
-    g_dynFrequencyLabel = CreateStatic(
-        window, IDC_DYN_FREQUENCY_LABEL, L"Frequency (Hz)", SS_LEFT);
-    g_dynFrequencyEdit = CreateEdit(window, IDC_DYN_FREQUENCY_EDIT);
-    g_dynQLabel = CreateStatic(window, IDC_DYN_Q_LABEL, L"Q", SS_LEFT);
-    g_dynQEdit = CreateEdit(window, IDC_DYN_Q_EDIT);
-    g_dynThresholdLabel = CreateStatic(
-        window, IDC_DYN_THRESHOLD_LABEL, L"Threshold (dBFS)", SS_LEFT);
-    g_dynThresholdEdit = CreateEdit(window, IDC_DYN_THRESHOLD_EDIT);
-    g_dynRatioLabel =
-        CreateStatic(window, IDC_DYN_RATIO_LABEL, L"Ratio (:1)", SS_LEFT);
-    g_dynRatioEdit = CreateEdit(window, IDC_DYN_RATIO_EDIT);
-    g_dynRangeLabel =
-        CreateStatic(window, IDC_DYN_RANGE_LABEL, L"Range (dB)", SS_LEFT);
-    g_dynRangeEdit = CreateEdit(window, IDC_DYN_RANGE_EDIT);
-    g_dynAttackLabel = CreateStatic(window, IDC_DYN_ATTACK_LABEL,
-                                    L"Attack (ms)", SS_LEFT);
-    g_dynAttackEdit = CreateEdit(window, IDC_DYN_ATTACK_EDIT);
-    g_dynReleaseLabel = CreateStatic(window, IDC_DYN_RELEASE_LABEL,
-                                     L"Release (ms)", SS_LEFT);
-    g_dynReleaseEdit = CreateEdit(window, IDC_DYN_RELEASE_EDIT);
-
-    g_noiseReductionLabel = CreateStatic(
-        window, IDC_NOISE_REDUCTION_LABEL, L"Reduction (dB)", SS_LEFT);
-    g_noiseReductionEdit = CreateEdit(window, IDC_NOISE_REDUCTION_EDIT);
-    g_noiseCapture =
-        CreateButton(window, IDC_NOISE_CAPTURE, L"Capture noise profile");
-    g_noiseNote = CreateStatic(window, IDC_NOISE_NOTE, L"", SS_LEFT);
-
-    g_listen = CreateCheck(window, IDC_LISTEN, L"Listen to this device");
-    g_listenNote = CreateStatic(
-        window, IDC_LISTEN_NOTE,
-        L"Plays through the default output.\r\n"
-        L"Use headphones to avoid feedback.",
-        SS_LEFT);
-    g_meter =
-        CreateStatic(window, IDC_METER, L"Peak: --  RMS: --", SS_LEFT);
-
-    g_effectsUnsaved =
-        CreateStatic(window, IDC_EFFECTS_UNSAVED, L"", SS_RIGHT);
-    g_effectsApply = CreateButton(window, IDC_EFFECTS_APPLY, L"Apply");
-    g_effectsReset = CreateButton(window, IDC_EFFECTS_RESET, L"Reset");
-
-    // Child windows are inserted at the top of the sibling z-order as they are
-    // created, so each group box ended up in front of the controls it frames.
-    // WS_CLIPSIBLINGS then clipped those controls away. Push every frame to
-    // the bottom so its contents always draw above it.
-    const HWND groupBoxes[] = {g_groupFiles, g_groupDevices, g_effectListGroup,
-                               g_effectGroup};
-    for (HWND group : groupBoxes) {
-        SetWindowPos(group, HWND_BOTTOM, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    }
-
-    // Shared status bar (outside the tab).
-    window = root;
-    g_status = CreateStatic(window, IDC_STATUS, L"", SS_LEFT);
-    g_logButton = CreateButton(window, IDC_LOG, L"Open log");
-}
 
 void OnEffectListChanged(const NMLISTVIEW& item)
 {
@@ -2402,7 +1468,7 @@ LRESULT HandleNotify(LPARAM lParam)
             }
             if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
                 if (!TabAvailable(static_cast<int>(draw->nmcd.dwItemSpec))) {
-                    draw->clrText = GetSysColor(COLOR_GRAYTEXT);
+                    draw->clrText = ui::GetTheme().color.disabledText;
                     return CDRF_NEWFONT;
                 }
                 return CDRF_DODEFAULT;
@@ -2416,8 +1482,19 @@ LRESULT HandleNotify(LPARAM lParam)
     }
 
     if (header->hwndFrom == g_effectList) {
-        if (header->code == LVN_ITEMCHANGED) {
+        switch (header->code) {
+        case LVN_ITEMCHANGING: {
+            auto* item = reinterpret_cast<NMLISTVIEW*>(lParam);
+            if (g_busy && (item->uChanged & LVIF_STATE) != 0) {
+                return TRUE;
+            }
+            break;
+        }
+        case LVN_ITEMCHANGED:
             OnEffectListChanged(*reinterpret_cast<NMLISTVIEW*>(lParam));
+            break;
+        default:
+            break;
         }
         return 0;
     }
@@ -2426,6 +1503,9 @@ LRESULT HandleNotify(LPARAM lParam)
         switch (header->code) {
         case LVN_ITEMCHANGING: {
             auto* item = reinterpret_cast<NMLISTVIEW*>(lParam);
+            if (g_busy && (item->uChanged & LVIF_STATE) != 0) {
+                return TRUE;
+            }
             if ((item->uChanged & LVIF_STATE) != 0) {
                 const bool wasChecked =
                     ((item->uOldState & LVIS_STATEIMAGEMASK) >> 12) == 2;
@@ -2484,7 +1564,7 @@ LRESULT HandleNotify(LPARAM lParam)
                     static_cast<size_t>(draw->nmcd.lItemlParam);
                 if (index < g_endpoints.size() &&
                     !apo::IsDeviceActive(g_endpoints[index].state)) {
-                    draw->clrText = GetSysColor(COLOR_GRAYTEXT);
+                    draw->clrText = ui::GetTheme().color.disabledText;
                 }
                 return CDRF_DODEFAULT;
             }
@@ -2498,35 +1578,47 @@ LRESULT HandleNotify(LPARAM lParam)
     return 0;
 }
 
-LRESULT HandleStaticColor(WPARAM wParam, LPARAM lParam)
-{
-    HDC dc = reinterpret_cast<HDC>(wParam);
-    SetBkMode(dc, TRANSPARENT);
-    const int id = GetDlgCtrlID(reinterpret_cast<HWND>(lParam));
-    SetTextColor(dc, (id == IDC_EFFECTS_UNSAVED || id == IDC_DEVICES_UNSAVED)
-                         ? RGB(200, 0, 0)
-                         : GetSysColor(COLOR_BTNTEXT));
-    return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_BTNFACE));
-}
 
-LRESULT HandleButtonColor(WPARAM wParam)
+LRESULT HandleStaticColorMessage(WPARAM wParam, LPARAM lParam)
 {
-    HDC dc = reinterpret_cast<HDC>(wParam);
-    SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
-    return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_BTNFACE));
+    const int id = GetDlgCtrlID(reinterpret_cast<HWND>(lParam));
+    const bool error =
+        id == IDC_EFFECTS_UNSAVED || id == IDC_DEVICES_UNSAVED;
+    return ui::HandleStaticColor(reinterpret_cast<HDC>(wParam), error);
 }
 
 // The page panel is the parent of every view control, so it receives their
-// WM_CTLCOLORSTATIC messages. Handle them here instead of in WindowProc.
+// WM_CTLCOLOR messages. Handle them here instead of in WindowProc.
 LRESULT CALLBACK PageProc(HWND window, UINT message, WPARAM wParam,
                           LPARAM lParam)
 {
-    if (message == WM_CTLCOLORSTATIC) {
-        return HandleStaticColor(wParam, lParam);
+    switch (message) {
+    case WM_ERASEBKGND: {
+        RECT rect{};
+        GetClientRect(window, &rect);
+        FillRect(reinterpret_cast<HDC>(wParam), &rect,
+                 ui::GetTheme().backgroundBrush);
+        return 1;
     }
-    if (message == WM_CTLCOLORBTN) {
-        return HandleButtonColor(wParam);
+    case WM_PAINT: {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(window, &paint);
+        RECT rect{};
+        GetClientRect(window, &rect);
+        FillRect(dc, &rect, ui::GetTheme().backgroundBrush);
+        EndPaint(window, &paint);
+        return 0;
+    }
+    case WM_CTLCOLORSTATIC:
+        return HandleStaticColorMessage(wParam, lParam);
+    case WM_CTLCOLORBTN:
+        return ui::HandleButtonColor(reinterpret_cast<HDC>(wParam));
+    case WM_CTLCOLOREDIT:
+        return ui::HandleEditColor(reinterpret_cast<HDC>(wParam));
+    case WM_CTLCOLORLISTBOX:
+        return ui::HandleListBoxColor(reinterpret_cast<HDC>(wParam));
+    default:
+        break;
     }
 
     // The page panel owns the view controls, so their command and
@@ -2552,12 +1644,33 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
     switch (message) {
     case WM_CREATE: {
         g_window = window;
-        CreateFonts();
+        ui::CreateFonts();
         CreateControls(window);
+        ui::ApplyNativeThemeToChildren(window);
+        ui::ApplyListStateImages(g_list);
+        ui::ApplyListStateImages(g_effectList);
         UpdateViewVisibility();
         Refresh();
         SetActiveView(DefaultView());
         RepaintAll();
+        return 0;
+    }
+
+    case WM_ERASEBKGND: {
+        RECT rect{};
+        GetClientRect(window, &rect);
+        FillRect(reinterpret_cast<HDC>(wParam), &rect,
+                 ui::GetTheme().backgroundBrush);
+        return 1;
+    }
+
+    case WM_PAINT: {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(window, &paint);
+        RECT rect{};
+        GetClientRect(window, &rect);
+        FillRect(dc, &rect, ui::GetTheme().backgroundBrush);
+        EndPaint(window, &paint);
         return 0;
     }
 
@@ -2568,6 +1681,28 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         }
         break;
 
+    case WM_SETTINGCHANGE:
+        if (wParam == 0 && lParam != 0 &&
+            wcscmp(reinterpret_cast<const wchar_t*>(lParam),
+                   L"ImmersiveColorSet") == 0) {
+            ui::RefreshTheme();
+            ui::ApplyTitleBarTheme(window);
+            ui::ApplyNativeThemeToChildren(window);
+            ui::ApplyListStateImages(g_list);
+            ui::ApplyListStateImages(g_effectList);
+            RepaintAll();
+        }
+        break;
+
+    case WM_THEMECHANGED:
+        ui::RefreshTheme();
+        ui::ApplyTitleBarTheme(window);
+        ui::ApplyNativeThemeToChildren(window);
+        ui::ApplyListStateImages(g_list);
+        ui::ApplyListStateImages(g_effectList);
+        RepaintAll();
+        break;
+
     case WM_GETMINMAXINFO: {
         auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
         info->ptMinTrackSize.x = Scale(940);
@@ -2576,10 +1711,16 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
     }
 
     case WM_CTLCOLORSTATIC:
-        return HandleStaticColor(wParam, lParam);
+        return HandleStaticColorMessage(wParam, lParam);
 
     case WM_CTLCOLORBTN:
-        return HandleButtonColor(wParam);
+        return ui::HandleButtonColor(reinterpret_cast<HDC>(wParam));
+
+    case WM_CTLCOLOREDIT:
+        return ui::HandleEditColor(reinterpret_cast<HDC>(wParam));
+
+    case WM_CTLCOLORLISTBOX:
+        return ui::HandleListBoxColor(reinterpret_cast<HDC>(wParam));
 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
@@ -2772,15 +1913,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         if (g_worker.joinable()) {
             g_worker.join();
         }
-        if (g_font) {
-            DeleteObject(g_font);
-        }
-        if (g_boldFont) {
-            DeleteObject(g_boldFont);
-        }
-        if (g_titleFont) {
-            DeleteObject(g_titleFont);
-        }
+        ui::DestroyFonts();
+        ui::ShutdownTheme();
         PostQuitMessage(0);
         break;
 
@@ -2966,16 +2100,21 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show)
                      ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&controls);
 
+    // Read the system app theme before any window is created so the first
+    // paint already uses the right palette and native control theme.
+    ui::InitializeTheme();
+
     WNDCLASSEXW windowClass{};
     windowClass.cbSize = sizeof(windowClass);
     windowClass.lpfnWndProc = WindowProc;
     windowClass.hInstance = instance;
     windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     windowClass.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-    windowClass.hbrBackground =
-        reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+    // The theme brushes are recreated when the system theme changes, so the
+    // classes leave the background to WM_ERASEBKGND instead of caching one.
     windowClass.lpszClassName = kWindowClass;
     if (!RegisterClassExW(&windowClass)) {
+        ui::ShutdownTheme();
         return 1;
     }
 
@@ -2984,9 +2123,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show)
     pageClass.lpfnWndProc = PageProc;
     pageClass.hInstance = instance;
     pageClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    pageClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
     pageClass.lpszClassName = kPageClass;
     if (!RegisterClassExW(&pageClass)) {
+        ui::ShutdownTheme();
         return 1;
     }
 
@@ -2995,8 +2134,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show)
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
         Scale(1040), Scale(820), nullptr, nullptr, instance, nullptr);
     if (!window) {
+        ui::ShutdownTheme();
         return 1;
     }
+
+    ui::ApplyTitleBarTheme(window);
 
     ShowWindow(window, show);
     UpdateWindow(window);
@@ -3009,3 +2151,4 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show)
     }
     return static_cast<int>(message.wParam);
 }
+

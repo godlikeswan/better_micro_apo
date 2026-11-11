@@ -116,6 +116,43 @@ least one bound device, and **Effects** requires a full install and at least one
 bound device. The app opens on the most advanced available tab and falls back
 when an operation removes a prerequisite.
 
+The UI is split into small modules so a view describes *what* controls it has
+without also owning their construction or geometry. `gui/ui/ui_state.*` holds
+the control identifiers, handles, fonts, DPI, and the selected view/effect;
+`gui/ui/widgets.*` provides the reusable control factories, font helpers, and
+number-field parsing; `gui/ui/structure.*` builds the control tree and lays it
+out; and `gui/ui/theme.*` owns the palette, system-theme detection, native
+control theming, and the `WM_CTLCOLOR` handlers. `gui/main.cpp` keeps the app
+logic, background work, monitor, and message routing. Changing a number field
+into a slider, or adding a control to a view, is therefore local to the widget
+factory, the view construction, and its layout function.
+
+The theme follows the Windows app mode (`AppsUseLightTheme`). The app reads it
+before creating any window and reacts to `WM_SETTINGCHANGE`/`WM_THEMECHANGED`
+for live switching. Light mode keeps the native themed appearance. Dark mode
+applies the DWM dark title bar, themes the native edit, combo, list, and header
+controls, and owner-draws the tab strip, push buttons, and checkboxes through
+subclasses in `gui/ui/widgets.cpp`. The tab item parameter stores whether a tab
+is reachable, so the custom painter can gray out unavailable tabs.
+
+List checkboxes are drawn from the control's state image list. In dark mode the
+app replaces the two native glyphs inside that list (`ImageList_Replace`) instead
+of installing a list of its own, because applying a window theme makes comctl32
+recreate and destroy the state image list; a cached handle would go stale and
+could alias the replacement. The glyph is drawn at the list's real icon size
+(13×13 at 96 DPI), not the 15px standalone box, or the border falls outside the
+bitmap. The list maps check-state index 1 (unchecked) to image 0 and index 2
+(checked) to image 1, so both images carry the same glyph as the regular
+checkboxes. Switching back to light mode keeps the native glyphs that comctl32
+rebuilds for the light theme.
+
+While a background operation runs, both lists stay enabled and reject state
+changes in `LVN_ITEMCHANGING`. Disabling a themed list makes the native control
+paint its disabled background light, which caused a white panel for the whole
+busy period. Full repaints invalidate the window and its children without
+`RDW_UPDATENOW`, so layout changes coalesce into one paint instead of flashing
+intermediate frames.
+
 The **Devices** view owns binding and the per-device `isolate_effects` option.
 Its Apply writes only bindings and isolation; effect edits are left for the
 Effects view. **Reset** restores the persisted checkboxes and reloads only the
