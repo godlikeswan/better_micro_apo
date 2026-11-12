@@ -31,6 +31,46 @@ double EffectiveSampleRate(const AudioFormat& format)
 
 void GateStage::Configure(const AudioFormat& format)
 {
+    m_channels = format.channels;
+
+    // Reserve the largest lookahead the settings clamp allows, so a live
+    // Update can lengthen the delay without allocating.
+    constexpr double kMaxLookaheadMs = 300.0;
+    const double sampleRate = EffectiveSampleRate(format);
+    m_delayCapacityFrames =
+        static_cast<UINT32>(kMaxLookaheadMs * 0.001 * sampleRate + 0.5);
+    if (m_delayCapacityFrames > 0 && m_channels > 0)
+    {
+        m_delay.assign(
+            static_cast<size_t>(m_delayCapacityFrames) * m_channels, 0.0);
+    }
+    else
+    {
+        m_delay.clear();
+        m_delayCapacityFrames = 0;
+    }
+
+    ApplyCoefficients(format);
+    Reset();
+}
+
+void GateStage::Update(const ApoSettings& settings, const AudioFormat& format)
+{
+    const bool wasEnabled = m_settings.enabled;
+    const double oldLookahead = m_settings.lookaheadMs;
+    m_settings = settings.gate;
+    ApplyCoefficients(format);
+
+    // Changing the delay length or bypass state invalidates the buffered tail.
+    if (wasEnabled != m_settings.enabled ||
+        oldLookahead != m_settings.lookaheadMs)
+    {
+        Reset();
+    }
+}
+
+void GateStage::ApplyCoefficients(const AudioFormat& format)
+{
     const double sampleRate = EffectiveSampleRate(format);
 
     m_thresholdLinear = DecibelsToLinear(m_settings.thresholdDb);
@@ -38,26 +78,20 @@ void GateStage::Configure(const AudioFormat& format)
     m_attackCoeff = TimeCoefficient(m_settings.attackMs, sampleRate);
     m_releaseCoeff = TimeCoefficient(m_settings.releaseMs, sampleRate);
 
-    m_channels = format.channels;
     const double lookaheadSeconds = m_settings.lookaheadMs * 0.001;
-    m_delayFrames = static_cast<UINT32>(lookaheadSeconds * sampleRate + 0.5);
-    if (m_delayFrames > 0 && m_channels > 0)
+    UINT32 delayFrames =
+        static_cast<UINT32>(lookaheadSeconds * sampleRate + 0.5);
+    if (delayFrames > m_delayCapacityFrames)
     {
-        m_delay.assign(static_cast<size_t>(m_delayFrames) * m_channels, 0.0);
+        delayFrames = m_delayCapacityFrames;
     }
-    else
-    {
-        m_delay.clear();
-        m_delayFrames = 0;
-    }
+    m_delayFrames = delayFrames;
 
     // The detector runs ahead of the delayed audio, so extend the hold by the
     // lookahead to keep the same hold time at the output.
     const double holdSeconds = m_settings.holdMs * 0.001;
     m_holdFrames = static_cast<UINT32>(holdSeconds * sampleRate + 0.5) +
                    m_delayFrames;
-
-    Reset();
 }
 
 void GateStage::Reset()
@@ -71,6 +105,11 @@ void GateStage::Reset()
 
 void GateStage::Process(double* samples, UINT32 frames, UINT32 channels)
 {
+    if (!m_settings.enabled)
+    {
+        return;
+    }
+
     const bool lookahead =
         m_delayFrames > 0 && channels == m_channels &&
         m_delay.size() >= static_cast<size_t>(m_delayFrames) * channels;
@@ -130,13 +169,29 @@ void GateStage::Process(double* samples, UINT32 frames, UINT32 channels)
 
 void CompressorStage::Configure(const AudioFormat& format)
 {
+    ApplyCoefficients(format);
+    Reset();
+}
+
+void CompressorStage::Update(const ApoSettings& settings,
+                             const AudioFormat& format)
+{
+    const bool wasEnabled = m_settings.enabled;
+    m_settings = settings.compressor;
+    ApplyCoefficients(format);
+    if (wasEnabled != m_settings.enabled)
+    {
+        Reset();
+    }
+}
+
+void CompressorStage::ApplyCoefficients(const AudioFormat& format)
+{
     const double sampleRate = EffectiveSampleRate(format);
 
     m_thresholdLinear = DecibelsToLinear(m_settings.thresholdDb);
     m_attackCoeff = TimeCoefficient(m_settings.attackMs, sampleRate);
     m_releaseCoeff = TimeCoefficient(m_settings.releaseMs, sampleRate);
-
-    Reset();
 }
 
 void CompressorStage::Reset()
@@ -146,6 +201,11 @@ void CompressorStage::Reset()
 
 void CompressorStage::Process(double* samples, UINT32 frames, UINT32 channels)
 {
+    if (!m_settings.enabled)
+    {
+        return;
+    }
+
     const double ratio = (m_settings.ratio > 0.0) ? m_settings.ratio : 1.0;
 
     for (UINT32 frame = 0; frame < frames; ++frame)
@@ -180,6 +240,35 @@ void CompressorStage::Process(double* samples, UINT32 frames, UINT32 channels)
 
 void DynamicStage::Configure(const AudioFormat& format)
 {
+    m_channels = format.channels;
+    m_ic1.assign(m_channels, 0.0);
+    m_ic2.assign(m_channels, 0.0);
+    m_band.assign(m_channels, 0.0);
+
+    ApplyCoefficients(format);
+    Reset();
+}
+
+void DynamicStage::Update(const ApoSettings& settings,
+                          const AudioFormat& format)
+{
+    const bool wasEnabled = m_settings.enabled;
+    const double oldFrequency = m_settings.frequencyHz;
+    const double oldQ = m_settings.q;
+
+    m_settings = settings.dynamics;
+    ApplyCoefficients(format);
+
+    // Changing the filter shape invalidates the filter state.
+    if (wasEnabled != m_settings.enabled ||
+        oldFrequency != m_settings.frequencyHz || oldQ != m_settings.q)
+    {
+        Reset();
+    }
+}
+
+void DynamicStage::ApplyCoefficients(const AudioFormat& format)
+{
     constexpr double kPi = 3.14159265358979323846;
     const double sampleRate = EffectiveSampleRate(format);
 
@@ -208,13 +297,6 @@ void DynamicStage::Configure(const AudioFormat& format)
     // the gain does not pulse at the signal's own zero crossings.
     m_detectorAttack = TimeCoefficient(1.0, sampleRate);
     m_detectorRelease = TimeCoefficient(100.0, sampleRate);
-
-    m_channels = format.channels;
-    m_ic1.assign(m_channels, 0.0);
-    m_ic2.assign(m_channels, 0.0);
-    m_band.assign(m_channels, 0.0);
-
-    Reset();
 }
 
 void DynamicStage::Reset()
@@ -228,6 +310,11 @@ void DynamicStage::Reset()
 
 void DynamicStage::Process(double* samples, UINT32 frames, UINT32 channels)
 {
+    if (!m_settings.enabled)
+    {
+        return;
+    }
+
     if (channels != m_channels || m_ic1.size() < channels)
     {
         return;
@@ -313,11 +400,31 @@ void DynamicStage::Process(double* samples, UINT32 frames, UINT32 channels)
 void GainStage::Configure(const AudioFormat& format)
 {
     (void)format;
-    m_gain = DecibelsToLinear(m_gainDb);
+    ApplyGain();
+}
+
+void GainStage::Update(const ApoSettings& settings,
+                       const AudioFormat& format)
+{
+    (void)format;
+    m_settings = settings;
+    ApplyGain();
+}
+
+void GainStage::ApplyGain()
+{
+    m_gain = (m_settings.makeupEnabled && m_settings.makeupDb != 0.0)
+                 ? DecibelsToLinear(m_settings.makeupDb)
+                 : 1.0;
 }
 
 void GainStage::Process(double* samples, UINT32 frames, UINT32 channels)
 {
+    if (m_gain == 1.0)
+    {
+        return;
+    }
+
     const size_t count = static_cast<size_t>(frames) * channels;
     for (size_t i = 0; i < count; ++i)
     {
@@ -394,6 +501,20 @@ void NoiseStage::Configure(const AudioFormat& format)
     m_rawGain.assign(N / 2 + 1, 1.0);
 
     Reset();
+}
+
+void NoiseStage::Update(const ApoSettings& settings,
+                        const AudioFormat& format)
+{
+    (void)format;
+    const bool wasEnabled = m_settings.enabled;
+    m_settings = settings.noise;
+    m_floorGain = DecibelsToLinear(-m_settings.reductionDb);
+    if (wasEnabled != m_settings.enabled)
+    {
+        // Drop the buffered analysis so re-enabling does not replay stale audio.
+        Reset();
+    }
 }
 
 void NoiseStage::Reset()
@@ -551,8 +672,8 @@ void NoiseStage::Process(double* samples, UINT32 frames, UINT32 channels)
     constexpr size_t N = kNoiseFftSize;
     constexpr size_t H = kNoiseHopSize;
 
-    if (samples == nullptr || frames == 0 || channels == 0 ||
-        channels != m_channels)
+    if (!m_settings.enabled || samples == nullptr || frames == 0 ||
+        channels == 0 || channels != m_channels)
     {
         return;
     }
@@ -596,9 +717,15 @@ void NoiseStage::Process(double* samples, UINT32 frames, UINT32 channels)
     m_outputFrames = static_cast<UINT32>(remaining);
 }
 
+void MonoStage::Update(const ApoSettings& settings, const AudioFormat& format)
+{
+    (void)format;
+    m_enabled = settings.mono;
+}
+
 void MonoStage::Process(double* samples, UINT32 frames, UINT32 channels)
 {
-    if (channels < 2)
+    if (!m_enabled || channels < 2)
     {
         return;
     }

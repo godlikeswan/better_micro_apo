@@ -8,6 +8,8 @@
 #include <memory>
 #include <vector>
 
+#include "apo_settings.h"
+
 // Format conversion and the stage/chain framework used by the APO. Keeping
 // this separate from the COM plumbing makes adding or reordering a DSP stage a
 // matter of writing one Stage subclass and appending it in ConfigureDsp().
@@ -91,6 +93,14 @@ public:
     // and reset their state.
     virtual void Configure(const AudioFormat& format) { (void)format; }
 
+    // Retunes the stage from a new settings snapshot without allocating. Called
+    // from the real-time path when the GUI publishes a new generation.
+    virtual void Update(const ApoSettings& settings, const AudioFormat& format)
+    {
+        (void)settings;
+        (void)format;
+    }
+
     // Clears internal state without touching the configuration.
     virtual void Reset() {}
 
@@ -111,6 +121,7 @@ public:
     void Add(std::unique_ptr<Stage> stage);
     void Clear();
     void Configure(const AudioFormat& format);
+    void Update(const ApoSettings& settings);
     void Reset();
     bool NeedsSilence() const;
     void Process(const BYTE* source, BYTE* destination, UINT32 frames,

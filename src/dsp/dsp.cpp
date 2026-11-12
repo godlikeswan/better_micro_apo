@@ -324,6 +324,14 @@ void Chain::Configure(const AudioFormat& format)
     }
 }
 
+void Chain::Update(const ApoSettings& settings)
+{
+    for (auto& stage : m_stages)
+    {
+        stage->Update(settings, m_format);
+    }
+}
+
 void Chain::Reset()
 {
     for (auto& stage : m_stages)

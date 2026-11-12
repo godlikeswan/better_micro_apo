@@ -2,6 +2,7 @@
 
 #include "apo_internal.h"
 #include "apo_monitor.h"
+#include "runtime_settings.h"
 
 #include "ui/structure.h"
 #include "ui/theme.h"
@@ -39,6 +40,8 @@ using ui::SetNumber;
 
 constexpr UINT WM_APP_WORK_DONE = WM_APP + 1;
 constexpr UINT_PTR kMonitorTimer = 1;
+constexpr UINT_PTR kLiveApplyTimer = 2;
+constexpr UINT kLiveApplyDelayMs = 500;
 constexpr DWORD kMeterWindowMs = 500;
 
 constexpr wchar_t kWindowClass[] = L"BetterMicroApoInstaller";
@@ -444,7 +447,7 @@ void ShowEffectForSelected()
     g_effectLoading = false;
 }
 
-bool CommitEffectEditor()
+bool CommitEffectEditor(bool reportErrors = true)
 {
     if (!ValidEffectIndex()) {
         return true;
@@ -472,8 +475,10 @@ bool CommitEffectEditor()
         !GetNumber(g_dynRangeEdit, settings.dynamics.rangeDb) ||
         !GetNumber(g_dynAttackEdit, settings.dynamics.attackMs) ||
         !GetNumber(g_dynReleaseEdit, settings.dynamics.releaseMs)) {
-        MessageBoxW(g_window, L"Enter a valid number in every setting.",
-                    L"Better Micro APO", MB_ICONWARNING);
+        if (reportErrors) {
+            MessageBoxW(g_window, L"Enter a valid number in every setting.",
+                        L"Better Micro APO", MB_ICONWARNING);
+        }
         return false;
     }
 
@@ -482,28 +487,32 @@ bool CommitEffectEditor()
     apo::ClampSettings(settings);
     g_endpoints[g_effectIndex].settings = settings;
 
-    // Show the clamped values so the user sees what will be saved.
-    g_effectLoading = true;
-    SetNumber(g_noiseReductionEdit, settings.noise.reductionDb);
-    SetNumber(g_gateThresholdEdit, settings.gate.thresholdDb);
-    SetNumber(g_gateRangeEdit, settings.gate.rangeDb);
-    SetNumber(g_gateAttackEdit, settings.gate.attackMs);
-    SetNumber(g_gateHoldEdit, settings.gate.holdMs);
-    SetNumber(g_gateReleaseEdit, settings.gate.releaseMs);
-    SetNumber(g_gateLookaheadEdit, settings.gate.lookaheadMs);
-    SetNumber(g_compThresholdEdit, settings.compressor.thresholdDb);
-    SetNumber(g_compRatioEdit, settings.compressor.ratio);
-    SetNumber(g_compAttackEdit, settings.compressor.attackMs);
-    SetNumber(g_compReleaseEdit, settings.compressor.releaseMs);
-    SetNumber(g_makeupEdit, settings.makeupDb);
-    SetNumber(g_dynFrequencyEdit, settings.dynamics.frequencyHz);
-    SetNumber(g_dynQEdit, settings.dynamics.q);
-    SetNumber(g_dynThresholdEdit, settings.dynamics.thresholdDb);
-    SetNumber(g_dynRatioEdit, settings.dynamics.ratio);
-    SetNumber(g_dynRangeEdit, settings.dynamics.rangeDb);
-    SetNumber(g_dynAttackEdit, settings.dynamics.attackMs);
-    SetNumber(g_dynReleaseEdit, settings.dynamics.releaseMs);
-    g_effectLoading = false;
+    // Show the clamped values so the user sees what will be saved. The silent
+    // auto-apply path leaves the controls alone so it cannot rewrite a number
+    // while the user is still typing it.
+    if (reportErrors) {
+        g_effectLoading = true;
+        SetNumber(g_noiseReductionEdit, settings.noise.reductionDb);
+        SetNumber(g_gateThresholdEdit, settings.gate.thresholdDb);
+        SetNumber(g_gateRangeEdit, settings.gate.rangeDb);
+        SetNumber(g_gateAttackEdit, settings.gate.attackMs);
+        SetNumber(g_gateHoldEdit, settings.gate.holdMs);
+        SetNumber(g_gateReleaseEdit, settings.gate.releaseMs);
+        SetNumber(g_gateLookaheadEdit, settings.gate.lookaheadMs);
+        SetNumber(g_compThresholdEdit, settings.compressor.thresholdDb);
+        SetNumber(g_compRatioEdit, settings.compressor.ratio);
+        SetNumber(g_compAttackEdit, settings.compressor.attackMs);
+        SetNumber(g_compReleaseEdit, settings.compressor.releaseMs);
+        SetNumber(g_makeupEdit, settings.makeupDb);
+        SetNumber(g_dynFrequencyEdit, settings.dynamics.frequencyHz);
+        SetNumber(g_dynQEdit, settings.dynamics.q);
+        SetNumber(g_dynThresholdEdit, settings.dynamics.thresholdDb);
+        SetNumber(g_dynRatioEdit, settings.dynamics.ratio);
+        SetNumber(g_dynRangeEdit, settings.dynamics.rangeDb);
+        SetNumber(g_dynAttackEdit, settings.dynamics.attackMs);
+        SetNumber(g_dynReleaseEdit, settings.dynamics.releaseMs);
+        g_effectLoading = false;
+    }
     return true;
 }
 
@@ -514,6 +523,56 @@ void MarkSettingsDirty()
     }
     g_endpoints[g_effectIndex].settingsDirty = true;
     UpdateEffectsUi();
+
+    // Effect settings reach the running APO through the runtime file. Debounce
+    // keystrokes and apply them without stopping the audio service.
+    SetTimer(g_window, kLiveApplyTimer, kLiveApplyDelayMs, nullptr);
+}
+
+void DoLiveApply()
+{
+    KillTimer(g_window, kLiveApplyTimer);
+
+    if (g_busy || g_effectLoading || !ValidEffectIndex()) {
+        return;
+    }
+
+    apo::Endpoint& endpoint = g_endpoints[g_effectIndex];
+    if (!endpoint.settingsDirty) {
+        return;
+    }
+    if (!CommitEffectEditor(false)) {
+        return;
+    }
+
+    // A pending Devices isolation edit must not be persisted by an effect
+    // save. The Devices view applies it together with the binding change.
+    apo::ApoSettings toSave = endpoint.settings;
+    if (endpoint.isolationDirty) {
+        apo::ApoSettings persisted;
+        apo::LoadSettings(endpoint.id, persisted);
+        toSave.isolateEffects = persisted.isolateEffects;
+    }
+
+    // If the running APO has no live channel yet, leave the edit pending so
+    // the normal Apply path can perform the one restart that installs it.
+    if (!g_files.dllUpToDate ||
+        !apo::RuntimeSettingsFileReady(endpoint.id)) {
+        return;
+    }
+
+    if (!apo::SaveSettings(endpoint.id, toSave)) {
+        SetWindowTextW(g_status, L"Could not save the settings file.");
+        return;
+    }
+    if (!apo::WriteRuntimeSettings(endpoint.id, toSave)) {
+        SetWindowTextW(g_status, L"Could not apply the settings live.");
+        return;
+    }
+
+    endpoint.settingsDirty = false;
+    UpdateEffectsUi();
+    SetWindowTextW(g_status, L"Settings applied live.");
 }
 
 // ---------------------------------------------------------------------------
@@ -992,7 +1051,14 @@ void RebuildEffectCombo(const std::wstring& selectedId)
 
 void Refresh()
 {
-    StopListening();
+    // Refresh is also called after an apply. Preserve the audition stream when
+    // the same endpoint is still selected; only stop it if that endpoint is
+    // gone or the selection changed.
+    const bool wasListening = IsListening();
+    std::wstring listenId;
+    if (wasListening && ValidEffectIndex()) {
+        listenId = g_endpoints[g_effectIndex].id;
+    }
 
     std::wstring deviceId;
     if (g_deviceIndex >= 0 &&
@@ -1050,6 +1116,16 @@ void Refresh()
     ResizeColumns();
     UpdateTabAvailability();
     RepaintAll();
+
+    if (wasListening) {
+        const bool stillMonitored =
+            ValidEffectIndex() &&
+            _wcsicmp(g_endpoints[g_effectIndex].id.c_str(),
+                     listenId.c_str()) == 0;
+        if (!stillMonitored) {
+            StopListening();
+        }
+    }
 }
 
 
@@ -1063,6 +1139,7 @@ void StartWork(std::function<apo::Result()> work, const wchar_t* status)
         return;
     }
 
+    KillTimer(g_window, kLiveApplyTimer);
     g_busy = true;
     SetWindowTextW(g_status, status);
     UpdateFilesUi();
@@ -1101,13 +1178,18 @@ void DoUninstall()
 
 void StartApply(std::vector<apo::Change> changes, const wchar_t* status)
 {
-    const bool wasListening = IsListening();
+    // Only a real audio restart interrupts the audition stream. Settings-only
+    // applies reach the APO through the runtime file, so keep listening.
+    const bool restart = apo::ChangesNeedRestart(changes);
+    const bool wasListening = restart && IsListening();
     std::wstring listenId;
     if (wasListening && ValidEffectIndex()) {
         listenId = g_endpoints[g_effectIndex].id;
     }
 
-    StopListening();
+    if (restart) {
+        StopListening();
+    }
     g_resumeListen = wasListening && !listenId.empty();
     g_resumeListenId = g_resumeListen ? listenId : std::wstring();
 
@@ -1271,6 +1353,9 @@ void DoCaptureNoiseProfile()
             change.enable = true;
             change.settingsChanged = true;
             change.settings = settings;
+            // The noise profile is loaded at LockForProcess, so the APO must
+            // reload it before the restored settings take effect.
+            change.forceRestart = true;
             return apo::ApplyChanges({change});
         };
 
@@ -1419,12 +1504,19 @@ void OnEffectComboChanged()
 
     const int item = static_cast<int>(
         SendMessageW(g_effectDeviceCombo, CB_GETCURSEL, 0, 0));
+    int selected = -1;
     if (item >= 0) {
-        g_effectIndex = static_cast<int>(
+        selected = static_cast<int>(
             SendMessageW(g_effectDeviceCombo, CB_GETITEMDATA, item, 0));
-    } else {
-        g_effectIndex = -1;
     }
+
+    // The monitor stream belongs to the previously selected endpoint. Stop it
+    // when the user picks a different device instead of leaving the meter on
+    // an endpoint that is no longer shown.
+    if (selected != g_effectIndex) {
+        StopListening();
+    }
+    g_effectIndex = selected;
 
     ShowEffectForSelected();
     UpdateEffectsUi();
@@ -1856,6 +1948,17 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             }
             Refresh();
             UpdateViewAvailability();
+
+            // A Devices Apply can finish before the debounced live apply
+            // fires. Resume the pending effect save now that the worker is
+            // done; if live delivery is unavailable it stays pending for
+            // Apply.
+            if (kind == WorkKind::Generic && ValidEffectIndex() &&
+                g_endpoints[g_effectIndex].settingsDirty &&
+                g_files.dllUpToDate) {
+                SetTimer(g_window, kLiveApplyTimer, kLiveApplyDelayMs,
+                         nullptr);
+            }
         }
 
         // Restart the audition stream if it was active before Apply. The
@@ -1896,6 +1999,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             } else {
                 UpdateMeter();
             }
+        } else if (wParam == kLiveApplyTimer) {
+            DoLiveApply();
         }
         break;
 
@@ -1909,6 +2014,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
 
     case WM_DESTROY:
         KillTimer(window, kMonitorTimer);
+        KillTimer(window, kLiveApplyTimer);
         apo::StopMonitor();
         if (g_worker.joinable()) {
             g_worker.join();

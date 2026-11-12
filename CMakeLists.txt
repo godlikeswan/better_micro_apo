@@ -18,6 +18,7 @@ add_library(better_micro_apo SHARED
     src/better_micro_apo.def
     src/dsp/dsp.cpp
     src/dsp/stages.cpp
+    src/runtime_settings.cpp
 )
 target_include_directories(better_micro_apo PRIVATE src)
 target_compile_definitions(better_micro_apo PRIVATE
@@ -62,6 +63,7 @@ configure_file(gui/apo_dll.rc.in "${CMAKE_BINARY_DIR}/apo_dll.rc" @ONLY)
 add_executable(better_micro_apo_gui WIN32
     src/apo_settings.cpp
     src/dsp/dsp.cpp
+    src/runtime_settings.cpp
     gui/apo_monitor.cpp
     gui/apo_ops.cpp
     gui/apo_status.cpp

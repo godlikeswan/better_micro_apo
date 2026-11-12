@@ -96,6 +96,11 @@ struct Change {
     bool enable = false;
     bool settingsChanged = false;
     ApoSettings settings;
+
+    // Settings normally reach a running APO through the shared runtime file.
+    // Operations that must reload state from disk (a new noise profile) set
+    // this so Apply still restarts the audio service.
+    bool forceRestart = false;
 };
 
 struct Result {
@@ -112,6 +117,11 @@ bool IsElevated();
 
 std::vector<Endpoint> EnumEndpoints();
 FilesStatus GetFilesStatus();
+
+// True when applying these changes requires the audio engine to reload the
+// APO (binding/isolation edits, a forced reload, or a device whose live
+// settings channel is not ready). Settings-only changes return false.
+bool ChangesNeedRestart(const std::vector<Change>& changes);
 
 // Blocking operations: run them on a worker thread.
 Result InstallFiles();

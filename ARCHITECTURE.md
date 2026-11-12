@@ -21,11 +21,12 @@ identity and aggregation are handled by ATL (`CComObjectRootEx`, `CComCoClass`,
   assembles it from the per-device settings:
 
   ```
-  optional NoiseStage -> optional GateStage -> optional DynamicStage
-  -> optional CompressorStage -> optional GainStage (makeup) -> optional
-  MonoStage
+  NoiseStage -> GateStage -> DynamicStage -> CompressorStage
+  -> GainStage (makeup) -> MonoStage
   ```
 
+  Every stage is always in the chain and checks its own `enabled` flag, so a
+  live settings update can turn a stage on or off without rebuilding the chain.
   Adding or reordering a stage means writing one `Stage` subclass and changing
   `ConfigureDsp()`; the real-time path does not change.
 - `Chain::Process` decodes the interleaved buffer into a preallocated
@@ -104,8 +105,21 @@ GUI to replace the composite stream chain with only this APO instead of
 appending to the driver's chain. The APO still reads it from the same INI file
 but does not use it while processing.
 
-The GUI writes the same files during `Apply`, inside the existing audio-stop
-section, then restarts the audio service once.
+The GUI writes the INI files when effect settings are auto-applied (about half
+a second after the last edit) or when **Apply** runs, and publishes the same
+snapshot to `C:\ProgramData\better_micro_apo\runtime\{endpoint-guid}.dat`. The
+APO maps that file read-only in `LockForProcess` and polls a generation counter
+from `APOProcess`; a new generation retunes the existing stages in place through
+`Chain::Update`. A seqlock (`sequence`) makes a torn read impossible, and the
+writer grows the file in place so an existing mapping stays valid. The poll is a
+single generation load unless the settings changed, so the real-time path still
+does no file I/O and no allocation. On restart the INI remains authoritative:
+`LockForProcess` baselines the generation to the snapshot it just loaded.
+
+Binding and isolation changes still restart the audio service so the engine
+reloads the endpoint's effect chain. A settings-only change skips the restart
+unless the endpoint has no usable runtime file yet (the running APO would have
+no mapping to poll).
 
 ## GUI structure
 
@@ -160,17 +174,20 @@ saved isolation value, so effect edits made in the other view survive.
 
 The **Effects** view lists bound devices in a dropdown and shows every optional
 stage in a checked list. The checkboxes map directly to the enable flags in
-`ApoSettings`; selecting a row swaps the parameter panel on the right. Its Apply
-validates and clamps the editor, saves the changed devices, and restarts audio
-once. **Reset** reloads the persisted effect settings while preserving any
-pending isolation edit.
+`ApoSettings`; selecting a row swaps the parameter panel on the right. Edits are
+saved and published automatically after a short debounce, so the running APO
+picks them up without interrupting audio; a restart is only needed the first
+time an endpoint has no runtime file or when the installed DLL predates the
+runtime channel. **Apply** remains as the fallback for those cases, and
+**Reset** reloads the persisted effect settings while preserving any pending
+isolation edit.
 
 Each view tracks its own pending state. `Endpoint::settingsDirty` covers effect
-edits, while `isolateSaved`/`isolationDirty` cover the isolation checkbox. When
-effect edits are pending the device dropdown is locked and the Apply button is
-highlighted, so a half-edited device cannot be abandoned. A Devices Apply keeps
-unsaved effect edits in memory across the endpoint refresh instead of silently
-discarding them.
+edits, while `isolateSaved`/`isolationDirty` cover the isolation checkbox. An
+effect edit marks the device dirty, locks the dropdown, and highlights Apply
+until the debounced live apply saves it (or Apply is used because the live
+channel is not available). A Devices Apply keeps unsaved effect edits in memory
+across the endpoint refresh instead of silently discarding them.
 
 ## Listen monitor
 
@@ -182,9 +199,9 @@ decays instead of holding the previous level. The GUI timer samples these
 counters every 100 ms and keeps a 500 ms history: the displayed peak is the
 maximum of that history and the RMS is
 `sqrt(sum(sumSquares) / sum(samples))`. Clip and drop counters are latched and
-reset when listening starts. **Apply** stops the monitor before it restarts the
-audio service and starts it again for the same endpoint when the work finishes,
-so auditioning survives a settings change.
+reset when listening starts. **Apply** stops the monitor only when the change
+requires an audio restart, and then starts it again for the same endpoint when
+the work finishes. Settings-only applies leave the monitor running.
 
 ## Noise profile capture
 
@@ -200,7 +217,9 @@ speakers. The raw capture is written to the device's `.noise` file, then the
 real settings are restored with `noise_enabled=1` and applied again. If the
 capture or the save fails, the original settings are restored instead. Devices
 that are not bound are captured directly and only their settings file is
-written.
+written. The capture path forces an audio restart for both the passthrough
+snapshot and the restored settings, because `LockForProcess` is the only place
+the noise profile is loaded.
 
 The noise stage never reads files: `LockForProcess` loads and analyzes the
 profile before the stream starts, and `APOProcess` only uses the cached bins.

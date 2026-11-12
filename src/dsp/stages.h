@@ -18,11 +18,17 @@ public:
     explicit GateStage(const GateSettings& settings) : m_settings(settings) {}
 
     void Configure(const AudioFormat& format) override;
+    void Update(const ApoSettings& settings, const AudioFormat& format) override;
     void Reset() override;
-    bool NeedsSilence() const override { return m_delayFrames > 0; }
+    bool NeedsSilence() const override
+    {
+        return m_settings.enabled && m_delayFrames > 0;
+    }
     void Process(double* samples, UINT32 frames, UINT32 channels) override;
 
 private:
+    void ApplyCoefficients(const AudioFormat& format);
+
     GateSettings m_settings;
     double m_thresholdLinear = 1.0;
     double m_floorGain = 1.0;
@@ -33,8 +39,10 @@ private:
     bool m_open = true;
     double m_gain = 1.0;
 
-    // Delay line used by the lookahead. Empty when lookahead is zero.
+    // Delay line used by the lookahead. Sized for the maximum allowed lookahead
+    // at Configure time so Update never allocates.
     std::vector<double> m_delay;
+    UINT32 m_delayCapacityFrames = 0;
     UINT32 m_delayFrames = 0;
     UINT32 m_delayWrite = 0;
     UINT32 m_channels = 0;
@@ -51,10 +59,13 @@ public:
     }
 
     void Configure(const AudioFormat& format) override;
+    void Update(const ApoSettings& settings, const AudioFormat& format) override;
     void Reset() override;
     void Process(double* samples, UINT32 frames, UINT32 channels) override;
 
 private:
+    void ApplyCoefficients(const AudioFormat& format);
+
     CompressorSettings m_settings;
     double m_thresholdLinear = 1.0;
     double m_attackCoeff = 0.0;
@@ -75,10 +86,13 @@ public:
     }
 
     void Configure(const AudioFormat& format) override;
+    void Update(const ApoSettings& settings, const AudioFormat& format) override;
     void Reset() override;
     void Process(double* samples, UINT32 frames, UINT32 channels) override;
 
 private:
+    void ApplyCoefficients(const AudioFormat& format);
+
     DynamicSettings m_settings;
     double m_a1 = 0.0;
     double m_a2 = 0.0;
@@ -105,14 +119,17 @@ private:
 class GainStage final : public Stage
 {
 public:
-    explicit GainStage(double gainDb) : m_gainDb(gainDb) {}
+    explicit GainStage(const ApoSettings& settings) : m_settings(settings) {}
 
     void Configure(const AudioFormat& format) override;
+    void Update(const ApoSettings& settings, const AudioFormat& format) override;
     void Reset() override {}
     void Process(double* samples, UINT32 frames, UINT32 channels) override;
 
 private:
-    double m_gainDb = 0.0;
+    void ApplyGain();
+
+    ApoSettings m_settings;
     double m_gain = 1.0;
 };
 
@@ -125,8 +142,9 @@ public:
     NoiseStage(const NoiseSettings& settings, const NoiseProfile& profile);
 
     void Configure(const AudioFormat& format) override;
+    void Update(const ApoSettings& settings, const AudioFormat& format) override;
     void Reset() override;
-    bool NeedsSilence() const override { return true; }
+    bool NeedsSilence() const override { return m_settings.enabled; }
     void Process(double* samples, UINT32 frames, UINT32 channels) override;
 
 private:
@@ -162,7 +180,13 @@ private:
 class MonoStage final : public Stage
 {
 public:
+    explicit MonoStage(bool enabled) : m_enabled(enabled) {}
+
+    void Update(const ApoSettings& settings, const AudioFormat& format) override;
     void Process(double* samples, UINT32 frames, UINT32 channels) override;
+
+private:
+    bool m_enabled = false;
 };
 
 } // namespace apo::dsp

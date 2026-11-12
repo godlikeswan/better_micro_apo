@@ -10,10 +10,12 @@
 
 #include <string>
 #include <vector>
+#include <cstdint>
 
 #include "apo_ids.h"
 #include "apo_settings.h"
 #include "dsp/dsp.h"
+#include "runtime_settings.h"
 
 // Minimal capture APO.
 //
@@ -86,6 +88,12 @@ private:
     void ConfigureDsp();
     void ProcessBuffer(const BYTE* source, BYTE* destination, UINT32 frames);
 
+    // Maps the GUI's per-endpoint settings file read-only. The APO polls the
+    // generation counter in APOProcess and retunes the chain in place.
+    void OpenRuntimeSettings();
+    void CloseRuntimeSettings();
+    void PollRuntimeSettings();
+
     std::wstring m_endpointId;
     apo::ApoSettings m_settings;
     apo::NoiseProfile m_noiseProfile;
@@ -94,4 +102,9 @@ private:
     apo::dsp::AudioFormat m_formatInfo;
     std::vector<double> m_scratch;
     UINT32 m_maxFrames = 0;
+
+    HANDLE m_runtimeFile = nullptr;
+    HANDLE m_runtimeMapping = nullptr;
+    const apo::RuntimeSettingsFile* m_runtimeView = nullptr;
+    std::uint64_t m_runtimeGeneration = 0;
 };

@@ -45,22 +45,6 @@ bool EqualsIgnoreCase(const std::wstring& text, const wchar_t* expected)
 
 // Endpoint IDs are GUIDs, but keep the filename safe even if the engine ever
 // hands us something unexpected.
-std::wstring SanitizeId(const std::wstring& id)
-{
-    std::wstring safe;
-    safe.reserve(id.size());
-    for (wchar_t ch : id) {
-        const bool allowed =
-            (ch >= L'a' && ch <= L'z') || (ch >= L'A' && ch <= L'Z') ||
-            (ch >= L'0' && ch <= L'9') || ch == L'-' || ch == L'_' ||
-            ch == L'{' || ch == L'}' || ch == L'.';
-        safe.push_back(allowed ? ch : L'_');
-    }
-    if (safe.empty()) {
-        safe = L"default";
-    }
-    return safe;
-}
 
 bool ReadFileText(const std::wstring& path, std::string& text)
 {
@@ -183,6 +167,23 @@ double Clamp(double value, double low, double high)
 
 } // namespace
 
+std::wstring SafeEndpointId(const std::wstring& endpointId)
+{
+    std::wstring safe;
+    safe.reserve(endpointId.size());
+    for (wchar_t ch : endpointId) {
+        const bool allowed =
+            (ch >= L'a' && ch <= L'z') || (ch >= L'A' && ch <= L'Z') ||
+            (ch >= L'0' && ch <= L'9') || ch == L'-' || ch == L'_' ||
+            ch == L'{' || ch == L'}' || ch == L'.';
+        safe.push_back(allowed ? ch : L'_');
+    }
+    if (safe.empty()) {
+        safe = L"default";
+    }
+    return safe;
+}
+
 namespace {
 
 void ClampFinite(double& value, double fallback, double low, double high)
@@ -242,7 +243,7 @@ std::wstring SettingsDirectory()
 
 std::wstring SettingsPath(const std::wstring& endpointId)
 {
-    return SettingsDirectory() + L"\\" + SanitizeId(endpointId) + L".ini";
+    return SettingsDirectory() + L"\\" + SafeEndpointId(endpointId) + L".ini";
 }
 
 bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
@@ -454,7 +455,7 @@ bool ValidNoiseHeader(const NoiseFileHeader& header)
 
 std::wstring NoiseProfilePath(const std::wstring& endpointId)
 {
-    return SettingsDirectory() + L"\\" + SanitizeId(endpointId) + L".noise";
+    return SettingsDirectory() + L"\\" + SafeEndpointId(endpointId) + L".noise";
 }
 
 bool SaveNoiseCapture(const std::wstring& endpointId, std::uint32_t sampleRate,

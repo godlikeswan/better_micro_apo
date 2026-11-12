@@ -67,14 +67,17 @@ most advanced tab that is available.
    default output. This is the quickest way to audition the applied settings.
    Use headphones to avoid feedback from speakers. Listening stops on its own
    when you change the selection, install, or uninstall, and it restarts after
-   **Apply** so you can keep auditioning. While listening, **Peak** is the
+   an operation that has to restart audio. Settings-only applies leave it
+   running. While listening, **Peak** is the
    maximum level over the last 500 ms and **RMS** is the average level over the
    same window, both measured after the APO. **CLIP** latches when the peak
    reaches full scale, and **drops** counts gaps in the monitor stream.
-5. Click **Apply** to save the effect settings and restart audio once. **Reset**
-   discards pending effect edits. While effect edits are pending, the device
-   selector is locked and **Apply** is highlighted, so a half-edited device
-   cannot be left behind.
+5. Effect settings apply automatically about half a second after you stop
+   editing; no **Apply** click is needed. The running APO picks them up without
+   stopping audio. The first change on a device that has not published live
+   settings yet, or after the APO DLL was updated, may restart audio once.
+   **Reset** discards pending effect edits. While an effect edit is pending, the
+   device selector is locked and **Apply** is highlighted.
 
 **Open log** opens `C:\ProgramData\better_micro_apo\better_micro_apo.log`.
 
@@ -159,8 +162,8 @@ Gain is enabled by default.
 Each capture device stores its own settings in
 `C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.ini`. The APO reads
 that file when a stream starts, so one DLL serves every device. **Listen to
-this device** (Effects tab) opens a new stream and therefore plays the saved
-settings; click **Apply** first to hear unsaved edits.
+this device** (Effects tab) opens a new stream and plays the saved settings;
+edits are saved live, so the audition follows them.
 
 Older settings files that contain the removed `input_gain_db` key are migrated
 automatically: the value is folded into the compressor threshold and makeup
@@ -194,8 +197,11 @@ The GUI clamps values to a safe range:
 
 - PCM 24-bit valid samples stored in a 32-bit container (24-in-32) are not
   supported yet.
-- Settings take effect after **Apply**, which briefly stops audio. Changing
-  them while audio keeps running is not supported yet.
+- Effect settings apply live a moment after an edit, without stopping audio.
+  Binding, isolation, install, uninstall, and noise-profile capture still
+  restart the audio service briefly. The first settings change on a device that
+  has no runtime file, or after the APO DLL is updated, also restarts audio
+  once.
 - Gate lookahead delays the stream by the configured lookahead time while the
   gate is enabled. Keep it at 0 ms if you need zero latency.
 - Noise reduction delays the stream by about 512 samples while it is enabled.

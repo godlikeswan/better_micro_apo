@@ -2,6 +2,7 @@
 
 #include "apo_internal.h"
 #include "apo_resource.h"
+#include "runtime_settings.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -931,6 +932,75 @@ bool RestoreBackup(const Endpoint& endpoint, std::wstring& log)
     return ok;
 }
 
+struct ApplyPlan {
+    const Endpoint* endpoint = nullptr;
+    std::wstring fx;
+    bool wasEnabled = false;
+    bool bindingTransition = false;
+    bool isolateChanged = false;
+    bool isolateRebind = false;
+    bool needsRestart = false;
+    ApoSettings targetSettings;
+};
+
+// Pre-compute what every change will touch. Shared by ApplyChanges and the
+// GUI's restart check so the Listen monitor is only interrupted when the
+// audio engine actually has to reload the APO.
+std::vector<ApplyPlan> BuildPlans(const std::vector<Change>& changes,
+                                  const std::vector<Endpoint>& endpoints,
+                                  bool liveChannelAvailable)
+{
+    std::vector<ApplyPlan> plans(changes.size());
+
+    for (size_t i = 0; i < changes.size(); ++i) {
+        const Change& change = changes[i];
+        ApplyPlan& plan = plans[i];
+
+        const auto it = std::find_if(
+            endpoints.begin(), endpoints.end(), [&](const Endpoint& endpoint) {
+                return _wcsicmp(endpoint.id.c_str(), change.id.c_str()) == 0;
+            });
+        if (it == endpoints.end()) {
+            continue;
+        }
+
+        plan.endpoint = &*it;
+        plan.fx = detail::FxSub(it->id);
+        plan.wasEnabled = it->Enabled();
+        plan.bindingTransition = change.enable != plan.wasEnabled;
+        plan.isolateChanged =
+            change.settingsChanged &&
+            it->settings.isolateEffects != change.settings.isolateEffects;
+        plan.targetSettings =
+            change.settingsChanged ? change.settings : it->settings;
+
+        // Isolation is already saved for this device but some other composite
+        // chain is still present. Apply should finish the cleanup without
+        // making the user toggle the checkbox off and on again.
+        const bool isolateCleanup =
+            change.enable && plan.wasEnabled && it->compositePresent &&
+            plan.targetSettings.isolateEffects &&
+            HasCompositeValues(plan.fx, kCompositeFirstProp + 1,
+                               kCompositeLastProp);
+        plan.isolateRebind =
+            change.enable && plan.wasEnabled && it->compositePresent &&
+            (plan.isolateChanged || isolateCleanup);
+
+        plan.needsRestart =
+            plan.bindingTransition || plan.isolateRebind ||
+            change.forceRestart;
+
+        // A running APO that locked before the runtime file existed has no
+        // mapping to poll, so the first settings Apply still needs a restart.
+        if (!plan.needsRestart && change.settingsChanged && change.enable &&
+            (!liveChannelAvailable || !RuntimeSettingsFileReady(it->id))) {
+            plan.needsRestart = true;
+        }
+    }
+
+    return plans;
+}
+
 } // namespace
 
 Result InstallFiles()
@@ -981,6 +1051,15 @@ Result InstallFiles()
         if (settingsEc) {
             log += L"Warning: could not create " + SettingsDirectory() +
                    L"\r\n";
+        }
+
+        // The runtime directory holds the live settings files the APO maps.
+        std::error_code runtimeEc;
+        std::filesystem::create_directories(RuntimeSettingsDirectory(),
+                                            runtimeEc);
+        if (runtimeEc) {
+            log += L"Warning: could not create " +
+                   RuntimeSettingsDirectory() + L"\r\n";
         }
     }
 
@@ -1087,8 +1166,24 @@ Result ApplyChanges(const std::vector<Change>& changes)
     std::wstring log;
 
     const auto endpoints = EnumEndpoints();
+
+    // Decide up front whether anything needs the engine to reload the APO.
+    // Settings-only changes go through the shared runtime file and retune the
+    // running chain in place, so they must not interrupt the audio.
+    const bool liveChannelAvailable = GetFilesStatus().dllUpToDate;
+    const std::vector<ApplyPlan> plans =
+        BuildPlans(changes, endpoints, liveChannelAvailable);
+
+    bool needsRestart = false;
+    for (const ApplyPlan& plan : plans) {
+        if (plan.needsRestart) {
+            needsRestart = true;
+            break;
+        }
+    }
+
     AudioSession session;
-    if (!StopAudio(session, log)) {
+    if (needsRestart && !StopAudio(session, log)) {
         result.ok = false;
         result.summary = L"Could not stop the audio service.";
         result.details = log;
@@ -1096,43 +1191,40 @@ Result ApplyChanges(const std::vector<Change>& changes)
     }
     auto resume = MakeScopeExit([&] { StartAudio(session, log); });
 
-    for (const auto& change : changes) {
-        const auto it = std::find_if(
-            endpoints.begin(), endpoints.end(), [&](const Endpoint& endpoint) {
-                return _wcsicmp(endpoint.id.c_str(), change.id.c_str()) == 0;
-            });
-        if (it == endpoints.end()) {
+    for (size_t i = 0; i < changes.size(); ++i) {
+        const Change& change = changes[i];
+        const ApplyPlan& plan = plans[i];
+        if (plan.endpoint == nullptr) {
             log += L"Device not found: " + change.id + L"\r\n";
             result.ok = false;
             continue;
         }
 
-        const std::wstring fx = detail::FxSub(it->id);
-        const bool wasEnabled = it->Enabled();
-        const bool bindingTransition = change.enable != wasEnabled;
-        const bool isolateChanged =
-            change.settingsChanged &&
-            it->settings.isolateEffects != change.settings.isolateEffects;
-        const ApoSettings& targetSettings =
-            change.settingsChanged ? change.settings : it->settings;
-
-        // Isolation is already saved for this device but some other composite
-        // chain is still present. Apply should finish the cleanup without
-        // making the user toggle the checkbox off and on again.
-        const bool isolateCleanup =
-            change.enable && wasEnabled && it->compositePresent &&
-            targetSettings.isolateEffects &&
-            HasCompositeValues(fx, kCompositeFirstProp + 1,
-                               kCompositeLastProp);
-        const bool isolateRebind =
-            change.enable && wasEnabled && it->compositePresent &&
-            (isolateChanged || isolateCleanup);
+        const Endpoint& endpoint = *plan.endpoint;
+        const std::wstring& fx = plan.fx;
+        const bool bindingTransition = plan.bindingTransition;
+        const bool isolateChanged = plan.isolateChanged;
+        const bool isolateRebind = plan.isolateRebind;
+        const ApoSettings& targetSettings = plan.targetSettings;
 
         if (change.settingsChanged) {
-            if (SaveSettings(it->id, change.settings)) {
-                log += L"Saved settings for " + it->name + L".\r\n";
+            if (SaveSettings(endpoint.id, change.settings)) {
+                log += L"Saved settings for " + endpoint.name + L".\r\n";
             } else {
-                log += L"Could not save settings for " + it->name + L".\r\n";
+                log += L"Could not save settings for " + endpoint.name +
+                       L".\r\n";
+                result.ok = false;
+            }
+        }
+
+        // Publish the snapshot the APO polls. Writing it on every enabled
+        // change also creates the file after a bind, so later effect edits
+        // stay live without another restart.
+        if (change.enable &&
+            !WriteRuntimeSettings(endpoint.id, targetSettings)) {
+            log += L"Could not publish live settings for " + endpoint.name +
+                   L".\r\n";
+            if (!needsRestart) {
                 result.ok = false;
             }
         }
@@ -1149,23 +1241,24 @@ Result ApplyChanges(const std::vector<Change>& changes)
             if (bindingTransition ||
                 (isolateChanged && targetSettings.isolateEffects)) {
                 std::wstring backup;
-                if (!CreateBackup(*it, backup, log)) {
+                if (!CreateBackup(endpoint, backup, log)) {
                     result.ok = false;
                     continue;
                 }
             }
 
-            if (it->compositePresent) {
+            if (endpoint.compositePresent) {
                 std::vector<std::wstring> chain;
                 std::wstring backupText;
-                const bool haveBackup = ReadNewestBackupText(*it, backupText);
+                const bool haveBackup =
+                    ReadNewestBackupText(endpoint, backupText);
 
                 if (targetSettings.isolateEffects) {
                     // Remove every other effect-pack chain as well as the
                     // driver's stream effects, leaving this APO alone.
                     chain.push_back(kClsid);
                     if (!ClearCompositeValues(fx, kCompositeFirstProp + 1,
-                                              kCompositeLastProp, it->name,
+                                              kCompositeLastProp, endpoint.name,
                                               log)) {
                         result.ok = false;
                     }
@@ -1191,15 +1284,15 @@ Result ApplyChanges(const std::vector<Change>& changes)
                     if (!bindingTransition && haveBackup &&
                         !RestoreCompositeValues(fx, backupText,
                                                 kCompositeFirstProp + 1,
-                                                kCompositeLastProp, it->name,
-                                                log)) {
+                                                kCompositeLastProp,
+                                                endpoint.name, log)) {
                         result.ok = false;
                     }
                 }
                 if (!detail::RegWriteMultiString(HKEY_LOCAL_MACHINE, fx,
                                                  kCompositeStreamProp, chain)) {
                     log += L"Could not write the composite chain for " +
-                           it->name + L".\r\n";
+                           endpoint.name + L".\r\n";
                     result.ok = false;
                     continue;
                 }
@@ -1216,29 +1309,30 @@ Result ApplyChanges(const std::vector<Change>& changes)
                 }
             } else if (!detail::RegWriteString(HKEY_LOCAL_MACHINE, fx,
                                                kPreMixProp, kClsid)) {
-                log += L"Could not write the slot for " + it->name + L".\r\n";
+                log += L"Could not write the slot for " + endpoint.name +
+                       L".\r\n";
                 result.ok = false;
                 continue;
             }
 
-            if (it->disableSysFx) {
+            if (endpoint.disableSysFx) {
                 if (detail::RegWriteDword(HKEY_LOCAL_MACHINE,
-                                          detail::FxSub(it->id),
+                                          detail::FxSub(endpoint.id),
                                           kDisableSysFxProp, 0)) {
-                    log += L"Re-enabled system effects on " + it->name +
+                    log += L"Re-enabled system effects on " + endpoint.name +
                            L".\r\n";
                 } else {
                     log += L"Warning: could not clear the system-effects "
                            L"flag on " +
-                           it->name + L".\r\n";
+                           endpoint.name + L".\r\n";
                 }
             }
 
             log += (bindingTransition ? L"Enabled on "
                                       : L"Updated the effect binding on ") +
-                   it->name + L".\r\n";
+                   endpoint.name + L".\r\n";
         } else {
-            if (!RestoreBackup(*it, log)) {
+            if (!RestoreBackup(endpoint, log)) {
                 result.ok = false;
             }
         }
@@ -1247,6 +1341,15 @@ Result ApplyChanges(const std::vector<Change>& changes)
     result.summary = result.ok ? L"Applied." : L"Applied with errors.";
     result.details = log;
     return result;
+}
+
+bool ChangesNeedRestart(const std::vector<Change>& changes)
+{
+    const auto endpoints = EnumEndpoints();
+    const std::vector<ApplyPlan> plans =
+        BuildPlans(changes, endpoints, GetFilesStatus().dllUpToDate);
+    return std::any_of(plans.begin(), plans.end(),
+                       [](const ApplyPlan& plan) { return plan.needsRestart; });
 }
 
 } // namespace apo

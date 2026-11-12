@@ -99,6 +99,10 @@ struct ApoSettings
 // fall back to the defaults.
 void ClampSettings(ApoSettings& settings);
 
+// Filename-safe form of an endpoint GUID. Shared by the per-device settings,
+// noise profile and runtime files.
+std::wstring SafeEndpointId(const std::wstring& endpointId);
+
 // C:\ProgramData\better_micro_apo\devices
 std::wstring SettingsDirectory();
 

@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <atomic>
 #include <iterator>
 #include <string>
 
@@ -172,6 +173,7 @@ HRESULT BetterMicroApo::FinalConstruct()
 
 void BetterMicroApo::FinalRelease()
 {
+    CloseRuntimeSettings();
     Log(L"FinalRelease");
 }
 
@@ -298,12 +300,12 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
     if (!m_endpointId.empty())
     {
         apo::LoadSettings(m_endpointId, m_settings);
-        if (m_settings.noise.enabled)
-        {
-            apo::LoadNoiseProfile(m_endpointId, m_noiseProfile);
-        }
+        // Load the profile even when noise reduction is off, so enabling it
+        // live does not require a restart.
+        apo::LoadNoiseProfile(m_endpointId, m_noiseProfile);
     }
     apo::ClampSettings(m_settings);
+    OpenRuntimeSettings();
 
     m_formatInfo = info;
     m_maxFrames = (info.maxFrames > 0) ? info.maxFrames : 1;
@@ -317,6 +319,7 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
     catch (...)
     {
         CBaseAudioProcessingObject::UnlockForProcess();
+        CloseRuntimeSettings();
         m_chain.Clear();
         m_formatInfo = apo::dsp::AudioFormat{};
         m_maxFrames = 0;
@@ -353,6 +356,7 @@ STDMETHODIMP BetterMicroApo::UnlockForProcess()
 {
     const HRESULT hr = CBaseAudioProcessingObject::UnlockForProcess();
 
+    CloseRuntimeSettings();
     m_chain.Clear();
     m_noiseProfile = apo::NoiseProfile{};
     m_formatInfo = apo::dsp::AudioFormat{};
@@ -402,6 +406,10 @@ STDMETHODIMP_(void) BetterMicroApo::APOProcess(
         return;
     }
 
+    // Pick up settings the GUI published since the last buffer. The check is a
+    // single generation load unless something actually changed.
+    PollRuntimeSettings();
+
     BYTE* destination = reinterpret_cast<BYTE*>(output->pBuffer);
     const BYTE* source = reinterpret_cast<const BYTE*>(input->pBuffer);
 
@@ -450,34 +458,21 @@ void BetterMicroApo::ConfigureDsp()
 
     m_chain.Clear();
 
-    // Noise reduction must see the raw input, so it is the first stage.
-    if (m_settings.noise.enabled && m_noiseProfile.valid)
+    // Every stage is always present and checks its own enabled flag. That way a
+    // live settings update can turn a stage on or off without rebuilding (and
+    // allocating) the chain from the real-time path.
+    if (m_noiseProfile.valid)
     {
         m_chain.Add(
             std::make_unique<NoiseStage>(m_settings.noise, m_noiseProfile));
     }
-    if (m_settings.gate.enabled)
-    {
-        m_chain.Add(std::make_unique<GateStage>(m_settings.gate));
-    }
+    m_chain.Add(std::make_unique<GateStage>(m_settings.gate));
     // Frequency-selective dynamics run before the broadband compressor so they
     // see the input dynamics, not the compressed signal.
-    if (m_settings.dynamics.enabled)
-    {
-        m_chain.Add(std::make_unique<DynamicStage>(m_settings.dynamics));
-    }
-    if (m_settings.compressor.enabled)
-    {
-        m_chain.Add(std::make_unique<CompressorStage>(m_settings.compressor));
-    }
-    if (m_settings.makeupEnabled && m_settings.makeupDb != 0.0)
-    {
-        m_chain.Add(std::make_unique<GainStage>(m_settings.makeupDb));
-    }
-    if (m_settings.mono)
-    {
-        m_chain.Add(std::make_unique<MonoStage>());
-    }
+    m_chain.Add(std::make_unique<DynamicStage>(m_settings.dynamics));
+    m_chain.Add(std::make_unique<CompressorStage>(m_settings.compressor));
+    m_chain.Add(std::make_unique<GainStage>(m_settings));
+    m_chain.Add(std::make_unique<MonoStage>(m_settings.mono));
 
     m_chain.Configure(m_formatInfo);
     m_chain.Reset();
@@ -486,6 +481,129 @@ void BetterMicroApo::ConfigureDsp()
 void BetterMicroApo::ProcessBuffer(const BYTE* source, BYTE* destination, UINT32 frames)
 {
     m_chain.Process(source, destination, frames, m_scratch.data());
+}
+
+void BetterMicroApo::OpenRuntimeSettings()
+{
+    CloseRuntimeSettings();
+    if (m_endpointId.empty())
+    {
+        return;
+    }
+
+    const std::wstring path = apo::RuntimeSettingsPath(m_endpointId);
+    m_runtimeFile = CreateFileW(
+        path.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (m_runtimeFile == INVALID_HANDLE_VALUE)
+    {
+        m_runtimeFile = nullptr;
+        return;
+    }
+
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(m_runtimeFile, &size) ||
+        size.QuadPart <
+            static_cast<LONGLONG>(sizeof(apo::RuntimeSettingsFile)))
+    {
+        CloseRuntimeSettings();
+        return;
+    }
+
+    m_runtimeMapping = CreateFileMappingW(
+        m_runtimeFile, nullptr, PAGE_READONLY, 0,
+        static_cast<DWORD>(sizeof(apo::RuntimeSettingsFile)), nullptr);
+    if (m_runtimeMapping == nullptr)
+    {
+        CloseRuntimeSettings();
+        return;
+    }
+
+    m_runtimeView = static_cast<const apo::RuntimeSettingsFile*>(
+        MapViewOfFile(m_runtimeMapping, FILE_MAP_READ, 0, 0,
+                      sizeof(apo::RuntimeSettingsFile)));
+    if (m_runtimeView == nullptr)
+    {
+        CloseRuntimeSettings();
+        return;
+    }
+
+    // The INI was just loaded. Start from the current generation so the same
+    // snapshot is not applied a second time.
+    if (m_runtimeView->magic == apo::kRuntimeSettingsMagic &&
+        m_runtimeView->version == apo::kRuntimeSettingsVersion &&
+        m_runtimeView->structSize == sizeof(apo::RuntimeSettingsFile))
+    {
+        m_runtimeGeneration = m_runtimeView->generation;
+    }
+
+    Log(L"Runtime settings mapped: %s generation=%llu", path.c_str(),
+        static_cast<unsigned long long>(m_runtimeGeneration));
+}
+
+void BetterMicroApo::CloseRuntimeSettings()
+{
+    if (m_runtimeView != nullptr)
+    {
+        UnmapViewOfFile(m_runtimeView);
+        m_runtimeView = nullptr;
+    }
+    if (m_runtimeMapping != nullptr)
+    {
+        CloseHandle(m_runtimeMapping);
+        m_runtimeMapping = nullptr;
+    }
+    if (m_runtimeFile != nullptr)
+    {
+        CloseHandle(m_runtimeFile);
+        m_runtimeFile = nullptr;
+    }
+    m_runtimeGeneration = 0;
+}
+
+void BetterMicroApo::PollRuntimeSettings()
+{
+    if (m_runtimeView == nullptr)
+    {
+        return;
+    }
+
+    const apo::RuntimeSettingsFile* view = m_runtimeView;
+
+    const std::uint32_t sequence = view->sequence;
+    std::atomic_thread_fence(std::memory_order_acquire);
+    if ((sequence & 1u) != 0)
+    {
+        // The GUI is in the middle of a write.
+        return;
+    }
+
+    if (view->magic != apo::kRuntimeSettingsMagic ||
+        view->version != apo::kRuntimeSettingsVersion ||
+        view->structSize != sizeof(apo::RuntimeSettingsFile))
+    {
+        return;
+    }
+
+    const std::uint64_t generation = view->generation;
+    if (generation == m_runtimeGeneration)
+    {
+        return;
+    }
+
+    apo::ApoSettings settings = view->settings;
+    std::atomic_thread_fence(std::memory_order_acquire);
+    if (view->sequence != sequence)
+    {
+        // A write started (or finished) while the snapshot was copied.
+        return;
+    }
+
+    apo::ClampSettings(settings);
+    m_runtimeGeneration = generation;
+    m_settings = settings;
+    m_chain.Update(settings);
 }
 
 // ---------------------------------------------------------------------------
