@@ -390,10 +390,11 @@ bool UnregisterDll(const std::wstring& dll, std::wstring& log)
     return true;
 }
 
+// Filename prefix of the timestamped backups older builds wrote. It is
+// compared against directory entry names, so it must not include the folder.
 std::wstring BackupPrefix(const std::wstring& id)
 {
-    return std::wstring(kBackupDir) + L"\\FxProperties-" +
-           detail::SafeId(id) + L"-";
+    return L"FxProperties-" + detail::SafeId(id) + L"-";
 }
 
 bool ContainsClsid(const std::vector<std::wstring>& values,
@@ -472,31 +473,175 @@ std::wstring CompositeProp(int index)
     return std::wstring(kFxPropBase) + L"," + std::to_wstring(index);
 }
 
-// A backup taken while this APO was already the whole stream chain is not the
-// driver's original state. Prefer the newest backup that still has driver
-// entries, or no stream chain at all, when restoring.
-bool IsUsableDriverBackup(const std::wstring& text)
+// Exactly one backup per endpoint lives at backup\FxProperties-{id}.reg.
+// Superseded and already-restored files are moved to backup\old_backups, so
+// the next bind records the restored driver state instead of accumulating
+// snapshots of our own changes.
+std::wstring BackupBase(const std::wstring& id)
+{
+    return std::wstring(kBackupDir) + L"\\FxProperties-" + detail::SafeId(id);
+}
+
+std::filesystem::path CanonicalBackup(const std::wstring& id)
+{
+    return std::filesystem::path(BackupBase(id) + L".reg");
+}
+
+std::wstring SidecarPath(const std::filesystem::path& reg)
+{
+    std::wstring sidecar = reg.wstring();
+    sidecar.resize(sidecar.size() - 4);
+    sidecar += L".txt";
+    return sidecar;
+}
+
+enum class BackupKind {
+    Driver,   // holds the driver's own chain
+    Empty,    // no chain at all
+    OursOnly, // this APO is the whole chain; cannot restore anything
+};
+
+BackupKind ClassifyBackup(const std::wstring& text)
 {
     std::vector<std::wstring> stream;
     if (!detail::ExtractRegMultiString(text, kCompositeStreamProp, stream)) {
-        return true;
+        return BackupKind::Empty;
     }
     if (!ContainsClsid(stream, kClsid)) {
-        return true;
+        return BackupKind::Driver;
     }
     RemoveClsid(stream, kClsid);
-    return !stream.empty();
+    return stream.empty() ? BackupKind::OursOnly : BackupKind::Driver;
 }
 
 std::filesystem::path FindRestoreBackup(const std::wstring& id)
 {
+    std::error_code ec;
+    const auto canonical = CanonicalBackup(id);
+    if (std::filesystem::exists(canonical, ec)) {
+        return canonical;
+    }
+
+    // Older builds wrote a timestamped backup per bind. Prefer one that holds
+    // the driver's chain, then one with no chain; never an ours-only snapshot.
     const auto backups = FindBackups(id);
-    for (const auto& path : backups) {
-        if (IsUsableDriverBackup(detail::ReadTextFile(path.wstring()))) {
-            return path;
+    for (const BackupKind want : {BackupKind::Driver, BackupKind::Empty}) {
+        for (const auto& path : backups) {
+            if (ClassifyBackup(detail::ReadTextFile(path.wstring())) == want) {
+                return path;
+            }
         }
     }
-    return backups.empty() ? std::filesystem::path{} : backups.front();
+    return {};
+}
+
+bool HasLegacyDriverBackup(const std::wstring& id)
+{
+    for (const auto& path : FindBackups(id)) {
+        if (ClassifyBackup(detail::ReadTextFile(path.wstring())) ==
+            BackupKind::Driver) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// One-time migration: pick the best timestamped backup from an older build,
+// copy it to the canonical name, and move the rest to old_backups.
+bool AdoptLegacyBackup(const std::wstring& id, std::wstring& log)
+{
+    const auto backups = FindBackups(id);
+    if (backups.empty()) {
+        return false;
+    }
+
+    std::filesystem::path chosen;
+    for (const BackupKind want : {BackupKind::Driver, BackupKind::Empty}) {
+        for (const auto& path : backups) {
+            if (ClassifyBackup(detail::ReadTextFile(path.wstring())) == want) {
+                chosen = path;
+                break;
+            }
+        }
+        if (!chosen.empty()) {
+            break;
+        }
+    }
+    if (chosen.empty()) {
+        return false;
+    }
+
+    std::error_code ec;
+    const auto canonical = CanonicalBackup(id);
+    std::filesystem::copy_file(
+        chosen, canonical, std::filesystem::copy_options::overwrite_existing,
+        ec);
+    if (ec) {
+        log += L"Could not adopt the previous backup for " + id + L": " +
+               FormatWin32Error(static_cast<DWORD>(ec.value())) + L"\r\n";
+        return false;
+    }
+    const std::wstring sidecar = SidecarPath(chosen);
+    if (std::filesystem::exists(sidecar, ec)) {
+        std::filesystem::copy_file(
+            sidecar, SidecarPath(canonical),
+            std::filesystem::copy_options::overwrite_existing, ec);
+    }
+
+    const std::filesystem::path oldDir =
+        std::filesystem::path(kBackupDir) / L"old_backups";
+    std::filesystem::create_directories(oldDir, ec);
+    for (const auto& path : backups) {
+        const std::filesystem::path target = oldDir / path.filename();
+        std::filesystem::rename(path, target, ec);
+        if (ec) {
+            ec.clear();
+            std::filesystem::copy_file(
+                path, target,
+                std::filesystem::copy_options::overwrite_existing, ec);
+            if (!ec) {
+                std::filesystem::remove(path, ec);
+            }
+        }
+        const std::wstring side = SidecarPath(path);
+        if (std::filesystem::exists(side, ec)) {
+            std::filesystem::rename(
+                side, oldDir / std::filesystem::path(side).filename(), ec);
+        }
+    }
+
+    log += L"Adopted the previous backup for " + id + L".\r\n";
+    return true;
+}
+
+// Keeps a restored backup in ProgramData without letting it be reused.
+void ArchiveBackup(const std::filesystem::path& path, std::wstring& log)
+{
+    std::error_code ec;
+    const std::filesystem::path oldDir =
+        std::filesystem::path(kBackupDir) / L"old_backups";
+    std::filesystem::create_directories(oldDir, ec);
+
+    std::filesystem::path target =
+        oldDir / (path.stem().wstring() + L"-" + detail::Timestamp() +
+                  L".reg");
+    for (int suffix = 1; std::filesystem::exists(target, ec) && suffix < 1000;
+         ++suffix) {
+        target = oldDir / (path.stem().wstring() + L"-" +
+                           detail::Timestamp() + L"-" +
+                           std::to_wstring(suffix) + L".reg");
+    }
+    std::filesystem::rename(path, target, ec);
+    if (ec) {
+        log += L"Could not move the backup to old_backups: " +
+               path.wstring() + L"\r\n";
+        return;
+    }
+    const std::wstring sidecar = SidecarPath(path);
+    if (std::filesystem::exists(sidecar, ec)) {
+        std::filesystem::rename(
+            sidecar, oldDir / (target.stem().wstring() + L".txt"), ec);
+    }
 }
 
 // Reads the best backup for an endpoint. Returns false when there is no backup
@@ -588,6 +733,32 @@ bool CreateBackup(const Endpoint& endpoint, std::wstring& file,
         return false;
     }
 
+    // One backup per endpoint: keep the existing one until it has been
+    // restored and moved to old_backups.
+    const std::filesystem::path canonical = CanonicalBackup(endpoint.id);
+    if (std::filesystem::exists(canonical, ec)) {
+        const BackupKind kind =
+            ClassifyBackup(detail::ReadTextFile(canonical.wstring()));
+        // An empty or ours-only snapshot taken while the driver chain was
+        // already gone must not block a legacy backup that still has it.
+        if (kind == BackupKind::Driver ||
+            !HasLegacyDriverBackup(endpoint.id)) {
+            file = canonical.wstring();
+            log += L"Using the existing backup for " + endpoint.name +
+                   L".\r\n";
+            return true;
+        }
+        log += L"Replacing the empty backup for " + endpoint.name +
+               L".\r\n";
+    }
+
+    // Migrate the timestamped backups left by older builds once, choosing the
+    // best one instead of snapshotting the current (possibly damaged) state.
+    if (AdoptLegacyBackup(endpoint.id, log)) {
+        file = canonical.wstring();
+        return true;
+    }
+
     std::wstring oldValue;
     const bool existed = detail::RegReadString(
         HKEY_LOCAL_MACHINE, detail::FxSub(endpoint.id), kPreMixProp, oldValue);
@@ -597,13 +768,7 @@ bool CreateBackup(const Endpoint& endpoint, std::wstring& file,
         HKEY_LOCAL_MACHINE, detail::FxSub(endpoint.id), kCompositeStreamProp,
         composite);
 
-    const std::wstring stamp = detail::Timestamp();
-    file = BackupPrefix(endpoint.id) + stamp + L".reg";
-    for (int suffix = 1;
-         std::filesystem::exists(file, ec) && suffix < 1000; ++suffix) {
-        file = BackupPrefix(endpoint.id) + stamp + L"-" +
-               std::to_wstring(suffix) + L".reg";
-    }
+    file = canonical.wstring();
 
     const std::wstring command =
         detail::Quote(detail::System32Path(L"reg.exe")) + L" export " +
@@ -645,9 +810,8 @@ bool RestoreBackup(const Endpoint& endpoint, std::wstring& log)
 {
     const std::wstring fx = detail::FxSub(endpoint.id);
 
-    // Prefer the newest backup that still represents the driver's chain. A
-    // backup taken while this APO was already the whole stream chain is not
-    // useful for restoring the driver's effects.
+    // Restore from the single canonical backup. After a successful restore it
+    // moves to old_backups, so the next bind snapshots the driver state again.
     std::wstring chosen;
     std::wstring text;
     const auto restorePath = FindRestoreBackup(endpoint.id);
@@ -757,6 +921,12 @@ bool RestoreBackup(const Endpoint& endpoint, std::wstring& log)
 
     if (ok) {
         log += L"Disabled on " + endpoint.name + L".\r\n";
+        // Only the canonical file is retired. A legacy file stays put so the
+        // next bind can adopt it (and move the others to old_backups).
+        if (!chosen.empty() &&
+            chosen == CanonicalBackup(endpoint.id).wstring()) {
+            ArchiveBackup(chosen, log);
+        }
     }
     return ok;
 }

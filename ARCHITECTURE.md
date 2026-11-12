@@ -223,16 +223,22 @@ The per-device `isolate_effects` option replaces the effect pack's composite
 chains with only this APO's CLSID. It sets the stream chain (`...,13`) to this
 APO and clears the mode (`...,14`), endpoint (`...,15`), keyword-detector
 (`...,16`-`...,18`), and offload (`...,19`-`...,20`) chains. Turning it off
-rebuilds every one of those values from the newest backup that still has driver
-entries, plus this APO, and
-disabling the device restores the driver chains without this APO. If isolation
-is already saved but other composite chains are still present, `Apply` finishes
-the cleanup without requiring a checkbox toggle.
+rebuilds every one of those values from the canonical backup, plus this APO,
+and disabling the device restores the driver chains without this APO. If
+isolation is already saved but other composite chains are still present,
+`Apply` finishes the cleanup without requiring a checkbox toggle.
 
 Before changing either slot the GUI exports the whole `FxProperties` key with
-`reg.exe` to `C:\ProgramData\better_micro_apo\backup`. Restore parses the
-backup, puts back the original PreMix value and every composite chain, and
-removes only this APO's CLSID from anything it did not write.
+`reg.exe` to a single canonical file per endpoint,
+`C:\ProgramData\better_micro_apo\backup\FxProperties-{endpoint}.reg`. While it
+exists, binds reuse it instead of writing another snapshot. A successful
+restore moves it to `backup\old_backups` with a timestamp, so the next bind
+records the freshly restored driver state. Older builds left one timestamped
+file per bind; the first bind adopts the best of those (one that still holds a
+driver chain, then one with no chain, never one containing only this APO) and
+moves the rest to `backup\old_backups`. Restore parses the backup, puts back the
+original PreMix value and every composite chain, and removes only this APO's
+CLSID from anything it did not write.
 
 ## Registration and logging
 
