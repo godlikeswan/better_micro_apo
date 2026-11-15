@@ -4,6 +4,7 @@
 #include "apo_monitor.h"
 #include "runtime_settings.h"
 
+#include "ui/effect_dialog.h"
 #include "ui/structure.h"
 #include "ui/theme.h"
 #include "ui/ui_state.h"
@@ -34,14 +35,14 @@
 namespace {
 
 using ui::FormatNumber;
-using ui::GetNumber;
+using ui::GetSliderValue;
 using ui::Scale;
-using ui::SetNumber;
+using ui::SetSliderValue;
 
 constexpr UINT WM_APP_WORK_DONE = WM_APP + 1;
 constexpr UINT_PTR kMonitorTimer = 1;
 constexpr UINT_PTR kLiveApplyTimer = 2;
-constexpr UINT kLiveApplyDelayMs = 500;
+constexpr UINT kLiveApplyDelayMs = 200;
 constexpr DWORD kMeterWindowMs = 500;
 
 constexpr wchar_t kWindowClass[] = L"BetterMicroApoInstaller";
@@ -50,6 +51,7 @@ constexpr wchar_t kInstanceMutex[] = L"Local\\better_micro_apo_gui_instance";
 
 DWORD g_clipHoldUntil = 0;
 unsigned g_dropTotal = 0;
+bool g_liveApplyPending = false;
 
 struct MeterEntry {
     DWORD tick = 0;
@@ -109,51 +111,24 @@ void UpdateViewAvailability();
 void SetActiveView(View view);
 void UpdateDevicesUi();
 void UpdateEffectsUi();
+bool ValidEffectIndex();
 
-bool EffectEnabled(const apo::ApoSettings& settings, EffectKind kind)
+int CountEffectType(const apo::ApoSettings& settings, apo::EffectType type)
 {
-    switch (kind) {
-    case EffectKind::Noise:
-        return settings.noise.enabled;
-    case EffectKind::Gate:
-        return settings.gate.enabled;
-    case EffectKind::Dynamic:
-        return settings.dynamics.enabled;
-    case EffectKind::Compressor:
-        return settings.compressor.enabled;
-    case EffectKind::Gain:
-        return settings.makeupEnabled;
-    case EffectKind::Mono:
-        return settings.mono;
-    default:
-        return false;
+    int count = 0;
+    for (int i = 0; i < settings.effectCount; ++i) {
+        if (settings.effects[i].type == type) {
+            ++count;
+        }
     }
+    return count;
 }
 
-void SetEffectEnabled(apo::ApoSettings& settings, EffectKind kind, bool enabled)
+bool HasEffectSelection()
 {
-    switch (kind) {
-    case EffectKind::Noise:
-        settings.noise.enabled = enabled;
-        break;
-    case EffectKind::Gate:
-        settings.gate.enabled = enabled;
-        break;
-    case EffectKind::Dynamic:
-        settings.dynamics.enabled = enabled;
-        break;
-    case EffectKind::Compressor:
-        settings.compressor.enabled = enabled;
-        break;
-    case EffectKind::Gain:
-        settings.makeupEnabled = enabled;
-        break;
-    case EffectKind::Mono:
-        settings.mono = enabled;
-        break;
-    default:
-        break;
-    }
+    return ValidEffectIndex() && g_effectSelection >= 0 &&
+           g_effectSelection <
+               g_endpoints[g_effectIndex].settings.effectCount;
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +161,21 @@ bool EffectsDirty()
                        });
 }
 
+// An endpoint bound by an older version still sits in a stream slot, which raw
+// streams bypass. Treat it as a pending change so Apply can move it.
+bool NeedsBindingUpgrade(const apo::Endpoint& endpoint)
+{
+    return endpoint.Enabled() && !endpoint.BoundAtEndpoint();
+}
+
+bool AnyBindingUpgrade()
+{
+    return std::any_of(g_endpoints.begin(), g_endpoints.end(),
+                       [](const apo::Endpoint& endpoint) {
+                           return NeedsBindingUpgrade(endpoint);
+                       });
+}
+
 bool DevicesDirty()
 {
     if (g_list == nullptr) {
@@ -203,6 +193,11 @@ bool DevicesDirty()
         }
     }
     return false;
+}
+
+bool DevicesPending()
+{
+    return DevicesDirty() || AnyBindingUpgrade();
 }
 
 bool ValidEffectIndex()
@@ -256,7 +251,7 @@ bool TabAvailable(int tab)
 // Effect editor
 // ---------------------------------------------------------------------------
 
-void ShowEffectControls(EffectKind kind, bool show)
+void ShowEffectControls(apo::EffectType type, bool show)
 {
     auto showAll = [show](std::initializer_list<HWND> controls) {
         for (HWND control : controls) {
@@ -266,35 +261,44 @@ void ShowEffectControls(EffectKind kind, bool show)
         }
     };
 
-    switch (kind) {
-    case EffectKind::Noise:
-        showAll({g_noiseReductionLabel, g_noiseReductionEdit, g_noiseCapture,
+    switch (type) {
+    case apo::EffectType::Noise:
+        showAll({g_noiseReductionLabel, g_noiseReductionSlider, g_noiseCapture,
                  g_noiseNote});
         break;
-    case EffectKind::Gate:
-        showAll({g_gateThresholdLabel, g_gateThresholdEdit, g_gateRangeLabel,
-                 g_gateRangeEdit, g_gateAttackLabel, g_gateAttackEdit,
-                 g_gateHoldLabel, g_gateHoldEdit, g_gateReleaseLabel,
-                 g_gateReleaseEdit, g_gateLookaheadLabel,
-                 g_gateLookaheadEdit});
+    case apo::EffectType::Gate:
+        showAll({g_gateThresholdLabel, g_gateThresholdSlider, g_gateRangeLabel,
+                 g_gateRangeSlider, g_gateAttackLabel, g_gateAttackSlider,
+                 g_gateHoldLabel, g_gateHoldSlider, g_gateReleaseLabel,
+                 g_gateReleaseSlider, g_gateLookaheadLabel,
+                 g_gateLookaheadSlider});
         break;
-    case EffectKind::Dynamic:
-        showAll({g_dynamicExtend, g_dynFrequencyLabel, g_dynFrequencyEdit,
-                 g_dynQLabel, g_dynQEdit, g_dynThresholdLabel,
-                 g_dynThresholdEdit, g_dynRatioLabel, g_dynRatioEdit,
-                 g_dynRangeLabel, g_dynRangeEdit, g_dynAttackLabel,
-                 g_dynAttackEdit, g_dynReleaseLabel, g_dynReleaseEdit});
+    case apo::EffectType::Dynamic:
+        showAll({g_dynamicExtend, g_dynFrequencyLabel, g_dynFrequencySlider,
+                 g_dynQLabel, g_dynQSlider, g_dynThresholdLabel,
+                 g_dynThresholdSlider, g_dynRatioLabel, g_dynRatioSlider,
+                 g_dynRangeLabel, g_dynRangeSlider, g_dynAttackLabel,
+                 g_dynAttackSlider, g_dynReleaseLabel, g_dynReleaseSlider});
         break;
-    case EffectKind::Compressor:
-        showAll({g_compThresholdLabel, g_compThresholdEdit, g_compRatioLabel,
-                 g_compRatioEdit, g_compAttackLabel, g_compAttackEdit,
-                 g_compReleaseLabel, g_compReleaseEdit});
+    case apo::EffectType::Compressor:
+        showAll({g_compThresholdLabel, g_compThresholdSlider, g_compRatioLabel,
+                 g_compRatioSlider, g_compAttackLabel, g_compAttackSlider,
+                 g_compReleaseLabel, g_compReleaseSlider});
         break;
-    case EffectKind::Gain:
-        showAll({g_makeupLabel, g_makeupEdit});
+    case apo::EffectType::Gain:
+        showAll({g_makeupLabel, g_makeupSlider});
         break;
-    case EffectKind::Mono:
+    case apo::EffectType::Mono:
         showAll({g_monoNote});
+        break;
+    case apo::EffectType::Distortion:
+        showAll({g_distFunctionLabel, g_distFunctionCombo, g_distortionNote});
+        break;
+    case apo::EffectType::Reverb:
+        showAll({g_reverbMixLabel, g_reverbMixSlider, g_reverbSizeLabel,
+                 g_reverbSizeSlider, g_reverbDampingLabel,
+                 g_reverbDampingSlider, g_reverbPredelayLabel,
+                 g_reverbPredelaySlider});
         break;
     default:
         break;
@@ -325,42 +329,47 @@ void UpdateViewVisibility()
             devices);
 
     showAll({g_effectDeviceLabel, g_effectDeviceCombo, g_effectListGroup,
-             g_effectList, g_effectGroup, g_effectHeading, g_listen,
-             g_listenNote, g_meter, g_effectsUnsaved, g_effectsApply,
-             g_effectsReset},
+             g_effectList, g_effectAdd, g_effectGroup, g_effectHeading,
+             g_listen, g_listenNote, g_meter, g_effectsUnsaved,
+             g_effectsApply, g_effectsReset},
             effects);
 
-    for (int i = 0; i < static_cast<int>(EffectKind::Count); ++i) {
-        ShowEffectControls(static_cast<EffectKind>(i), false);
+    for (int i = 0; i < static_cast<int>(apo::EffectType::Count); ++i) {
+        ShowEffectControls(static_cast<apo::EffectType>(i), false);
     }
-    if (effects) {
-        ShowEffectControls(g_effectKind, true);
+    if (effects && HasEffectSelection()) {
+        ShowEffectControls(g_effectType, true);
     }
 }
 
 void EnableEffectControls(bool enabled)
 {
     const HWND controls[] = {
-        g_gateThresholdLabel, g_gateThresholdEdit,
-        g_gateRangeLabel, g_gateRangeEdit,
-        g_gateAttackLabel, g_gateAttackEdit,
-        g_gateHoldLabel, g_gateHoldEdit,
-        g_gateReleaseLabel, g_gateReleaseEdit,
-        g_gateLookaheadLabel, g_gateLookaheadEdit,
-        g_compThresholdLabel, g_compThresholdEdit,
-        g_compRatioLabel, g_compRatioEdit,
-        g_compAttackLabel, g_compAttackEdit,
-        g_compReleaseLabel, g_compReleaseEdit,
-        g_makeupLabel, g_makeupEdit,
+        g_gateThresholdLabel, g_gateThresholdSlider,
+        g_gateRangeLabel, g_gateRangeSlider,
+        g_gateAttackLabel, g_gateAttackSlider,
+        g_gateHoldLabel, g_gateHoldSlider,
+        g_gateReleaseLabel, g_gateReleaseSlider,
+        g_gateLookaheadLabel, g_gateLookaheadSlider,
+        g_compThresholdLabel, g_compThresholdSlider,
+        g_compRatioLabel, g_compRatioSlider,
+        g_compAttackLabel, g_compAttackSlider,
+        g_compReleaseLabel, g_compReleaseSlider,
+        g_makeupLabel, g_makeupSlider,
         g_dynamicExtend,
-        g_dynFrequencyLabel, g_dynFrequencyEdit,
-        g_dynQLabel, g_dynQEdit,
-        g_dynThresholdLabel, g_dynThresholdEdit,
-        g_dynRatioLabel, g_dynRatioEdit,
-        g_dynRangeLabel, g_dynRangeEdit,
-        g_dynAttackLabel, g_dynAttackEdit,
-        g_dynReleaseLabel, g_dynReleaseEdit,
-        g_noiseReductionLabel, g_noiseReductionEdit, g_noiseCapture,
+        g_dynFrequencyLabel, g_dynFrequencySlider,
+        g_dynQLabel, g_dynQSlider,
+        g_dynThresholdLabel, g_dynThresholdSlider,
+        g_dynRatioLabel, g_dynRatioSlider,
+        g_dynRangeLabel, g_dynRangeSlider,
+        g_dynAttackLabel, g_dynAttackSlider,
+        g_dynReleaseLabel, g_dynReleaseSlider,
+        g_distFunctionLabel, g_distFunctionCombo,
+        g_reverbMixLabel, g_reverbMixSlider,
+        g_reverbSizeLabel, g_reverbSizeSlider,
+        g_reverbDampingLabel, g_reverbDampingSlider,
+        g_reverbPredelayLabel, g_reverbPredelaySlider,
+        g_noiseReductionLabel, g_noiseReductionSlider, g_noiseCapture,
     };
     for (HWND control : controls) {
         EnableWindow(control, enabled);
@@ -369,71 +378,123 @@ void EnableEffectControls(bool enabled)
 
 void ClearEffectEditor()
 {
-    g_effectIndex = -1;
+    g_effectSelection = -1;
     g_effectLoading = true;
-    const HWND edits[] = {
-        g_gateThresholdEdit, g_gateRangeEdit, g_gateAttackEdit,
-        g_gateHoldEdit, g_gateReleaseEdit, g_gateLookaheadEdit,
-        g_compThresholdEdit, g_compRatioEdit, g_compAttackEdit,
-        g_compReleaseEdit, g_makeupEdit, g_noiseReductionEdit,
-        g_dynFrequencyEdit, g_dynQEdit, g_dynThresholdEdit, g_dynRatioEdit,
-        g_dynRangeEdit, g_dynAttackEdit, g_dynReleaseEdit,
-    };
-    for (HWND edit : edits) {
-        SetWindowTextW(edit, L"");
+    // Sliders always hold a value, so there is nothing to blank out. Hide the
+    // parameter controls instead; ShowEffectForSelected brings them back.
+    for (int i = 0; i < static_cast<int>(apo::EffectType::Count); ++i) {
+        ShowEffectControls(static_cast<apo::EffectType>(i), false);
     }
     SendMessageW(g_dynamicExtend, BM_SETCHECK, BST_UNCHECKED, 0);
-    for (int i = 0; i < static_cast<int>(EffectKind::Count); ++i) {
-        ListView_SetCheckState(g_effectList, i, FALSE);
-    }
+    SendMessageW(g_distFunctionCombo, CB_SETCURSEL, apo::kDistortionSoft, 0);
     SetWindowTextW(g_effectHeading, L"Select an effect");
     SetWindowTextW(g_noiseNote, L"");
     g_effectLoading = false;
 }
 
+// Rebuilds the list rows from the selected endpoint's effect array. Called when
+// the set of effects changes, not from inside a list notification.
+void RebuildEffectList()
+{
+    int count = 0;
+    if (ValidEffectIndex()) {
+        count = g_endpoints[g_effectIndex].settings.effectCount;
+    }
+
+    if (count == 0) {
+        g_effectSelection = -1;
+    } else if (g_effectSelection < 0) {
+        g_effectSelection = 0;
+    } else if (g_effectSelection >= count) {
+        g_effectSelection = count - 1;
+    }
+
+    g_effectLoading = true;
+    SendMessageW(g_effectList, WM_SETREDRAW, FALSE, 0);
+    ListView_DeleteAllItems(g_effectList);
+
+    if (count > 0) {
+        const apo::ApoSettings& settings = g_endpoints[g_effectIndex].settings;
+        for (int i = 0; i < count; ++i) {
+            const apo::EffectInstance& effect = settings.effects[i];
+            LVITEMW item{};
+            item.mask = LVIF_TEXT;
+            item.iItem = i;
+            item.pszText =
+                const_cast<wchar_t*>(apo::EffectTypeName(effect.type));
+            const int row = ListView_InsertItem(g_effectList, &item);
+            ListView_SetItemText(g_effectList, row, 1,
+                                 const_cast<wchar_t*>(L"\u00D7"));
+            ListView_SetCheckState(g_effectList, row,
+                                   apo::EffectEnabled(effect) ? TRUE : FALSE);
+        }
+    }
+
+    if (g_effectSelection >= 0) {
+        ListView_SetItemState(g_effectList, g_effectSelection,
+                              LVIS_SELECTED | LVIS_FOCUSED,
+                              LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_EnsureVisible(g_effectList, g_effectSelection, FALSE);
+        g_effectType = g_endpoints[g_effectIndex]
+                           .settings.effects[g_effectSelection]
+                           .type;
+    }
+
+    SendMessageW(g_effectList, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(g_effectList, nullptr, TRUE);
+    g_effectLoading = false;
+}
+
 void ShowEffectForSelected()
 {
-    if (!ValidEffectIndex()) {
+    if (!HasEffectSelection()) {
         ClearEffectEditor();
         return;
     }
 
-    const apo::ApoSettings& settings = g_endpoints[g_effectIndex].settings;
+    const apo::EffectInstance& effect =
+        g_endpoints[g_effectIndex].settings.effects[g_effectSelection];
+    g_effectType = effect.type;
 
     g_effectLoading = true;
-    SetNumber(g_noiseReductionEdit, settings.noise.reductionDb);
-    SetNumber(g_gateThresholdEdit, settings.gate.thresholdDb);
-    SetNumber(g_gateRangeEdit, settings.gate.rangeDb);
-    SetNumber(g_gateAttackEdit, settings.gate.attackMs);
-    SetNumber(g_gateHoldEdit, settings.gate.holdMs);
-    SetNumber(g_gateReleaseEdit, settings.gate.releaseMs);
-    SetNumber(g_gateLookaheadEdit, settings.gate.lookaheadMs);
-    SetNumber(g_compThresholdEdit, settings.compressor.thresholdDb);
-    SetNumber(g_compRatioEdit, settings.compressor.ratio);
-    SetNumber(g_compAttackEdit, settings.compressor.attackMs);
-    SetNumber(g_compReleaseEdit, settings.compressor.releaseMs);
-    SetNumber(g_makeupEdit, settings.makeupDb);
-    SetNumber(g_dynFrequencyEdit, settings.dynamics.frequencyHz);
-    SetNumber(g_dynQEdit, settings.dynamics.q);
-    SetNumber(g_dynThresholdEdit, settings.dynamics.thresholdDb);
-    SetNumber(g_dynRatioEdit, settings.dynamics.ratio);
-    SetNumber(g_dynRangeEdit, settings.dynamics.rangeDb);
-    SetNumber(g_dynAttackEdit, settings.dynamics.attackMs);
-    SetNumber(g_dynReleaseEdit, settings.dynamics.releaseMs);
+    SetSliderValue(g_noiseReductionSlider, effect.noise.reductionDb);
+    SetSliderValue(g_gateThresholdSlider, effect.gate.thresholdDb);
+    SetSliderValue(g_gateRangeSlider, effect.gate.rangeDb);
+    SetSliderValue(g_gateAttackSlider, effect.gate.attackMs);
+    SetSliderValue(g_gateHoldSlider, effect.gate.holdMs);
+    SetSliderValue(g_gateReleaseSlider, effect.gate.releaseMs);
+    SetSliderValue(g_gateLookaheadSlider, effect.gate.lookaheadMs);
+    SetSliderValue(g_compThresholdSlider, effect.compressor.thresholdDb);
+    SetSliderValue(g_compRatioSlider, effect.compressor.ratio);
+    SetSliderValue(g_compAttackSlider, effect.compressor.attackMs);
+    SetSliderValue(g_compReleaseSlider, effect.compressor.releaseMs);
+    SetSliderValue(g_makeupSlider, effect.gain.gainDb);
+    SetSliderValue(g_dynFrequencySlider, effect.dynamics.frequencyHz);
+    SetSliderValue(g_dynQSlider, effect.dynamics.q);
+    SetSliderValue(g_dynThresholdSlider, effect.dynamics.thresholdDb);
+    SetSliderValue(g_dynRatioSlider, effect.dynamics.ratio);
+    SetSliderValue(g_dynRangeSlider, effect.dynamics.rangeDb);
+    SetSliderValue(g_dynAttackSlider, effect.dynamics.attackMs);
+    SetSliderValue(g_dynReleaseSlider, effect.dynamics.releaseMs);
+    SetSliderValue(g_reverbMixSlider, effect.reverb.mix);
+    SetSliderValue(g_reverbSizeSlider, effect.reverb.size);
+    SetSliderValue(g_reverbDampingSlider, effect.reverb.damping);
+    SetSliderValue(g_reverbPredelaySlider, effect.reverb.predelayMs);
+    SendMessageW(g_distFunctionCombo, CB_SETCURSEL,
+                 effect.distortion.function, 0);
     SendMessageW(g_dynamicExtend, BM_SETCHECK,
-                 settings.dynamics.expand ? BST_CHECKED : BST_UNCHECKED, 0);
+                 effect.dynamics.expand ? BST_CHECKED : BST_UNCHECKED, 0);
 
-    for (int i = 0; i < static_cast<int>(EffectKind::Count); ++i) {
-        ListView_SetCheckState(
-            g_effectList, i,
-            EffectEnabled(settings, static_cast<EffectKind>(i)) ? TRUE
-                                                               : FALSE);
+    SetWindowTextW(g_effectHeading, apo::EffectTypeName(effect.type));
+    if (g_view == View::Effects) {
+        // The parameter panel is shared: hide every type first so switching to
+        // an effect of another type does not leave the previous controls on
+        // screen.
+        for (int i = 0; i < static_cast<int>(apo::EffectType::Count); ++i) {
+            ShowEffectControls(static_cast<apo::EffectType>(i), false);
+        }
+        ShowEffectControls(effect.type, true);
     }
-    ListView_SetItemState(g_effectList, static_cast<int>(g_effectKind),
-                          LVIS_SELECTED | LVIS_FOCUSED,
-                          LVIS_SELECTED | LVIS_FOCUSED);
-
-    SetWindowTextW(g_effectHeading, EffectName(g_effectKind));
 
     const bool hasProfile = apo::FileExists(
         apo::NoiseProfilePath(g_endpoints[g_effectIndex].id));
@@ -447,70 +508,126 @@ void ShowEffectForSelected()
     g_effectLoading = false;
 }
 
-bool CommitEffectEditor(bool reportErrors = true)
+bool CommitEffectEditor(bool showValues = true)
 {
-    if (!ValidEffectIndex()) {
+    if (!HasEffectSelection()) {
         return true;
     }
 
     apo::ApoSettings settings = g_endpoints[g_effectIndex].settings;
-    if (!GetNumber(g_noiseReductionEdit, settings.noise.reductionDb) ||
-        !GetNumber(g_gateThresholdEdit, settings.gate.thresholdDb) ||
-        !GetNumber(g_gateRangeEdit, settings.gate.rangeDb) ||
-        !GetNumber(g_gateAttackEdit, settings.gate.attackMs) ||
-        !GetNumber(g_gateHoldEdit, settings.gate.holdMs) ||
-        !GetNumber(g_gateReleaseEdit, settings.gate.releaseMs) ||
-        !GetNumber(g_gateLookaheadEdit, settings.gate.lookaheadMs) ||
-        !GetNumber(g_compThresholdEdit,
-                        settings.compressor.thresholdDb) ||
-        !GetNumber(g_compRatioEdit, settings.compressor.ratio) ||
-        !GetNumber(g_compAttackEdit, settings.compressor.attackMs) ||
-        !GetNumber(g_compReleaseEdit, settings.compressor.releaseMs) ||
-        !GetNumber(g_makeupEdit, settings.makeupDb) ||
-        !GetNumber(g_dynFrequencyEdit, settings.dynamics.frequencyHz) ||
-        !GetNumber(g_dynQEdit, settings.dynamics.q) ||
-        !GetNumber(g_dynThresholdEdit,
-                        settings.dynamics.thresholdDb) ||
-        !GetNumber(g_dynRatioEdit, settings.dynamics.ratio) ||
-        !GetNumber(g_dynRangeEdit, settings.dynamics.rangeDb) ||
-        !GetNumber(g_dynAttackEdit, settings.dynamics.attackMs) ||
-        !GetNumber(g_dynReleaseEdit, settings.dynamics.releaseMs)) {
-        if (reportErrors) {
-            MessageBoxW(g_window, L"Enter a valid number in every setting.",
-                        L"Better Micro APO", MB_ICONWARNING);
+    apo::EffectInstance& effect = settings.effects[g_effectSelection];
+
+    // Sliders always hold a valid, in-range value, so there is nothing to
+    // reject here. The settings are clamped again below for safety.
+    switch (effect.type) {
+    case apo::EffectType::Noise:
+        GetSliderValue(g_noiseReductionSlider, effect.noise.reductionDb);
+        break;
+    case apo::EffectType::Gate:
+        GetSliderValue(g_gateThresholdSlider, effect.gate.thresholdDb);
+        GetSliderValue(g_gateRangeSlider, effect.gate.rangeDb);
+        GetSliderValue(g_gateAttackSlider, effect.gate.attackMs);
+        GetSliderValue(g_gateHoldSlider, effect.gate.holdMs);
+        GetSliderValue(g_gateReleaseSlider, effect.gate.releaseMs);
+        GetSliderValue(g_gateLookaheadSlider, effect.gate.lookaheadMs);
+        break;
+    case apo::EffectType::Dynamic:
+        GetSliderValue(g_dynFrequencySlider, effect.dynamics.frequencyHz);
+        GetSliderValue(g_dynQSlider, effect.dynamics.q);
+        GetSliderValue(g_dynThresholdSlider, effect.dynamics.thresholdDb);
+        GetSliderValue(g_dynRatioSlider, effect.dynamics.ratio);
+        GetSliderValue(g_dynRangeSlider, effect.dynamics.rangeDb);
+        GetSliderValue(g_dynAttackSlider, effect.dynamics.attackMs);
+        GetSliderValue(g_dynReleaseSlider, effect.dynamics.releaseMs);
+        effect.dynamics.expand =
+            SendMessageW(g_dynamicExtend, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        break;
+    case apo::EffectType::Compressor:
+        GetSliderValue(g_compThresholdSlider, effect.compressor.thresholdDb);
+        GetSliderValue(g_compRatioSlider, effect.compressor.ratio);
+        GetSliderValue(g_compAttackSlider, effect.compressor.attackMs);
+        GetSliderValue(g_compReleaseSlider, effect.compressor.releaseMs);
+        break;
+    case apo::EffectType::Gain:
+        GetSliderValue(g_makeupSlider, effect.gain.gainDb);
+        break;
+    case apo::EffectType::Mono:
+        break;
+    case apo::EffectType::Distortion: {
+        const int function = static_cast<int>(
+            SendMessageW(g_distFunctionCombo, CB_GETCURSEL, 0, 0));
+        if (function >= apo::kDistortionSoft &&
+            function < apo::kDistortionFunctionCount) {
+            effect.distortion.function = function;
         }
-        return false;
+        break;
+    }
+    case apo::EffectType::Reverb:
+        GetSliderValue(g_reverbMixSlider, effect.reverb.mix);
+        GetSliderValue(g_reverbSizeSlider, effect.reverb.size);
+        GetSliderValue(g_reverbDampingSlider, effect.reverb.damping);
+        GetSliderValue(g_reverbPredelaySlider, effect.reverb.predelayMs);
+        break;
+    default:
+        break;
     }
 
-    settings.dynamics.expand =
-        SendMessageW(g_dynamicExtend, BM_GETCHECK, 0, 0) == BST_CHECKED;
     apo::ClampSettings(settings);
     g_endpoints[g_effectIndex].settings = settings;
 
     // Show the clamped values so the user sees what will be saved. The silent
-    // auto-apply path leaves the controls alone so it cannot rewrite a number
-    // while the user is still typing it.
-    if (reportErrors) {
+    // auto-apply path leaves the controls alone so it cannot move a slider
+    // while the user is still dragging it.
+    if (showValues) {
+        const apo::EffectInstance& shown = settings.effects[g_effectSelection];
         g_effectLoading = true;
-        SetNumber(g_noiseReductionEdit, settings.noise.reductionDb);
-        SetNumber(g_gateThresholdEdit, settings.gate.thresholdDb);
-        SetNumber(g_gateRangeEdit, settings.gate.rangeDb);
-        SetNumber(g_gateAttackEdit, settings.gate.attackMs);
-        SetNumber(g_gateHoldEdit, settings.gate.holdMs);
-        SetNumber(g_gateReleaseEdit, settings.gate.releaseMs);
-        SetNumber(g_gateLookaheadEdit, settings.gate.lookaheadMs);
-        SetNumber(g_compThresholdEdit, settings.compressor.thresholdDb);
-        SetNumber(g_compRatioEdit, settings.compressor.ratio);
-        SetNumber(g_compAttackEdit, settings.compressor.attackMs);
-        SetNumber(g_compReleaseEdit, settings.compressor.releaseMs);
-        SetNumber(g_makeupEdit, settings.makeupDb);
-        SetNumber(g_dynFrequencyEdit, settings.dynamics.frequencyHz);
-        SetNumber(g_dynQEdit, settings.dynamics.q);
-        SetNumber(g_dynThresholdEdit, settings.dynamics.thresholdDb);
-        SetNumber(g_dynRatioEdit, settings.dynamics.ratio);
-        SetNumber(g_dynRangeEdit, settings.dynamics.rangeDb);
-        SetNumber(g_dynAttackEdit, settings.dynamics.attackMs);
-        SetNumber(g_dynReleaseEdit, settings.dynamics.releaseMs);
+        switch (shown.type) {
+        case apo::EffectType::Noise:
+            SetSliderValue(g_noiseReductionSlider, shown.noise.reductionDb);
+            break;
+        case apo::EffectType::Gate:
+            SetSliderValue(g_gateThresholdSlider, shown.gate.thresholdDb);
+            SetSliderValue(g_gateRangeSlider, shown.gate.rangeDb);
+            SetSliderValue(g_gateAttackSlider, shown.gate.attackMs);
+            SetSliderValue(g_gateHoldSlider, shown.gate.holdMs);
+            SetSliderValue(g_gateReleaseSlider, shown.gate.releaseMs);
+            SetSliderValue(g_gateLookaheadSlider, shown.gate.lookaheadMs);
+            break;
+        case apo::EffectType::Dynamic:
+            SetSliderValue(g_dynFrequencySlider, shown.dynamics.frequencyHz);
+            SetSliderValue(g_dynQSlider, shown.dynamics.q);
+            SetSliderValue(g_dynThresholdSlider, shown.dynamics.thresholdDb);
+            SetSliderValue(g_dynRatioSlider, shown.dynamics.ratio);
+            SetSliderValue(g_dynRangeSlider, shown.dynamics.rangeDb);
+            SetSliderValue(g_dynAttackSlider, shown.dynamics.attackMs);
+            SetSliderValue(g_dynReleaseSlider, shown.dynamics.releaseMs);
+            SendMessageW(g_dynamicExtend, BM_SETCHECK,
+                         shown.dynamics.expand ? BST_CHECKED : BST_UNCHECKED,
+                         0);
+            break;
+        case apo::EffectType::Compressor:
+            SetSliderValue(g_compThresholdSlider,
+                           shown.compressor.thresholdDb);
+            SetSliderValue(g_compRatioSlider, shown.compressor.ratio);
+            SetSliderValue(g_compAttackSlider, shown.compressor.attackMs);
+            SetSliderValue(g_compReleaseSlider, shown.compressor.releaseMs);
+            break;
+        case apo::EffectType::Gain:
+            SetSliderValue(g_makeupSlider, shown.gain.gainDb);
+            break;
+        case apo::EffectType::Distortion:
+            SendMessageW(g_distFunctionCombo, CB_SETCURSEL,
+                         shown.distortion.function, 0);
+            break;
+        case apo::EffectType::Reverb:
+            SetSliderValue(g_reverbMixSlider, shown.reverb.mix);
+            SetSliderValue(g_reverbSizeSlider, shown.reverb.size);
+            SetSliderValue(g_reverbDampingSlider, shown.reverb.damping);
+            SetSliderValue(g_reverbPredelaySlider, shown.reverb.predelayMs);
+            break;
+        default:
+            break;
+        }
         g_effectLoading = false;
     }
     return true;
@@ -524,14 +641,93 @@ void MarkSettingsDirty()
     g_endpoints[g_effectIndex].settingsDirty = true;
     UpdateEffectsUi();
 
-    // Effect settings reach the running APO through the runtime file. Debounce
-    // keystrokes and apply them without stopping the audio service.
-    SetTimer(g_window, kLiveApplyTimer, kLiveApplyDelayMs, nullptr);
+    // Effect settings reach the running APO through the runtime file. Apply
+    // them without stopping the audio service.
+    //
+    // Arm the timer only once per burst. Resetting it on every slider step
+    // would starve a slow drag: the user could move the slider for a long time
+    // and never hear a change because the timer keeps moving. Letting the
+    // pending timer fire gives a steady stream of applies during a drag, and
+    // the last change is still applied shortly after the drag stops.
+    if (!g_liveApplyPending) {
+        g_liveApplyPending =
+            SetTimer(g_window, kLiveApplyTimer, kLiveApplyDelayMs, nullptr) != 0;
+    }
+}
+
+void AddEffect(apo::EffectType type)
+{
+    if (g_busy || !ValidEffectIndex() || !CommitEffectEditor()) {
+        return;
+    }
+
+    apo::ApoSettings& settings = g_endpoints[g_effectIndex].settings;
+    if (settings.effectCount >= apo::kMaxEffects ||
+        CountEffectType(settings, type) >= apo::EffectTypeCapacity(type)) {
+        return;
+    }
+
+    settings.effects[settings.effectCount] =
+        apo::MakeEffect(type, settings.nextEffectId++);
+    g_effectSelection = settings.effectCount;
+    ++settings.effectCount;
+
+    // The list order is the processing order, so the new effect is appended at
+    // the end. Deleting it later discards its values; adding the same type
+    // again starts from the type defaults.
+    RebuildEffectList();
+    ShowEffectForSelected();
+    MarkSettingsDirty();
+    Relayout();
+}
+
+void DeleteEffect(int row)
+{
+    if (g_busy || !ValidEffectIndex() || !CommitEffectEditor()) {
+        return;
+    }
+
+    apo::ApoSettings& settings = g_endpoints[g_effectIndex].settings;
+    if (row < 0 || row >= settings.effectCount) {
+        return;
+    }
+
+    for (int i = row; i + 1 < settings.effectCount; ++i) {
+        settings.effects[i] = settings.effects[i + 1];
+    }
+    --settings.effectCount;
+    settings.effects[settings.effectCount] = apo::EffectInstance{};
+
+    if (g_effectSelection > row) {
+        --g_effectSelection;
+    } else if (g_effectSelection == row) {
+        g_effectSelection = (row < settings.effectCount) ? row : row - 1;
+    }
+
+    RebuildEffectList();
+    ShowEffectForSelected();
+    MarkSettingsDirty();
+    Relayout();
+}
+
+void DoAddEffect()
+{
+    if (g_busy || !ValidEffectIndex()) {
+        return;
+    }
+
+    apo::EffectType type = apo::EffectType::Noise;
+    if (!ui::ShowAddEffectDialog(g_window,
+                                 g_endpoints[g_effectIndex].settings, type)) {
+        return;
+    }
+    AddEffect(type);
 }
 
 void DoLiveApply()
 {
     KillTimer(g_window, kLiveApplyTimer);
+    g_liveApplyPending = false;
 
     if (g_busy || g_effectLoading || !ValidEffectIndex()) {
         return;
@@ -753,21 +949,29 @@ void UpdateDevicesUi()
         g_deviceIndex >= 0 &&
         g_deviceIndex < static_cast<int>(g_endpoints.size());
     const bool dirty = DevicesDirty();
+    const bool pending = DevicesPending();
 
     EnableWindow(g_list, available);
     EnableWindow(g_isolate,
                  !g_busy && available && hasDevice &&
                      (g_endpoints[g_deviceIndex].compositePresent ||
                       g_endpoints[g_deviceIndex].settings.isolateEffects));
-    EnableWindow(g_devicesApply, !g_busy && available && dirty);
+    EnableWindow(g_devicesApply, !g_busy && available && pending);
     EnableWindow(g_devicesReset, !g_busy && available && dirty);
-    SetApplyHighlight(g_devicesApply, dirty);
-    SetWindowTextW(g_devicesUnsaved, dirty ? L"Unsaved changes" : L"");
+    SetApplyHighlight(g_devicesApply, pending);
+    SetWindowTextW(g_devicesUnsaved,
+                   dirty ? L"Unsaved changes"
+                         : (pending ? L"Apply to finish the update" : L""));
 
     if (!available) {
         SetWindowTextW(g_hint, L"Install the APO files first.");
     } else if (g_endpoints.empty()) {
         SetWindowTextW(g_hint, L"No capture devices found.");
+    } else if (pending && !dirty) {
+        SetWindowTextW(g_hint,
+                       L"Apply moves the effect to the endpoint slot so apps "
+                       L"that use raw capture are processed too. Audio stops "
+                       L"briefly.");
     } else {
         SetWindowTextW(g_hint,
                        L"Check the devices to apply the effect. Apply stops "
@@ -789,6 +993,11 @@ void UpdateEffectsUi()
     // handler instead.
     EnableWindow(g_effectList, available && hasDevice);
     EnableEffectControls(!g_busy && available && hasDevice);
+    const int effectCount =
+        hasDevice ? g_endpoints[g_effectIndex].settings.effectCount : 0;
+    EnableWindow(g_effectAdd,
+                 !g_busy && available && hasDevice &&
+                     effectCount < apo::kMaxEffects);
     EnableWindow(g_listen, !g_busy && hasDevice);
     EnableWindow(g_effectsApply, !g_busy && available && dirty);
     EnableWindow(g_effectsReset, !g_busy && available && dirty);
@@ -922,6 +1131,7 @@ void ResetEffects()
         endpoint.settingsDirty = false;
     }
 
+    RebuildEffectList();
     ShowEffectForSelected();
     UpdateEffectsUi();
 }
@@ -971,6 +1181,17 @@ void RebuildDeviceList(const std::wstring& selectedId)
                 notes += L"; ";
             }
             notes += L"also in Stream";
+        }
+        if (endpoint.BoundAtEndpoint()) {
+            if (!notes.empty()) {
+                notes += L"; ";
+            }
+            notes += L"endpoint effect";
+        } else if (endpoint.Enabled()) {
+            if (!notes.empty()) {
+                notes += L"; ";
+            }
+            notes += L"Apply to use the endpoint effect";
         }
         ListView_SetItemText(g_list, row, 3, notes.data());
 
@@ -1108,6 +1329,7 @@ void Refresh()
 
     RebuildDeviceList(deviceId);
     RebuildEffectCombo(effectId);
+    RebuildEffectList();
     ShowDeviceForSelected();
     ShowEffectForSelected();
     UpdateFilesUi();
@@ -1140,6 +1362,7 @@ void StartWork(std::function<apo::Result()> work, const wchar_t* status)
     }
 
     KillTimer(g_window, kLiveApplyTimer);
+    g_liveApplyPending = false;
     g_busy = true;
     SetWindowTextW(g_status, status);
     UpdateFilesUi();
@@ -1219,7 +1442,8 @@ void DoApplyDevices()
         const bool isolateChanged =
             g_endpoints[i].isolationDirty ||
             g_endpoints[i].isolatePendingCleanup;
-        if (!bindingChanged && !isolateChanged) {
+        const bool bindingUpgrade = NeedsBindingUpgrade(g_endpoints[i]);
+        if (!bindingChanged && !isolateChanged && !bindingUpgrade) {
             continue;
         }
 
@@ -1317,16 +1541,12 @@ void DoCaptureNoiseProfile()
         captureBase.isolateEffects = persisted.isolateEffects;
     }
 
-    // The profile must be raw room noise: the noise stage runs first, before
-    // the compressor and makeup gain. Disabling every stage makes the APO a
+    // The profile must be raw room noise: disable every effect so the APO is a
     // plain passthrough for the duration of the capture.
     apo::ApoSettings snapshot = captureBase;
-    snapshot.noise.enabled = false;
-    snapshot.gate.enabled = false;
-    snapshot.dynamics.enabled = false;
-    snapshot.compressor.enabled = false;
-    snapshot.makeupEnabled = false;
-    snapshot.mono = false;
+    for (int i = 0; i < snapshot.effectCount; ++i) {
+        apo::SetEffectEnabled(snapshot.effects[i], false);
+    }
 
     StopListening();
 
@@ -1389,7 +1609,22 @@ void DoCaptureNoiseProfile()
 
         apo::ApoSettings final = captureBase;
         if (captured) {
-            final.noise.enabled = true;
+            // Turn on the first Noise effect, or append one when the list has
+            // no noise stage yet and still has room.
+            bool enabledNoise = false;
+            for (int i = 0; i < final.effectCount; ++i) {
+                if (final.effects[i].type == apo::EffectType::Noise) {
+                    apo::SetEffectEnabled(final.effects[i], true);
+                    enabledNoise = true;
+                    break;
+                }
+            }
+            if (!enabledNoise && final.effectCount < apo::kMaxEffects) {
+                final.effects[final.effectCount] =
+                    apo::MakeEffect(apo::EffectType::Noise,
+                                    final.nextEffectId++);
+                ++final.effectCount;
+            }
         }
 
         if (bound) {
@@ -1436,7 +1671,7 @@ void DoOpenLog()
 
 void OnEffectListChanged(const NMLISTVIEW& item)
 {
-    if (g_effectLoading) {
+    if (g_effectLoading || !ValidEffectIndex() || item.iItem < 0) {
         return;
     }
 
@@ -1445,32 +1680,35 @@ void OnEffectListChanged(const NMLISTVIEW& item)
         return;
     }
 
+    apo::ApoSettings& settings = g_endpoints[g_effectIndex].settings;
+    if (item.iItem >= settings.effectCount) {
+        return;
+    }
+
+    // The row index is the effect index: the list mirrors the effect array.
     const bool checkChanged =
         ((item.uOldState ^ item.uNewState) & LVIS_STATEIMAGEMASK) != 0;
-    if (checkChanged && ValidEffectIndex() && item.iItem >= 0 &&
-        item.iItem < static_cast<int>(EffectKind::Count)) {
+    if (checkChanged) {
         const bool checked =
             ((item.uNewState & LVIS_STATEIMAGEMASK) >> 12) == 2;
-        SetEffectEnabled(g_endpoints[g_effectIndex].settings,
-                         static_cast<EffectKind>(item.iItem), checked);
+        apo::SetEffectEnabled(settings.effects[item.iItem], checked);
         MarkSettingsDirty();
     }
 
     const bool selectionChanged =
         ((item.uOldState ^ item.uNewState) & LVIS_SELECTED) != 0;
-    if (selectionChanged && (item.uNewState & LVIS_SELECTED) != 0 &&
-        item.iItem >= 0 &&
-        item.iItem < static_cast<int>(EffectKind::Count)) {
+    if (selectionChanged && (item.uNewState & LVIS_SELECTED) != 0) {
+        // Commit the editor before the selection moves to another effect.
         if (!CommitEffectEditor()) {
             g_effectLoading = true;
-            ListView_SetItemState(g_effectList,
-                                  static_cast<int>(g_effectKind),
+            ListView_SetItemState(g_effectList, g_effectSelection,
                                   LVIS_SELECTED | LVIS_FOCUSED,
                                   LVIS_SELECTED | LVIS_FOCUSED);
             g_effectLoading = false;
             return;
         }
-        g_effectKind = static_cast<EffectKind>(item.iItem);
+        g_effectSelection = item.iItem;
+        g_effectType = settings.effects[g_effectSelection].type;
         UpdateViewVisibility();
         ShowEffectForSelected();
         Relayout();
@@ -1515,9 +1753,11 @@ void OnEffectComboChanged()
     // an endpoint that is no longer shown.
     if (selected != g_effectIndex) {
         StopListening();
+        g_effectSelection = 0;
     }
     g_effectIndex = selected;
 
+    RebuildEffectList();
     ShowEffectForSelected();
     UpdateEffectsUi();
     RepaintAll();
@@ -1585,6 +1825,17 @@ LRESULT HandleNotify(LPARAM lParam)
         case LVN_ITEMCHANGED:
             OnEffectListChanged(*reinterpret_cast<NMLISTVIEW*>(lParam));
             break;
+        case NM_CLICK: {
+            // Column 1 is the delete button. The click arrives before the
+            // selection change, so deleting the clicked row directly keeps the
+            // row index unambiguous.
+            auto* activate = reinterpret_cast<NMITEMACTIVATE*>(lParam);
+            if (activate->iItem >= 0 && activate->iSubItem == 1) {
+                DeleteEffect(activate->iItem);
+                return 0;
+            }
+            break;
+        }
         default:
             break;
         }
@@ -1639,6 +1890,13 @@ LRESULT HandleNotify(LPARAM lParam)
                 }
                 if (g_endpoints[index].streamOurs) {
                     text += L"\r\nAlso bound in the Stream slot";
+                }
+                if (g_endpoints[index].BoundAtEndpoint()) {
+                    text += L"\r\nBound as an endpoint effect (works for raw "
+                            L"streams)";
+                } else if (g_endpoints[index].Enabled()) {
+                    text += L"\r\nApply to move the binding to the endpoint "
+                            L"effect";
                 }
                 wcsncpy_s(tip->pszText, tip->cchTextMax, text.c_str(),
                           _TRUNCATE);
@@ -1839,6 +2097,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_EFFECTS_RESET:
             ResetEffects();
             break;
+        case IDC_EFFECT_ADD:
+            if (HIWORD(wParam) == BN_CLICKED) {
+                DoAddEffect();
+            }
+            break;
         case IDC_LOG:
             DoOpenLog();
             break;
@@ -1849,26 +2112,37 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
                 RepaintAll();
             }
             break;
-        case IDC_GATE_THRESHOLD_EDIT:
-        case IDC_GATE_RANGE_EDIT:
-        case IDC_GATE_ATTACK_EDIT:
-        case IDC_GATE_HOLD_EDIT:
-        case IDC_GATE_RELEASE_EDIT:
-        case IDC_GATE_LOOKAHEAD_EDIT:
-        case IDC_COMP_THRESHOLD_EDIT:
-        case IDC_COMP_RATIO_EDIT:
-        case IDC_COMP_ATTACK_EDIT:
-        case IDC_COMP_RELEASE_EDIT:
-        case IDC_MAKEUP_EDIT:
-        case IDC_NOISE_REDUCTION_EDIT:
-        case IDC_DYN_FREQUENCY_EDIT:
-        case IDC_DYN_Q_EDIT:
-        case IDC_DYN_THRESHOLD_EDIT:
-        case IDC_DYN_RATIO_EDIT:
-        case IDC_DYN_RANGE_EDIT:
-        case IDC_DYN_ATTACK_EDIT:
-        case IDC_DYN_RELEASE_EDIT:
-            if (HIWORD(wParam) == EN_CHANGE) {
+        case IDC_DIST_FUNCTION_COMBO:
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                MarkSettingsDirty();
+            } else if (HIWORD(wParam) == CBN_CLOSEUP) {
+                RepaintAll();
+            }
+            break;
+        case IDC_GATE_THRESHOLD_SLIDER:
+        case IDC_GATE_RANGE_SLIDER:
+        case IDC_GATE_ATTACK_SLIDER:
+        case IDC_GATE_HOLD_SLIDER:
+        case IDC_GATE_RELEASE_SLIDER:
+        case IDC_GATE_LOOKAHEAD_SLIDER:
+        case IDC_COMP_THRESHOLD_SLIDER:
+        case IDC_COMP_RATIO_SLIDER:
+        case IDC_COMP_ATTACK_SLIDER:
+        case IDC_COMP_RELEASE_SLIDER:
+        case IDC_MAKEUP_SLIDER:
+        case IDC_NOISE_REDUCTION_SLIDER:
+        case IDC_DYN_FREQUENCY_SLIDER:
+        case IDC_DYN_Q_SLIDER:
+        case IDC_DYN_THRESHOLD_SLIDER:
+        case IDC_DYN_RATIO_SLIDER:
+        case IDC_DYN_RANGE_SLIDER:
+        case IDC_DYN_ATTACK_SLIDER:
+        case IDC_DYN_RELEASE_SLIDER:
+        case IDC_REVERB_MIX_SLIDER:
+        case IDC_REVERB_SIZE_SLIDER:
+        case IDC_REVERB_DAMPING_SLIDER:
+        case IDC_REVERB_PREDELAY_SLIDER:
+            if (ui::IsSliderChange(HIWORD(wParam))) {
                 MarkSettingsDirty();
             }
             break;
@@ -1935,6 +2209,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
                 endpoint.isolationDirty = false;
             }
             g_captureIsolationDirty = false;
+            RebuildEffectList();
             ShowEffectForSelected();
             UpdateFilesUi();
             UpdateDevicesUi();
@@ -1956,8 +2231,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             if (kind == WorkKind::Generic && ValidEffectIndex() &&
                 g_endpoints[g_effectIndex].settingsDirty &&
                 g_files.dllUpToDate) {
-                SetTimer(g_window, kLiveApplyTimer, kLiveApplyDelayMs,
-                         nullptr);
+                g_liveApplyPending =
+                    SetTimer(g_window, kLiveApplyTimer, kLiveApplyDelayMs,
+                             nullptr) != 0;
             }
         }
 
@@ -2015,6 +2291,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
     case WM_DESTROY:
         KillTimer(window, kMonitorTimer);
         KillTimer(window, kLiveApplyTimer);
+        g_liveApplyPending = false;
         apo::StopMonitor();
         if (g_worker.joinable()) {
             g_worker.join();
@@ -2028,6 +2305,20 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         return DefWindowProcW(window, message, wParam, lParam);
     }
     return 0;
+}
+
+std::wstring DescribeEffectList(const apo::ApoSettings& settings)
+{
+    std::wstring text;
+    for (int i = 0; i < settings.effectCount; ++i) {
+        const apo::EffectInstance& effect = settings.effects[i];
+        if (i > 0) {
+            text += L",";
+        }
+        text += apo::EffectTypeName(effect.type);
+        text += apo::EffectEnabled(effect) ? L"(on)" : L"(off)";
+    }
+    return text;
 }
 
 int DumpStatus(const std::wstring& path)
@@ -2069,58 +2360,14 @@ int DumpStatus(const std::wstring& path)
                 (endpoint.compositePresent ? L"yes" : L"no") +
                 L" | stream=" +
                 (endpoint.streamOurs ? L"installed" : L"no") +
+                L" | endpoint=" +
+                (endpoint.endpointOurs ? L"installed" : L"no") +
+                L" | composite_endpoint=" +
+                (endpoint.compositeEndpointOurs ? L"installed" : L"no") +
                 L" | sysfx=" +
                 (endpoint.disableSysFx ? L"disabled" : L"enabled") +
-                L" | gate=" +
-                (endpoint.settings.gate.enabled ? L"on" : L"off") +
-                L" | gate_threshold=" +
-                FormatNumber(endpoint.settings.gate.thresholdDb) +
-                L" | gate_range=" +
-                FormatNumber(endpoint.settings.gate.rangeDb) +
-                L" | gate_attack=" +
-                FormatNumber(endpoint.settings.gate.attackMs) +
-                L" | gate_hold=" +
-                FormatNumber(endpoint.settings.gate.holdMs) +
-                L" | gate_release=" +
-                FormatNumber(endpoint.settings.gate.releaseMs) +
-                L" | gate_lookahead=" +
-                FormatNumber(endpoint.settings.gate.lookaheadMs) +
-                L" | dynamic=" +
-                (endpoint.settings.dynamics.enabled ? L"on" : L"off") +
-                L" | dynamic_mode=" +
-                (endpoint.settings.dynamics.expand ? L"extend" : L"reduce") +
-                L" | dynamic_frequency=" +
-                FormatNumber(endpoint.settings.dynamics.frequencyHz) +
-                L" | dynamic_q=" +
-                FormatNumber(endpoint.settings.dynamics.q) +
-                L" | dynamic_threshold=" +
-                FormatNumber(endpoint.settings.dynamics.thresholdDb) +
-                L" | dynamic_ratio=" +
-                FormatNumber(endpoint.settings.dynamics.ratio) +
-                L" | dynamic_range=" +
-                FormatNumber(endpoint.settings.dynamics.rangeDb) +
-                L" | dynamic_attack=" +
-                FormatNumber(endpoint.settings.dynamics.attackMs) +
-                L" | dynamic_release=" +
-                FormatNumber(endpoint.settings.dynamics.releaseMs) +
-                L" | compressor=" +
-                (endpoint.settings.compressor.enabled ? L"on" : L"off") +
-                L" | threshold=" +
-                FormatNumber(endpoint.settings.compressor.thresholdDb) +
-                L" | ratio=" +
-                FormatNumber(endpoint.settings.compressor.ratio) +
-                L" | attack=" +
-                FormatNumber(endpoint.settings.compressor.attackMs) +
-                L" | release=" +
-                FormatNumber(endpoint.settings.compressor.releaseMs) +
-                L" | gain=" +
-                (endpoint.settings.makeupEnabled ? L"on" : L"off") +
-                L" | makeup=" + FormatNumber(endpoint.settings.makeupDb) +
-                L" | mono=" + (endpoint.settings.mono ? L"on" : L"off") +
-                L" | noise=" +
-                (endpoint.settings.noise.enabled ? L"on" : L"off") +
-                L" | noise_reduction=" +
-                FormatNumber(endpoint.settings.noise.reductionDb) +
+                L" | effects=[" +
+                DescribeEffectList(endpoint.settings) + L"]" +
                 L" | noise_profile=" +
                 (apo::FileExists(apo::NoiseProfilePath(endpoint.id)) ? L"yes"
                                                                    : L"no") +

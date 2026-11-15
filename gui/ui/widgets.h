@@ -10,6 +10,16 @@
 
 namespace ui {
 
+struct SliderSpec {
+    double min = 0.0;
+    double max = 1.0;
+    // Quantum for linear sliders. Logarithmic sliders snap to three
+    // significant digits instead, so low values stay adjustable.
+    double step = 1.0;
+    bool logarithmic = false;
+    int decimals = 0;
+};
+
 int Scale(int value);
 void ApplyFont(HWND control, HFONT font);
 void CreateFonts();
@@ -18,7 +28,7 @@ void DestroyFonts();
 HWND Label(HWND parent, int id, const wchar_t* text, DWORD style = SS_LEFT);
 HWND Button(HWND parent, int id, const wchar_t* text);
 HWND CheckBox(HWND parent, int id, const wchar_t* text);
-HWND NumberField(HWND parent, int id);
+HWND Slider(HWND parent, int id, const SliderSpec& spec);
 HWND GroupFrame(HWND parent, int id, const wchar_t* text);
 HWND ComboBox(HWND parent, int id, DWORD style);
 HWND ReportList(HWND parent, int id, DWORD style);
@@ -29,10 +39,10 @@ HWND TabControl(HWND parent, int id);
 void ApplyListStateImages(HWND list);
 
 std::wstring FormatNumber(double value);
-void SetNumber(HWND field, double value);
-bool GetNumber(HWND field, double& value);
+void SetSliderValue(HWND slider, double value);
+bool GetSliderValue(HWND slider, double& value);
 
-// True when a WM_COMMAND notification means the number field's value changed.
-bool IsNumberFieldChange(WORD notification);
+// True when a WM_COMMAND notification means the slider's value changed.
+bool IsSliderChange(WORD notification);
 
 } // namespace ui

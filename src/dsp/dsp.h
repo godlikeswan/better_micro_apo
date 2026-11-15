@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <memory>
 #include <vector>
 
 #include "apo_settings.h"
@@ -93,11 +92,11 @@ public:
     // and reset their state.
     virtual void Configure(const AudioFormat& format) { (void)format; }
 
-    // Retunes the stage from a new settings snapshot without allocating. Called
+    // Retunes the stage from one effect instance without allocating. Called
     // from the real-time path when the GUI publishes a new generation.
-    virtual void Update(const ApoSettings& settings, const AudioFormat& format)
+    virtual void Update(const EffectInstance& effect, const AudioFormat& format)
     {
-        (void)settings;
+        (void)effect;
         (void)format;
     }
 
@@ -113,15 +112,17 @@ public:
     virtual void Process(double* samples, UINT32 frames, UINT32 channels) = 0;
 };
 
-// An ordered list of stages. The chain owns the stages, so rebuilding it is a
-// setup-time operation and never happens on the real-time path.
+// An ordered list of stages. The chain only points at stages owned by
+// StagePool, so rebuilding it never allocates or frees memory on the real-time
+// path. Capacity is reserved for the largest effect list.
 class Chain
 {
 public:
-    void Add(std::unique_ptr<Stage> stage);
+    Chain() { m_stages.reserve(kMaxEffects); }
+
+    void Add(Stage* stage);
     void Clear();
-    void Configure(const AudioFormat& format);
-    void Update(const ApoSettings& settings);
+    void SetFormat(const AudioFormat& format) { m_format = format; }
     void Reset();
     bool NeedsSilence() const;
     void Process(const BYTE* source, BYTE* destination, UINT32 frames,
@@ -133,7 +134,7 @@ public:
 
 private:
     AudioFormat m_format;
-    std::vector<std::unique_ptr<Stage>> m_stages;
+    std::vector<Stage*> m_stages;
 };
 
 } // namespace apo::dsp

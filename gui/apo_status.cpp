@@ -93,9 +93,13 @@ bool HasCompositeFx(const std::wstring& fx)
 
 bool HasCompositeExtraFx(const std::wstring& fx)
 {
-    // Everything after the stream chain is an effect that is not this APO.
-    for (int index = kCompositeFirstProp + 1; index <= kCompositeLastProp;
+    // Everything except the endpoint chain is an effect that is not this APO.
+    // The endpoint slot holds this APO, so it must not count as a leftover.
+    for (int index = kCompositeFirstProp; index <= kCompositeLastProp;
          ++index) {
+        if (index == kCompositeEndpointIndex) {
+            continue;
+        }
         const std::wstring name =
             std::wstring(kFxPropBase) + L"," + std::to_wstring(index);
         std::vector<std::wstring> values;
@@ -244,11 +248,22 @@ std::vector<Endpoint> EnumEndpoints()
                                   value)) {
             endpoint.streamOurs = _wcsicmp(value.c_str(), kClsid) == 0;
         }
+        if (detail::RegReadString(HKEY_LOCAL_MACHINE, fx, kEndpointProp,
+                                  value)) {
+            endpoint.endpointOurs = _wcsicmp(value.c_str(), kClsid) == 0;
+        }
 
         std::vector<std::wstring> composite;
         if (detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
                                        kCompositeStreamProp, composite)) {
             endpoint.compositeOurs = ContainsClsid(composite, kClsid);
+        }
+        std::vector<std::wstring> compositeEndpoint;
+        if (detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
+                                       kCompositeEndpointProp,
+                                       compositeEndpoint)) {
+            endpoint.compositeEndpointOurs =
+                ContainsClsid(compositeEndpoint, kClsid);
         }
         endpoint.compositePresent = HasCompositeFx(fx);
         endpoint.isolatePendingCleanup =

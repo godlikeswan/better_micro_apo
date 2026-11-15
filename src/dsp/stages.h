@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <vector>
 
 #include "apo_settings.h"
@@ -15,10 +16,10 @@ namespace apo::dsp {
 class GateStage final : public Stage
 {
 public:
-    explicit GateStage(const GateSettings& settings) : m_settings(settings) {}
+    GateStage() = default;
 
     void Configure(const AudioFormat& format) override;
-    void Update(const ApoSettings& settings, const AudioFormat& format) override;
+    void Update(const EffectInstance& effect, const AudioFormat& format) override;
     void Reset() override;
     bool NeedsSilence() const override
     {
@@ -53,13 +54,10 @@ private:
 class CompressorStage final : public Stage
 {
 public:
-    explicit CompressorStage(const CompressorSettings& settings)
-        : m_settings(settings)
-    {
-    }
+    CompressorStage() = default;
 
     void Configure(const AudioFormat& format) override;
-    void Update(const ApoSettings& settings, const AudioFormat& format) override;
+    void Update(const EffectInstance& effect, const AudioFormat& format) override;
     void Reset() override;
     void Process(double* samples, UINT32 frames, UINT32 channels) override;
 
@@ -80,13 +78,10 @@ private:
 class DynamicStage final : public Stage
 {
 public:
-    explicit DynamicStage(const DynamicSettings& settings)
-        : m_settings(settings)
-    {
-    }
+    DynamicStage() = default;
 
     void Configure(const AudioFormat& format) override;
-    void Update(const ApoSettings& settings, const AudioFormat& format) override;
+    void Update(const EffectInstance& effect, const AudioFormat& format) override;
     void Reset() override;
     void Process(double* samples, UINT32 frames, UINT32 channels) override;
 
@@ -119,17 +114,17 @@ private:
 class GainStage final : public Stage
 {
 public:
-    explicit GainStage(const ApoSettings& settings) : m_settings(settings) {}
+    GainStage() = default;
 
     void Configure(const AudioFormat& format) override;
-    void Update(const ApoSettings& settings, const AudioFormat& format) override;
+    void Update(const EffectInstance& effect, const AudioFormat& format) override;
     void Reset() override {}
     void Process(double* samples, UINT32 frames, UINT32 channels) override;
 
 private:
     void ApplyGain();
 
-    ApoSettings m_settings;
+    GainSettings m_settings;
     double m_gain = 1.0;
 };
 
@@ -139,10 +134,10 @@ private:
 class NoiseStage final : public Stage
 {
 public:
-    NoiseStage(const NoiseSettings& settings, const NoiseProfile& profile);
+    explicit NoiseStage(const NoiseProfile& profile);
 
     void Configure(const AudioFormat& format) override;
-    void Update(const ApoSettings& settings, const AudioFormat& format) override;
+    void Update(const EffectInstance& effect, const AudioFormat& format) override;
     void Reset() override;
     bool NeedsSilence() const override { return m_settings.enabled; }
     void Process(double* samples, UINT32 frames, UINT32 channels) override;
@@ -180,13 +175,117 @@ private:
 class MonoStage final : public Stage
 {
 public:
-    explicit MonoStage(bool enabled) : m_enabled(enabled) {}
+    MonoStage() = default;
 
-    void Update(const ApoSettings& settings, const AudioFormat& format) override;
+    void Update(const EffectInstance& effect, const AudioFormat& format) override;
     void Process(double* samples, UINT32 frames, UINT32 channels) override;
 
 private:
     bool m_enabled = false;
+};
+
+// Soft saturation with a selectable curve. Every function has unity slope at
+// zero, so the makeup gain stage controls how hard it is driven. The tube curve
+// is asymmetric, so its output passes through a DC blocker to remove the offset
+// the asymmetry creates.
+class DistortionStage final : public Stage
+{
+public:
+    DistortionStage() = default;
+
+    void Configure(const AudioFormat& format) override;
+    void Update(const EffectInstance& effect, const AudioFormat& format) override;
+    void Reset() override;
+    void Process(double* samples, UINT32 frames, UINT32 channels) override;
+
+private:
+    double Shape(double value) const;
+
+    DistortionSettings m_settings;
+    UINT32 m_channels = 0;
+    double m_dcCoefficient = 0.0;
+    std::vector<double> m_dcInput;
+    std::vector<double> m_dcOutput;
+};
+
+// Room/hall reverb built from the Freeverb comb/allpass network. It runs last
+// so a mono source copied to both channels gets a wide stereo tail. `mix`
+// crossfades dry and wet, `size` sets the decay, `damping` absorbs highs in the
+// tail, and `predelayMs` delays the excitation.
+class ReverbStage final : public Stage
+{
+public:
+    ReverbStage() = default;
+
+    void Configure(const AudioFormat& format) override;
+    void Update(const EffectInstance& effect, const AudioFormat& format) override;
+    void Reset() override;
+    bool NeedsSilence() const override
+    {
+        return m_settings.enabled && m_settings.mix > 0.0;
+    }
+    void Process(double* samples, UINT32 frames, UINT32 channels) override;
+
+private:
+    struct Comb
+    {
+        std::vector<double> buffer;
+        size_t index = 0;
+        double store = 0.0;
+    };
+
+    struct Allpass
+    {
+        std::vector<double> buffer;
+        size_t index = 0;
+    };
+
+    struct Tank
+    {
+        std::vector<Comb> combs;
+        std::vector<Allpass> allpasses;
+    };
+
+    void ApplyCoefficients();
+    double ProcessComb(Comb& comb, double input) const;
+    double ProcessAllpass(Allpass& allpass, double input) const;
+
+    ReverbSettings m_settings;
+    std::vector<Tank> m_tanks;
+    std::vector<double> m_predelay;
+    size_t m_predelayCapacityFrames = 0;
+    size_t m_predelayFrames = 0;
+    size_t m_predelayWrite = 0;
+    UINT32 m_channels = 0;
+    double m_sampleRate = 44100.0;
+    double m_feedback = 0.0;
+    double m_damping = 0.0;
+    double m_wetGain = 0.0;
+    double m_dryGain = 1.0;
+};
+
+// Owns every stage instance the effect list can reference. Configure() runs
+// from LockForProcess and allocates a fixed number of stages per type; Update()
+// runs from the real-time path, binds instances by id, retunes them in place and
+// fills a non-owning Chain without allocating.
+class StagePool
+{
+public:
+    void Configure(const AudioFormat& format, const NoiseProfile& profile);
+    void Clear();
+    void Update(const ApoSettings& settings, const AudioFormat& format,
+                Chain& chain);
+
+    bool Empty() const;
+
+private:
+    struct Slots
+    {
+        std::vector<std::unique_ptr<Stage>> stages;
+        std::vector<int> boundIds;
+    };
+
+    Slots m_slots[static_cast<int>(EffectType::Count)];
 };
 
 } // namespace apo::dsp

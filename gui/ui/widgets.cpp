@@ -4,7 +4,9 @@
 #include "ui_state.h"
 
 #include <commctrl.h>
+#include <windowsx.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cwchar>
 #include <iterator>
@@ -97,7 +99,7 @@ void SetHot(HWND window, bool hot)
     }
 }
 
-void SelectFont(HDC dc, HWND window, HGDIOBJ& oldFont)
+void SelectControlFont(HDC dc, HWND window, HGDIOBJ& oldFont)
 {
     HFONT font = reinterpret_cast<HFONT>(
         SendMessageW(window, WM_GETFONT, 0, 0));
@@ -154,7 +156,7 @@ void DrawPushButton(HWND window, HDC dc, const Theme& theme)
     GetWindowTextW(window, caption, static_cast<int>(std::size(caption)));
 
     HGDIOBJ oldFont = nullptr;
-    SelectFont(dc, window, oldFont);
+    SelectControlFont(dc, window, oldFont);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, text);
 
@@ -240,7 +242,7 @@ void DrawCheckBox(HWND window, HDC dc, const Theme& theme)
     RECT textRect{boxRect.right + Scale(8), client.top, client.right,
                   client.bottom};
     HGDIOBJ oldFont = nullptr;
-    SelectFont(dc, window, oldFont);
+    SelectControlFont(dc, window, oldFont);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, disabled ? theme.color.disabledText : theme.color.text);
     DrawTextW(dc, caption, -1, &textRect,
@@ -277,7 +279,7 @@ void DrawTabs(HWND window, HDC dc, const Theme& theme)
     DeleteObject(frame);
 
     HGDIOBJ oldFont = nullptr;
-    SelectFont(dc, window, oldFont);
+    SelectControlFont(dc, window, oldFont);
     SetBkMode(dc, TRANSPARENT);
 
     const int count = TabCtrl_GetItemCount(window);
@@ -581,6 +583,316 @@ LRESULT CALLBACK ListViewProc(HWND window, UINT message, WPARAM wParam,
     return DefSubclassProc(window, message, wParam, lParam);
 }
 
+// ---------------------------------------------------------------------------
+// Slider
+// ---------------------------------------------------------------------------
+
+constexpr wchar_t kSliderClass[] = L"BetterMicroApoSlider";
+constexpr WORD kSliderChange = 0x0700;
+
+struct SliderState {
+    double min = 0.0;
+    double max = 1.0;
+    double step = 1.0;
+    bool logarithmic = false;
+    int decimals = 0;
+    double value = 0.0;
+    HFONT font = nullptr;
+    bool tracking = false;
+};
+
+double ClampValue(double value, double low, double high)
+{
+    if (value < low) {
+        return low;
+    }
+    if (value > high) {
+        return high;
+    }
+    return value;
+}
+
+double SnapSliderValue(const SliderState& state, double value)
+{
+    if (state.logarithmic) {
+        // Three significant digits keep the whole log range adjustable.
+        if (value != 0.0) {
+            const double magnitude = std::pow(
+                10.0, std::floor(std::log10(std::fabs(value))) - 2.0);
+            value = std::round(value / magnitude) * magnitude;
+        }
+    } else if (state.step > 0.0) {
+        value = std::round(value / state.step) * state.step;
+    }
+    if (value == 0.0) {
+        // Rounding can produce negative zero, which would read as "-0".
+        value = 0.0;
+    }
+    return ClampValue(value, state.min, state.max);
+}
+
+double SliderNormalized(const SliderState& state, double value)
+{
+    if (state.max <= state.min) {
+        return 0.0;
+    }
+    value = ClampValue(value, state.min, state.max);
+    if (state.logarithmic && state.min > 0.0) {
+        return std::log(value / state.min) /
+               std::log(state.max / state.min);
+    }
+    return (value - state.min) / (state.max - state.min);
+}
+
+double SliderValueAt(const SliderState& state, double normalized)
+{
+    normalized = ClampValue(normalized, 0.0, 1.0);
+    double value = state.min;
+    if (state.logarithmic && state.min > 0.0) {
+        value = state.min * std::pow(state.max / state.min, normalized);
+    } else {
+        value = state.min + normalized * (state.max - state.min);
+    }
+    return SnapSliderValue(state, value);
+}
+
+std::wstring SliderText(const SliderState& state)
+{
+    wchar_t text[48]{};
+    if (state.logarithmic) {
+        swprintf_s(text, std::size(text), L"%g", state.value);
+    } else {
+        swprintf_s(text, std::size(text), L"%.*f", state.decimals,
+                   state.value);
+    }
+    return text;
+}
+
+void SliderTrackRect(HWND window, RECT& track)
+{
+    RECT client{};
+    GetClientRect(window, &client);
+    const int valueWidth = Scale(52);
+    track.left = client.left + Scale(7);
+    track.right = client.right - valueWidth - Scale(6);
+    if (track.right < track.left + Scale(24)) {
+        track.right = client.right - Scale(6);
+    }
+    track.top = client.top;
+    track.bottom = client.bottom;
+}
+
+void SliderNotify(HWND window)
+{
+    SendMessageW(GetParent(window), WM_COMMAND,
+                 MAKEWPARAM(GetDlgCtrlID(window), kSliderChange),
+                 reinterpret_cast<LPARAM>(window));
+}
+
+void SliderApply(HWND window, SliderState& state, double value, bool notify)
+{
+    const double snapped = SnapSliderValue(state, value);
+    if (snapped == state.value) {
+        return;
+    }
+    state.value = snapped;
+    InvalidateRect(window, nullptr, FALSE);
+    if (notify) {
+        SliderNotify(window);
+    }
+}
+
+void SliderSetFromPoint(HWND window, SliderState& state, int x)
+{
+    RECT track{};
+    SliderTrackRect(window, track);
+    const int span = std::max(static_cast<int>(track.right - track.left), 1);
+    const double normalized =
+        static_cast<double>(x - track.left) / static_cast<double>(span);
+    SliderApply(window, state, SliderValueAt(state, normalized), true);
+}
+
+void PaintSlider(HWND window, const SliderState& state, HDC dc)
+{
+    const Theme& theme = GetTheme();
+
+    RECT client{};
+    GetClientRect(window, &client);
+    FillRect(dc, &client, theme.backgroundBrush);
+
+    const bool enabled = IsWindowEnabled(window) != FALSE;
+    const COLORREF grooveColor =
+        enabled ? theme.color.frame : theme.color.disabledText;
+    const COLORREF accent =
+        enabled ? theme.color.accent : theme.color.disabledText;
+    const COLORREF textColor =
+        enabled ? theme.color.text : theme.color.disabledText;
+
+    RECT track{};
+    SliderTrackRect(window, track);
+    const int centerY = (client.top + client.bottom) / 2;
+    const int grooveHeight = std::max(Scale(4), 2);
+    const int thumbRadius = Scale(6);
+
+    RECT groove{track.left, centerY - grooveHeight / 2, track.right,
+                centerY - grooveHeight / 2 + grooveHeight};
+    HBRUSH brush = CreateSolidBrush(grooveColor);
+    FillRect(dc, &groove, brush);
+    DeleteObject(brush);
+
+    const double normalized =
+        ClampValue(SliderNormalized(state, state.value), 0.0, 1.0);
+    const int thumbX =
+        track.left + static_cast<int>(normalized *
+                                      static_cast<double>(track.right -
+                                                          track.left));
+
+    if (thumbX > track.left) {
+        RECT filled{groove.left, groove.top, thumbX, groove.bottom};
+        brush = CreateSolidBrush(accent);
+        FillRect(dc, &filled, brush);
+        DeleteObject(brush);
+    }
+
+    brush = CreateSolidBrush(accent);
+    HPEN thumbPen = CreatePen(PS_SOLID, Scale(1), theme.color.background);
+    HGDIOBJ oldBrush = SelectObject(dc, brush);
+    HGDIOBJ oldPen = SelectObject(dc, thumbPen);
+    Ellipse(dc, thumbX - thumbRadius, centerY - thumbRadius,
+            thumbX + thumbRadius + 1, centerY + thumbRadius + 1);
+    SelectObject(dc, oldPen);
+    SelectObject(dc, oldBrush);
+    DeleteObject(thumbPen);
+    DeleteObject(brush);
+
+    HFONT font = state.font;
+    if (font == nullptr) {
+        font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    }
+    HGDIOBJ oldFont = SelectObject(dc, font);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, textColor);
+    const std::wstring valueText = SliderText(state);
+    RECT valueRect{track.right + Scale(6), client.top, client.right,
+                   client.bottom};
+    DrawTextW(dc, valueText.c_str(), -1, &valueRect,
+              DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(dc, oldFont);
+
+    if (GetFocus() == window) {
+        RECT focus{track.left - Scale(2), centerY - Scale(10),
+                   track.right + Scale(2), centerY + Scale(10)};
+        HPEN focusPen = CreatePen(PS_SOLID, Scale(1), theme.color.accent);
+        oldPen = SelectObject(dc, focusPen);
+        oldBrush =
+            SelectObject(dc, static_cast<HBRUSH>(GetStockObject(NULL_BRUSH)));
+        Rectangle(dc, focus.left, focus.top, focus.right, focus.bottom);
+        SelectObject(dc, oldBrush);
+        SelectObject(dc, oldPen);
+        DeleteObject(focusPen);
+    }
+}
+
+LRESULT CALLBACK SliderProc(HWND window, UINT message, WPARAM wParam,
+                            LPARAM lParam)
+{
+    auto* state = reinterpret_cast<SliderState*>(
+        GetWindowLongPtrW(window, GWLP_USERDATA));
+    if (message == WM_NCCREATE) {
+        auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+        state = reinterpret_cast<SliderState*>(create->lpCreateParams);
+        SetWindowLongPtrW(window, GWLP_USERDATA,
+                          reinterpret_cast<LONG_PTR>(state));
+    }
+    if (state == nullptr) {
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+
+    switch (message) {
+    case WM_NCDESTROY:
+        SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+        delete state;
+        return DefWindowProcW(window, message, wParam, lParam);
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(window, &paint);
+        PaintSlider(window, *state, dc);
+        EndPaint(window, &paint);
+        return 0;
+    }
+    case WM_SETFONT:
+        state->font = reinterpret_cast<HFONT>(wParam);
+        if (LOWORD(lParam) != 0) {
+            InvalidateRect(window, nullptr, TRUE);
+        }
+        return 0;
+    case WM_GETFONT:
+        return reinterpret_cast<LRESULT>(state->font);
+    case WM_ENABLE:
+    case WM_SETFOCUS:
+    case WM_KILLFOCUS:
+        InvalidateRect(window, nullptr, FALSE);
+        return 0;
+    case WM_LBUTTONDOWN:
+        SetFocus(window);
+        SetCapture(window);
+        state->tracking = true;
+        SliderSetFromPoint(window, *state, GET_X_LPARAM(lParam));
+        return 0;
+    case WM_MOUSEMOVE:
+        if (state->tracking) {
+            SliderSetFromPoint(window, *state, GET_X_LPARAM(lParam));
+        }
+        return 0;
+    case WM_LBUTTONUP:
+        if (state->tracking) {
+            state->tracking = false;
+            ReleaseCapture();
+        }
+        return 0;
+    case WM_CAPTURECHANGED:
+        state->tracking = false;
+        return 0;
+    case WM_MOUSEWHEEL: {
+        const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+        const double factor =
+            state->logarithmic ? 1.05 : state->step;
+        double value = state->value;
+        if (state->logarithmic) {
+            value = delta > 0 ? value * factor : value / factor;
+        } else {
+            value += delta > 0 ? factor : -factor;
+        }
+        SliderApply(window, *state, value, true);
+        return 0;
+    }
+    default:
+        break;
+    }
+
+    return DefWindowProcW(window, message, wParam, lParam);
+}
+
+void EnsureSliderClass()
+{
+    static bool registered = false;
+    if (registered) {
+        return;
+    }
+
+    WNDCLASSEXW windowClass{};
+    windowClass.cbSize = sizeof(windowClass);
+    windowClass.style = CS_HREDRAW | CS_VREDRAW;
+    windowClass.lpfnWndProc = SliderProc;
+    windowClass.hInstance = g_instance;
+    windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    windowClass.lpszClassName = kSliderClass;
+    RegisterClassExW(&windowClass);
+    registered = true;
+}
+
 } // namespace
 
 void ApplyListStateImages(HWND list)
@@ -689,14 +1001,27 @@ HWND CheckBox(HWND parent, int id, const wchar_t* text)
     return control;
 }
 
-HWND NumberField(HWND parent, int id)
+HWND Slider(HWND parent, int id, const SliderSpec& spec)
 {
+    EnsureSliderClass();
+
+    auto* state = new SliderState;
+    state->min = spec.min;
+    state->max = spec.max;
+    state->step = spec.step;
+    state->logarithmic = spec.logarithmic;
+    state->decimals = spec.decimals;
+    state->value = SnapSliderValue(*state, spec.min);
+
     HWND control = CreateWindowExW(
-        WS_EX_CLIENTEDGE, WC_EDITW, L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | ES_AUTOHSCROLL |
-            ES_RIGHT,
-        0, 0, 0, 0, parent,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
+        0, kSliderClass, L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS, 0, 0, 0, 0,
+        parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance,
+        state);
+    if (control == nullptr) {
+        delete state;
+        return nullptr;
+    }
     ApplyFont(control, g_font);
     return control;
 }
@@ -760,35 +1085,36 @@ std::wstring FormatNumber(double value)
     return text;
 }
 
-void SetNumber(HWND field, double value)
+void SetSliderValue(HWND slider, double value)
 {
-    SetWindowTextW(field, FormatNumber(value).c_str());
+    auto* state = reinterpret_cast<SliderState*>(
+        GetWindowLongPtrW(slider, GWLP_USERDATA));
+    if (state == nullptr) {
+        return;
+    }
+
+    const double snapped = SnapSliderValue(*state, value);
+    if (snapped == state->value) {
+        return;
+    }
+    state->value = snapped;
+    InvalidateRect(slider, nullptr, FALSE);
 }
 
-bool GetNumber(HWND field, double& value)
+bool GetSliderValue(HWND slider, double& value)
 {
-    wchar_t text[64]{};
-    GetWindowTextW(field, text, static_cast<int>(std::size(text)));
-
-    wchar_t* end = nullptr;
-    const double parsed = std::wcstod(text, &end);
-    if (end == text) {
+    auto* state = reinterpret_cast<SliderState*>(
+        GetWindowLongPtrW(slider, GWLP_USERDATA));
+    if (state == nullptr) {
         return false;
     }
-    while (*end == L' ' || *end == L'\t') {
-        ++end;
-    }
-    if (*end != L'\0' || !std::isfinite(parsed)) {
-        return false;
-    }
-
-    value = parsed;
+    value = state->value;
     return true;
 }
 
-bool IsNumberFieldChange(WORD notification)
+bool IsSliderChange(WORD notification)
 {
-    return notification == EN_CHANGE;
+    return notification == kSliderChange;
 }
 
 } // namespace ui

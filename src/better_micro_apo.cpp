@@ -1,11 +1,10 @@
 // Better Micro APO - a minimal Windows capture APO.
 //
-// DSP chain: optional gate -> linked peak compressor -> makeup gain ->
-// optional mono copy (left channel to all channels).
-//
-// The stages themselves live in src/dsp. COM plumbing follows Microsoft's
-// SwapAPO sample: ATL owns the class factory, the object map and the
-// aggregation rules. Only the DSP and the registry writes are ours.
+// DSP chain: the per-endpoint effect list, processed in list order. The stages
+// themselves live in src/dsp; StagePool owns a fixed pool of them and rebuilds
+// the active order from the settings snapshot without allocating. COM plumbing
+// follows Microsoft's SwapAPO sample: ATL owns the class factory, the object
+// map and the aggregation rules. Only the DSP and the registry writes are ours.
 
 #include <atlbase.h>
 #include <atlcom.h>
@@ -92,6 +91,27 @@ namespace
         return StringFromGUID2(guid, text, static_cast<int>(std::size(text))) > 0;
     }
 
+    std::wstring DescribeEffects(const apo::ApoSettings& settings)
+    {
+        std::wstring text;
+        for (int index = 0; index < settings.effectCount; ++index)
+        {
+            const apo::EffectInstance& effect = settings.effects[index];
+            if (!text.empty())
+            {
+                text += L", ";
+            }
+            text += std::to_wstring(effect.id);
+            text += L":";
+            text += apo::EffectTypeName(effect.type);
+            if (!apo::EffectEnabled(effect))
+            {
+                text += L"(off)";
+            }
+        }
+        return text;
+    }
+
     // IMMDevice::GetId() returns "{0.0.0.00000000}.{endpoint-guid}". The last
     // GUID is the same key the GUI uses under MMDevices\Audio\Capture.
     std::wstring EndpointIdFromDeviceId(const wchar_t* deviceId)
@@ -147,6 +167,25 @@ namespace
         CoTaskMemFree(deviceId);
         return endpointId;
     }
+
+    // Classifies the Initialize structure so the log shows whether the engine
+    // is building a real effects chain or just discovering APOs.
+    const wchar_t* DescribeInit(UINT32 cbDataSize)
+    {
+        if (cbDataSize >= sizeof(APOInitSystemEffects2))
+        {
+            return L"system-effects2";
+        }
+        if (cbDataSize >= sizeof(APOInitSystemEffects))
+        {
+            return L"system-effects";
+        }
+        if (cbDataSize >= sizeof(APOInitBaseStruct))
+        {
+            return L"base";
+        }
+        return L"unknown";
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -167,14 +206,14 @@ const CRegAPOProperties<1> BetterMicroApo::sm_RegProperties(
 
 HRESULT BetterMicroApo::FinalConstruct()
 {
-    Log(L"FinalConstruct");
+    Log(L"FinalConstruct pid=%lu", GetCurrentProcessId());
     return S_OK;
 }
 
 void BetterMicroApo::FinalRelease()
 {
     CloseRuntimeSettings();
-    Log(L"FinalRelease");
+    Log(L"FinalRelease pid=%lu", GetCurrentProcessId());
 }
 
 STDMETHODIMP BetterMicroApo::Reset()
@@ -203,8 +242,9 @@ STDMETHODIMP BetterMicroApo::Initialize(UINT32 cbDataSize, BYTE* pbyData)
         GuidToString(base->clsid, clsidText);
     }
 
-    Log(L"Initialize hr=0x%08X cbDataSize=%u clsid=%s endpoint=%s", hr,
-        cbDataSize, clsidText,
+    Log(L"Initialize pid=%lu hr=0x%08X cbDataSize=%u kind=%s clsid=%s endpoint=%s",
+        GetCurrentProcessId(), hr, cbDataSize, DescribeInit(cbDataSize),
+        clsidText,
         m_endpointId.empty() ? L"<unknown>" : m_endpointId.c_str());
     return hr;
 }
@@ -259,7 +299,8 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
         u32NumOutputConnections, ppOutputConnections);
     if (FAILED(hr))
     {
-        Log(L"LockForProcess failed: hr=0x%08X", hr);
+        Log(L"LockForProcess failed: pid=%lu hr=0x%08X",
+            GetCurrentProcessId(), hr);
         return hr;
     }
 
@@ -268,7 +309,8 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
     if (FAILED(hr) || !IsSupportedFormat(format))
     {
         CBaseAudioProcessingObject::UnlockForProcess();
-        Log(L"LockForProcess: unsupported format hr=0x%08X", hr);
+        Log(L"LockForProcess: unsupported format pid=%lu hr=0x%08X",
+            GetCurrentProcessId(), hr);
         return APOERR_INVALID_CONNECTION_FORMAT;
     }
 
@@ -321,6 +363,7 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
         CBaseAudioProcessingObject::UnlockForProcess();
         CloseRuntimeSettings();
         m_chain.Clear();
+        m_stagePool.Clear();
         m_formatInfo = apo::dsp::AudioFormat{};
         m_maxFrames = 0;
         std::vector<double>().swap(m_scratch);
@@ -328,27 +371,12 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
         return E_OUTOFMEMORY;
     }
 
-    Log(L"LockForProcess ok: format=%s channels=%u rate=%u containerBytes=%u maxFrames=%u endpoint=%s noise=%d noiseReduction=%.2fdB noiseProfile=%d gate=%d gateThreshold=%.2fdB gateRange=%.2fdB gateAttack=%.2fms gateHold=%.2fms gateRelease=%.2fms gateLookahead=%.2fms dynamic=%d dynamicMode=%s dynamicFrequency=%.2fHz dynamicQ=%.2f dynamicThreshold=%.2fdB dynamicRatio=%.2f dynamicRange=%.2fdB dynamicAttack=%.2fms dynamicRelease=%.2fms compressor=%d threshold=%.2fdB ratio=%.2f:1 attack=%.2fms release=%.2fms makeup=%d makeupGain=%.2fdB mono=%d",
-        apo::dsp::FormatName(m_formatInfo.sample), m_formatInfo.channels,
+    Log(L"LockForProcess ok: pid=%lu format=%s channels=%u rate=%u containerBytes=%u maxFrames=%u endpoint=%s noiseProfile=%d effects=[%s]",
+        GetCurrentProcessId(), apo::dsp::FormatName(m_formatInfo.sample),
+        m_formatInfo.channels,
         m_formatInfo.sampleRate, m_formatInfo.bytesPerSample, m_maxFrames,
         m_endpointId.empty() ? L"<unknown>" : m_endpointId.c_str(),
-        m_settings.noise.enabled ? 1 : 0, m_settings.noise.reductionDb,
-        m_noiseProfile.valid ? 1 : 0,
-        m_settings.gate.enabled ? 1 : 0, m_settings.gate.thresholdDb,
-        m_settings.gate.rangeDb, m_settings.gate.attackMs,
-        m_settings.gate.holdMs, m_settings.gate.releaseMs,
-        m_settings.gate.lookaheadMs,
-        m_settings.dynamics.enabled ? 1 : 0,
-        m_settings.dynamics.expand ? L"extend" : L"reduce",
-        m_settings.dynamics.frequencyHz, m_settings.dynamics.q,
-        m_settings.dynamics.thresholdDb, m_settings.dynamics.ratio,
-        m_settings.dynamics.rangeDb, m_settings.dynamics.attackMs,
-        m_settings.dynamics.releaseMs,
-        m_settings.compressor.enabled ? 1 : 0,
-        m_settings.compressor.thresholdDb, m_settings.compressor.ratio,
-        m_settings.compressor.attackMs, m_settings.compressor.releaseMs,
-        m_settings.makeupEnabled ? 1 : 0, m_settings.makeupDb,
-        m_settings.mono ? 1 : 0);
+        m_noiseProfile.valid ? 1 : 0, DescribeEffects(m_settings).c_str());
     return S_OK;
 }
 
@@ -358,12 +386,13 @@ STDMETHODIMP BetterMicroApo::UnlockForProcess()
 
     CloseRuntimeSettings();
     m_chain.Clear();
+    m_stagePool.Clear();
     m_noiseProfile = apo::NoiseProfile{};
     m_formatInfo = apo::dsp::AudioFormat{};
     m_maxFrames = 0;
     std::vector<double>().swap(m_scratch);
 
-    Log(L"UnlockForProcess hr=0x%08X", hr);
+    Log(L"UnlockForProcess pid=%lu hr=0x%08X", GetCurrentProcessId(), hr);
     return hr;
 }
 
@@ -449,32 +478,19 @@ STDMETHODIMP_(void) BetterMicroApo::APOProcess(
     }
 
     ProcessBuffer(source, destination, input->u32ValidFrameCount);
+
     output->u32BufferFlags = BUFFER_VALID;
 }
 
 void BetterMicroApo::ConfigureDsp()
 {
-    using namespace apo::dsp;
-
+    // Setup path: allocate one stage per possible effect instance, then build
+    // the active order from the settings list. Later updates reuse these stages
+    // and only rebuild the non-owning chain.
     m_chain.Clear();
-
-    // Every stage is always present and checks its own enabled flag. That way a
-    // live settings update can turn a stage on or off without rebuilding (and
-    // allocating) the chain from the real-time path.
-    if (m_noiseProfile.valid)
-    {
-        m_chain.Add(
-            std::make_unique<NoiseStage>(m_settings.noise, m_noiseProfile));
-    }
-    m_chain.Add(std::make_unique<GateStage>(m_settings.gate));
-    // Frequency-selective dynamics run before the broadband compressor so they
-    // see the input dynamics, not the compressed signal.
-    m_chain.Add(std::make_unique<DynamicStage>(m_settings.dynamics));
-    m_chain.Add(std::make_unique<CompressorStage>(m_settings.compressor));
-    m_chain.Add(std::make_unique<GainStage>(m_settings));
-    m_chain.Add(std::make_unique<MonoStage>(m_settings.mono));
-
-    m_chain.Configure(m_formatInfo);
+    m_chain.SetFormat(m_formatInfo);
+    m_stagePool.Configure(m_formatInfo, m_noiseProfile);
+    m_stagePool.Update(m_settings, m_formatInfo, m_chain);
     m_chain.Reset();
 }
 
@@ -603,7 +619,7 @@ void BetterMicroApo::PollRuntimeSettings()
     apo::ClampSettings(settings);
     m_runtimeGeneration = generation;
     m_settings = settings;
-    m_chain.Update(settings);
+    m_stagePool.Update(settings, m_formatInfo, m_chain);
 }
 
 // ---------------------------------------------------------------------------
@@ -816,8 +832,8 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
     {
         g_module = instance;
         DisableThreadLibraryCalls(instance);
-        // Diagnostic only: proves the DLL was mapped into the hosting process
-        // even if no COM entry point is ever called.
+        // Proves the DLL was mapped into the hosting process even if no COM
+        // entry point is ever called.
         Log(L"DllMain attach pid=%lu", GetCurrentProcessId());
     }
     return g_moduleObject.DllMain(reason, reserved);
@@ -836,7 +852,8 @@ extern "C" HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid,
         wchar_t riidText[64]{};
         GuidToString(rclsid, clsidText);
         GuidToString(riid, riidText);
-        Log(L"DllGetClassObject clsid=%s riid=%s", clsidText, riidText);
+        Log(L"DllGetClassObject pid=%lu clsid=%s riid=%s",
+            GetCurrentProcessId(), clsidText, riidText);
     }
 
     return g_moduleObject.DllGetClassObject(rclsid, riid, ppvObject);

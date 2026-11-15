@@ -54,11 +54,12 @@ void GateStage::Configure(const AudioFormat& format)
     Reset();
 }
 
-void GateStage::Update(const ApoSettings& settings, const AudioFormat& format)
+void GateStage::Update(const EffectInstance& effect,
+                       const AudioFormat& format)
 {
     const bool wasEnabled = m_settings.enabled;
     const double oldLookahead = m_settings.lookaheadMs;
-    m_settings = settings.gate;
+    m_settings = effect.gate;
     ApplyCoefficients(format);
 
     // Changing the delay length or bypass state invalidates the buffered tail.
@@ -173,11 +174,11 @@ void CompressorStage::Configure(const AudioFormat& format)
     Reset();
 }
 
-void CompressorStage::Update(const ApoSettings& settings,
+void CompressorStage::Update(const EffectInstance& effect,
                              const AudioFormat& format)
 {
     const bool wasEnabled = m_settings.enabled;
-    m_settings = settings.compressor;
+    m_settings = effect.compressor;
     ApplyCoefficients(format);
     if (wasEnabled != m_settings.enabled)
     {
@@ -249,14 +250,14 @@ void DynamicStage::Configure(const AudioFormat& format)
     Reset();
 }
 
-void DynamicStage::Update(const ApoSettings& settings,
+void DynamicStage::Update(const EffectInstance& effect,
                           const AudioFormat& format)
 {
     const bool wasEnabled = m_settings.enabled;
     const double oldFrequency = m_settings.frequencyHz;
     const double oldQ = m_settings.q;
 
-    m_settings = settings.dynamics;
+    m_settings = effect.dynamics;
     ApplyCoefficients(format);
 
     // Changing the filter shape invalidates the filter state.
@@ -403,18 +404,18 @@ void GainStage::Configure(const AudioFormat& format)
     ApplyGain();
 }
 
-void GainStage::Update(const ApoSettings& settings,
+void GainStage::Update(const EffectInstance& effect,
                        const AudioFormat& format)
 {
     (void)format;
-    m_settings = settings;
+    m_settings = effect.gain;
     ApplyGain();
 }
 
 void GainStage::ApplyGain()
 {
-    m_gain = (m_settings.makeupEnabled && m_settings.makeupDb != 0.0)
-                 ? DecibelsToLinear(m_settings.makeupDb)
+    m_gain = (m_settings.enabled && m_settings.gainDb != 0.0)
+                 ? DecibelsToLinear(m_settings.gainDb)
                  : 1.0;
 }
 
@@ -432,9 +433,8 @@ void GainStage::Process(double* samples, UINT32 frames, UINT32 channels)
     }
 }
 
-NoiseStage::NoiseStage(const NoiseSettings& settings,
-                       const NoiseProfile& profile)
-    : m_settings(settings), m_profile(profile), m_fft(kNoiseFftSize)
+NoiseStage::NoiseStage(const NoiseProfile& profile)
+    : m_profile(profile), m_fft(kNoiseFftSize)
 {
 }
 
@@ -503,12 +503,12 @@ void NoiseStage::Configure(const AudioFormat& format)
     Reset();
 }
 
-void NoiseStage::Update(const ApoSettings& settings,
+void NoiseStage::Update(const EffectInstance& effect,
                         const AudioFormat& format)
 {
     (void)format;
     const bool wasEnabled = m_settings.enabled;
-    m_settings = settings.noise;
+    m_settings = effect.noise;
     m_floorGain = DecibelsToLinear(-m_settings.reductionDb);
     if (wasEnabled != m_settings.enabled)
     {
@@ -717,10 +717,11 @@ void NoiseStage::Process(double* samples, UINT32 frames, UINT32 channels)
     m_outputFrames = static_cast<UINT32>(remaining);
 }
 
-void MonoStage::Update(const ApoSettings& settings, const AudioFormat& format)
+void MonoStage::Update(const EffectInstance& effect,
+                       const AudioFormat& format)
 {
     (void)format;
-    m_enabled = settings.mono;
+    m_enabled = effect.mono.enabled;
 }
 
 void MonoStage::Process(double* samples, UINT32 frames, UINT32 channels)
@@ -739,6 +740,437 @@ void MonoStage::Process(double* samples, UINT32 frames, UINT32 channels)
             values[channel] = left;
         }
     }
+}
+
+void DistortionStage::Configure(const AudioFormat& format)
+{
+    m_channels = format.channels;
+    m_dcInput.assign(m_channels, 0.0);
+    m_dcOutput.assign(m_channels, 0.0);
+
+    // The tube curve is asymmetric, so its even harmonics leave a DC offset.
+    // A 10 Hz one-pole highpass removes it without audibly touching the lows.
+    constexpr double kPi = 3.14159265358979323846;
+    constexpr double kDcCutoffHz = 10.0;
+    const double sampleRate = EffectiveSampleRate(format);
+    m_dcCoefficient = std::exp(-2.0 * kPi * kDcCutoffHz / sampleRate);
+
+    Reset();
+}
+
+void DistortionStage::Update(const EffectInstance& effect,
+                             const AudioFormat& format)
+{
+    (void)format;
+    const bool wasEnabled = m_settings.enabled;
+    const int oldFunction = m_settings.function;
+    m_settings = effect.distortion;
+
+    // Switching curves or bypass state invalidates the DC blocker state.
+    if (wasEnabled != m_settings.enabled ||
+        oldFunction != m_settings.function)
+    {
+        Reset();
+    }
+}
+
+void DistortionStage::Reset()
+{
+    std::fill(m_dcInput.begin(), m_dcInput.end(), 0.0);
+    std::fill(m_dcOutput.begin(), m_dcOutput.end(), 0.0);
+}
+
+double DistortionStage::Shape(double value) const
+{
+    constexpr double kPi = 3.14159265358979323846;
+
+    switch (m_settings.function)
+    {
+    case kDistortionWarm:
+        // Normalized arctan: unity slope at zero and a bounded output.
+        return (2.0 / kPi) * std::atan(value * (kPi / 2.0));
+    case kDistortionRound:
+        return value / (1.0 + std::fabs(value));
+    case kDistortionTube:
+        // Compress the negative half harder than the positive half for even
+        // harmonics, while keeping the slope at zero at one.
+        return (value >= 0.0) ? std::tanh(value)
+                              : std::tanh(1.5 * value) / 1.5;
+    case kDistortionSoft:
+    default:
+        return std::tanh(value);
+    }
+}
+
+void DistortionStage::Process(double* samples, UINT32 frames, UINT32 channels)
+{
+    if (!m_settings.enabled || samples == nullptr || frames == 0 ||
+        channels == 0)
+    {
+        return;
+    }
+
+    const bool dcBlock =
+        m_settings.function == kDistortionTube &&
+        channels == m_channels && m_dcInput.size() == channels &&
+        m_dcOutput.size() == channels;
+
+    const size_t count = static_cast<size_t>(frames) * channels;
+    for (size_t i = 0; i < count; ++i)
+    {
+        const double shaped = Shape(samples[i]);
+        if (!dcBlock)
+        {
+            samples[i] = shaped;
+            continue;
+        }
+
+        const UINT32 channel = static_cast<UINT32>(i % channels);
+        double output = shaped - m_dcInput[channel] +
+                        m_dcCoefficient * m_dcOutput[channel];
+        m_dcInput[channel] = (std::fabs(shaped) < 1e-20) ? 0.0 : shaped;
+        if (std::fabs(output) < 1e-20)
+        {
+            output = 0.0;
+        }
+        m_dcOutput[channel] = output;
+        samples[i] = output;
+    }
+}
+
+void ReverbStage::Configure(const AudioFormat& format)
+{
+    static constexpr int kCombTunings[] = {1116, 1188, 1277, 1356,
+                                           1422, 1491, 1557, 1617};
+    static constexpr int kAllpassTunings[] = {556, 441, 341, 225};
+    static constexpr int kStereoSpread = 23;
+    constexpr double kMaxPredelayMs = 200.0;
+
+    m_channels = std::max<UINT32>(1, format.channels);
+    m_sampleRate = EffectiveSampleRate(format);
+    const double scale = m_sampleRate / 44100.0;
+
+    m_tanks.clear();
+    m_tanks.resize(m_channels);
+    for (UINT32 channel = 0; channel < m_channels; ++channel)
+    {
+        Tank& tank = m_tanks[channel];
+        const int spread = (channel % 2 == 0) ? 0 : kStereoSpread;
+
+        tank.combs.resize(8);
+        for (size_t index = 0; index < tank.combs.size(); ++index)
+        {
+            const size_t length = static_cast<size_t>(
+                std::max(1.0, std::round(kCombTunings[index] * scale) +
+                                  spread));
+            tank.combs[index].buffer.assign(length, 0.0);
+        }
+
+        tank.allpasses.resize(4);
+        for (size_t index = 0; index < tank.allpasses.size(); ++index)
+        {
+            const size_t length = static_cast<size_t>(
+                std::max(1.0, std::round(kAllpassTunings[index] * scale) +
+                                  spread));
+            tank.allpasses[index].buffer.assign(length, 0.0);
+        }
+    }
+
+    // Reserve the maximum predelay at Configure time so a live Update only
+    // moves the read offset and never allocates.
+    m_predelayCapacityFrames = static_cast<size_t>(
+        std::ceil(m_sampleRate * kMaxPredelayMs / 1000.0)) + 1;
+    m_predelay.assign(m_predelayCapacityFrames * m_channels, 0.0);
+
+    ApplyCoefficients();
+    Reset();
+}
+
+void ReverbStage::Update(const EffectInstance& effect,
+                         const AudioFormat& format)
+{
+    (void)format;
+    const bool wasEnabled = m_settings.enabled;
+    m_settings = effect.reverb;
+    ApplyCoefficients();
+    if (wasEnabled != m_settings.enabled)
+    {
+        // Drop the tail so re-enabling does not replay old audio.
+        Reset();
+    }
+}
+
+void ReverbStage::ApplyCoefficients()
+{
+    const double size = std::clamp(m_settings.size / 100.0, 0.0, 1.0);
+    const double damping =
+        std::clamp(m_settings.damping / 100.0, 0.0, 1.0);
+    const double mix = std::clamp(m_settings.mix / 100.0, 0.0, 1.0);
+
+    m_feedback = 0.7 + 0.28 * size;
+    m_damping = 0.4 * damping;
+
+    // The comb bank has a lot of gain, so the wet path needs its own scaling.
+    // Lower it as the room grows or the tail gets brighter so the reverb stays
+    // near the dry level instead of clipping at extreme settings.
+    m_wetGain = mix * 2.5 * (1.0 - 0.35 * size) * (0.75 + 0.25 * damping);
+    m_dryGain = 1.0 - mix;
+
+    if (m_predelayCapacityFrames == 0)
+    {
+        m_predelayFrames = 0;
+        return;
+    }
+
+    const double predelayMs = std::clamp(m_settings.predelayMs, 0.0, 200.0);
+    size_t frames = static_cast<size_t>(
+        std::round(predelayMs * m_sampleRate / 1000.0));
+    if (frames >= m_predelayCapacityFrames)
+    {
+        frames = m_predelayCapacityFrames - 1;
+    }
+    m_predelayFrames = frames;
+}
+
+void ReverbStage::Reset()
+{
+    for (Tank& tank : m_tanks)
+    {
+        for (Comb& comb : tank.combs)
+        {
+            std::fill(comb.buffer.begin(), comb.buffer.end(), 0.0);
+            comb.index = 0;
+            comb.store = 0.0;
+        }
+        for (Allpass& allpass : tank.allpasses)
+        {
+            std::fill(allpass.buffer.begin(), allpass.buffer.end(), 0.0);
+            allpass.index = 0;
+        }
+    }
+
+    std::fill(m_predelay.begin(), m_predelay.end(), 0.0);
+    m_predelayWrite = 0;
+}
+
+double ReverbStage::ProcessComb(Comb& comb, double input) const
+{
+    const double output = comb.buffer[comb.index];
+    comb.store = output * (1.0 - m_damping) + comb.store * m_damping;
+
+    const double next = input + comb.store * m_feedback;
+    comb.buffer[comb.index] = (std::fabs(next) < 1e-20) ? 0.0 : next;
+    if (std::fabs(comb.store) < 1e-20)
+    {
+        comb.store = 0.0;
+    }
+
+    if (++comb.index >= comb.buffer.size())
+    {
+        comb.index = 0;
+    }
+    return output;
+}
+
+double ReverbStage::ProcessAllpass(Allpass& allpass, double input) const
+{
+    const double buffered = allpass.buffer[allpass.index];
+    const double next = input + buffered * 0.5;
+    allpass.buffer[allpass.index] = (std::fabs(next) < 1e-20) ? 0.0 : next;
+
+    if (++allpass.index >= allpass.buffer.size())
+    {
+        allpass.index = 0;
+    }
+    return buffered - input;
+}
+
+void ReverbStage::Process(double* samples, UINT32 frames, UINT32 channels)
+{
+    if (!m_settings.enabled || m_settings.mix <= 0.0 || samples == nullptr ||
+        frames == 0 || channels == 0 || channels != m_channels ||
+        m_tanks.size() != channels || m_predelayCapacityFrames == 0)
+    {
+        return;
+    }
+
+    for (UINT32 frame = 0; frame < frames; ++frame)
+    {
+        double* values = samples + static_cast<size_t>(frame) * channels;
+
+        double sum = 0.0;
+        for (UINT32 channel = 0; channel < channels; ++channel)
+        {
+            sum += values[channel];
+        }
+        const double mono = sum / static_cast<double>(channels);
+
+        const size_t readIndex =
+            (m_predelayWrite + m_predelayCapacityFrames - m_predelayFrames) %
+            m_predelayCapacityFrames;
+
+        for (UINT32 channel = 0; channel < channels; ++channel)
+        {
+            // Feed each tank its own channel plus a little of the mono sum.
+            // A mono source therefore excites both tanks and gets a wide tail,
+            // while a true stereo source keeps its image.
+            const double excitation = (values[channel] + mono) * 0.015;
+            m_predelay[m_predelayWrite * channels + channel] = excitation;
+            const double delayed =
+                m_predelay[readIndex * channels + channel];
+
+            Tank& tank = m_tanks[channel];
+            double wet = 0.0;
+            for (Comb& comb : tank.combs)
+            {
+                wet += ProcessComb(comb, delayed);
+            }
+            for (Allpass& allpass : tank.allpasses)
+            {
+                wet = ProcessAllpass(allpass, wet);
+            }
+
+            values[channel] =
+                values[channel] * m_dryGain + wet * m_wetGain;
+        }
+
+        if (++m_predelayWrite >= m_predelayCapacityFrames)
+        {
+            m_predelayWrite = 0;
+        }
+    }
+}
+
+void StagePool::Configure(const AudioFormat& format,
+                          const NoiseProfile& profile)
+{
+    Clear();
+
+    for (int typeIndex = 0;
+         typeIndex < static_cast<int>(EffectType::Count); ++typeIndex)
+    {
+        const auto type = static_cast<EffectType>(typeIndex);
+        const int capacity = EffectTypeCapacity(type);
+        Slots& slots = m_slots[typeIndex];
+        slots.stages.reserve(static_cast<size_t>(capacity));
+        slots.boundIds.assign(static_cast<size_t>(capacity), 0);
+
+        for (int slot = 0; slot < capacity; ++slot)
+        {
+            std::unique_ptr<Stage> stage;
+            switch (type)
+            {
+            case EffectType::Noise:
+                // Without a profile the noise stage is a no-op, so there is no
+                // reason to reserve its buffers.
+                if (!profile.valid)
+                {
+                    continue;
+                }
+                stage = std::make_unique<NoiseStage>(profile);
+                break;
+            case EffectType::Gate:
+                stage = std::make_unique<GateStage>();
+                break;
+            case EffectType::Dynamic:
+                stage = std::make_unique<DynamicStage>();
+                break;
+            case EffectType::Compressor:
+                stage = std::make_unique<CompressorStage>();
+                break;
+            case EffectType::Gain:
+                stage = std::make_unique<GainStage>();
+                break;
+            case EffectType::Mono:
+                stage = std::make_unique<MonoStage>();
+                break;
+            case EffectType::Distortion:
+                stage = std::make_unique<DistortionStage>();
+                break;
+            case EffectType::Reverb:
+                stage = std::make_unique<ReverbStage>();
+                break;
+            default:
+                break;
+            }
+
+            if (stage != nullptr)
+            {
+                stage->Configure(format);
+                slots.stages.push_back(std::move(stage));
+            }
+        }
+    }
+}
+
+void StagePool::Clear()
+{
+    for (Slots& slots : m_slots)
+    {
+        slots.stages.clear();
+        slots.boundIds.clear();
+    }
+}
+
+void StagePool::Update(const ApoSettings& settings, const AudioFormat& format,
+                       Chain& chain)
+{
+    chain.Clear();
+
+    int used[static_cast<int>(EffectType::Count)] = {};
+
+    for (int index = 0; index < settings.effectCount; ++index)
+    {
+        const EffectInstance& effect = settings.effects[index];
+        if (!EffectEnabled(effect))
+        {
+            continue;
+        }
+
+        const int typeIndex = static_cast<int>(effect.type);
+        if (typeIndex < 0 ||
+            typeIndex >= static_cast<int>(EffectType::Count))
+        {
+            continue;
+        }
+
+        Slots& slots = m_slots[typeIndex];
+        if (slots.stages.empty())
+        {
+            continue;
+        }
+
+        // The ordinal picks the pool slot for the n-th enabled instance of
+        // this type in list order. A slot that used to hold another instance
+        // is cleared before it takes over.
+        const int ordinal = used[typeIndex]++;
+        if (ordinal >= static_cast<int>(slots.stages.size()))
+        {
+            continue;
+        }
+
+        Stage* stage = slots.stages[static_cast<size_t>(ordinal)].get();
+        if (slots.boundIds[static_cast<size_t>(ordinal)] != effect.id)
+        {
+            stage->Reset();
+            slots.boundIds[static_cast<size_t>(ordinal)] = effect.id;
+        }
+
+        stage->Update(effect, format);
+        chain.Add(stage);
+    }
+}
+
+bool StagePool::Empty() const
+{
+    for (const Slots& slots : m_slots)
+    {
+        if (!slots.stages.empty())
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace apo::dsp

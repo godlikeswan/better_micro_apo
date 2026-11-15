@@ -26,7 +26,9 @@ struct RuntimeSettingsFile
 };
 
 inline constexpr std::uint32_t kRuntimeSettingsMagic = 0x50414D42u; // "BMAP"
-inline constexpr std::uint32_t kRuntimeSettingsVersion = 1u;
+// Bump this whenever ApoSettings changes so an APO mapping an older file
+// ignores it instead of reading a mismatched layout.
+inline constexpr std::uint32_t kRuntimeSettingsVersion = 4u;
 
 // C:\ProgramData\better_micro_apo\runtime
 std::wstring RuntimeSettingsDirectory();

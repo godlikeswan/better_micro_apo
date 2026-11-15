@@ -14,30 +14,12 @@ namespace {
 
 using ui::Scale;
 
-const wchar_t* EffectLabel(EffectKind kind)
-{
-    switch (kind) {
-    case EffectKind::Noise:
-        return L"Noise reduction";
-    case EffectKind::Gate:
-        return L"Gate";
-    case EffectKind::Dynamic:
-        return L"Dynamic";
-    case EffectKind::Compressor:
-        return L"Compressor";
-    case EffectKind::Gain:
-        return L"Gain";
-    case EffectKind::Mono:
-        return L"Mono";
-    default:
-        return L"";
-    }
-}
-
-void AddColumn(HWND list, int index, const wchar_t* text, int width)
+void AddColumn(HWND list, int index, const wchar_t* text, int width,
+               int format = LVCFMT_LEFT)
 {
     LVCOLUMNW column{};
-    column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+    column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
+    column.fmt = format;
     column.iSubItem = index;
     column.cx = Scale(width);
     column.pszText = const_cast<wchar_t*>(text);
@@ -78,10 +60,13 @@ void ResizeEffectColumns()
     GetClientRect(g_effectList, &rect);
     int width = rect.right - rect.left - GetSystemMetrics(SM_CXVSCROLL) -
                 Scale(2);
-    if (width < Scale(80)) {
-        width = Scale(80);
+    const int deleteWidth = Scale(28);
+    int nameWidth = width - deleteWidth;
+    if (nameWidth < Scale(60)) {
+        nameWidth = Scale(60);
     }
-    ListView_SetColumnWidth(g_effectList, 0, width);
+    ListView_SetColumnWidth(g_effectList, 0, nameWidth);
+    ListView_SetColumnWidth(g_effectList, 1, deleteWidth);
 }
 
 void LayoutInstall(int x, int y, int width, int height)
@@ -157,61 +142,77 @@ void LayoutEffectParams(int x, int y, int width)
     const int columnGap = Scale(16);
     const int columnWidth = (width - columnGap) / 2;
     const int labelWidth = Scale(110);
-    const int editWidth = std::max(Scale(50), columnWidth - labelWidth);
+    const int sliderWidth = std::max(Scale(50), columnWidth - labelWidth);
+    const int controlHeight = Scale(26);
+    const int rowStep = Scale(32);
 
-    auto placePair = [&](HWND leftLabel, HWND leftEdit, HWND rightLabel,
-                         HWND rightEdit) {
+    auto placePair = [&](HWND leftLabel, HWND leftSlider, HWND rightLabel,
+                         HWND rightSlider) {
         MoveWindow(leftLabel, x, y, labelWidth, Scale(20), TRUE);
-        MoveWindow(leftEdit, x + labelWidth, y, editWidth, Scale(22), TRUE);
+        MoveWindow(leftSlider, x + labelWidth, y, sliderWidth, controlHeight,
+                   TRUE);
         if (rightLabel != nullptr) {
             const int rightX = x + columnWidth + columnGap;
             MoveWindow(rightLabel, rightX, y, labelWidth, Scale(20), TRUE);
-            MoveWindow(rightEdit, rightX + labelWidth, y, editWidth,
-                       Scale(22), TRUE);
+            MoveWindow(rightSlider, rightX + labelWidth, y, sliderWidth,
+                       controlHeight, TRUE);
         }
-        y += Scale(30);
+        y += rowStep;
     };
 
-    switch (g_effectKind) {
-    case EffectKind::Noise:
+    switch (g_effectType) {
+    case apo::EffectType::Noise:
         MoveWindow(g_noiseReductionLabel, x, y, labelWidth, Scale(20), TRUE);
-        MoveWindow(g_noiseReductionEdit, x + labelWidth, y, editWidth,
-                   Scale(22), TRUE);
+        MoveWindow(g_noiseReductionSlider, x + labelWidth, y, sliderWidth,
+                   controlHeight, TRUE);
         MoveWindow(g_noiseCapture, x + columnWidth + columnGap, y,
                    columnWidth, Scale(28), TRUE);
-        y += Scale(34);
+        y += Scale(36);
         MoveWindow(g_noiseNote, x, y, width, Scale(36), TRUE);
         break;
-    case EffectKind::Gate:
-        placePair(g_gateThresholdLabel, g_gateThresholdEdit,
-                  g_gateRangeLabel, g_gateRangeEdit);
-        placePair(g_gateAttackLabel, g_gateAttackEdit, g_gateHoldLabel,
-                  g_gateHoldEdit);
-        placePair(g_gateReleaseLabel, g_gateReleaseEdit,
-                  g_gateLookaheadLabel, g_gateLookaheadEdit);
+    case apo::EffectType::Gate:
+        placePair(g_gateThresholdLabel, g_gateThresholdSlider,
+                  g_gateRangeLabel, g_gateRangeSlider);
+        placePair(g_gateAttackLabel, g_gateAttackSlider, g_gateHoldLabel,
+                  g_gateHoldSlider);
+        placePair(g_gateReleaseLabel, g_gateReleaseSlider,
+                  g_gateLookaheadLabel, g_gateLookaheadSlider);
         break;
-    case EffectKind::Dynamic:
+    case apo::EffectType::Dynamic:
         MoveWindow(g_dynamicExtend, x, y, columnWidth, Scale(22), TRUE);
         y += Scale(30);
-        placePair(g_dynFrequencyLabel, g_dynFrequencyEdit, g_dynQLabel,
-                  g_dynQEdit);
-        placePair(g_dynThresholdLabel, g_dynThresholdEdit, g_dynRatioLabel,
-                  g_dynRatioEdit);
-        placePair(g_dynRangeLabel, g_dynRangeEdit, g_dynAttackLabel,
-                  g_dynAttackEdit);
-        placePair(g_dynReleaseLabel, g_dynReleaseEdit, nullptr, nullptr);
+        placePair(g_dynFrequencyLabel, g_dynFrequencySlider, g_dynQLabel,
+                  g_dynQSlider);
+        placePair(g_dynThresholdLabel, g_dynThresholdSlider, g_dynRatioLabel,
+                  g_dynRatioSlider);
+        placePair(g_dynRangeLabel, g_dynRangeSlider, g_dynAttackLabel,
+                  g_dynAttackSlider);
+        placePair(g_dynReleaseLabel, g_dynReleaseSlider, nullptr, nullptr);
         break;
-    case EffectKind::Compressor:
-        placePair(g_compThresholdLabel, g_compThresholdEdit,
-                  g_compRatioLabel, g_compRatioEdit);
-        placePair(g_compAttackLabel, g_compAttackEdit, g_compReleaseLabel,
-                  g_compReleaseEdit);
+    case apo::EffectType::Compressor:
+        placePair(g_compThresholdLabel, g_compThresholdSlider,
+                  g_compRatioLabel, g_compRatioSlider);
+        placePair(g_compAttackLabel, g_compAttackSlider, g_compReleaseLabel,
+                  g_compReleaseSlider);
         break;
-    case EffectKind::Gain:
-        placePair(g_makeupLabel, g_makeupEdit, nullptr, nullptr);
+    case apo::EffectType::Gain:
+        placePair(g_makeupLabel, g_makeupSlider, nullptr, nullptr);
         break;
-    case EffectKind::Mono:
+    case apo::EffectType::Mono:
         MoveWindow(g_monoNote, x, y, width, Scale(40), TRUE);
+        break;
+    case apo::EffectType::Distortion:
+        MoveWindow(g_distFunctionLabel, x, y, labelWidth, Scale(20), TRUE);
+        MoveWindow(g_distFunctionCombo, x + labelWidth, y,
+                   Scale(180), Scale(200), TRUE);
+        y += Scale(34);
+        MoveWindow(g_distortionNote, x, y, width, Scale(52), TRUE);
+        break;
+    case apo::EffectType::Reverb:
+        placePair(g_reverbMixLabel, g_reverbMixSlider, g_reverbSizeLabel,
+                  g_reverbSizeSlider);
+        placePair(g_reverbDampingLabel, g_reverbDampingSlider,
+                  g_reverbPredelayLabel, g_reverbPredelaySlider);
         break;
     default:
         break;
@@ -235,8 +236,14 @@ void LayoutEffects(int x, int y, int width, int height)
     const int listWidth = Scale(220);
 
     MoveWindow(g_effectListGroup, x, top, listWidth, panelHeight, TRUE);
+    const int addHeight = Scale(30);
+    const int addGap = Scale(8);
     MoveWindow(g_effectList, x + Scale(12), top + Scale(24),
-               listWidth - Scale(24), panelHeight - Scale(36), TRUE);
+               listWidth - Scale(24),
+               panelHeight - Scale(24) - addHeight - addGap - Scale(12), TRUE);
+    MoveWindow(g_effectAdd, x + Scale(12),
+               top + panelHeight - Scale(12) - addHeight,
+               listWidth - Scale(24), addHeight, TRUE);
 
     const int paramX = x + listWidth + gap;
     const int paramWidth = width - listWidth - gap;
@@ -270,14 +277,10 @@ void LayoutEffects(int x, int y, int width, int height)
 
 } // namespace
 
-const wchar_t* EffectName(EffectKind kind)
-{
-    return EffectLabel(kind);
-}
-
 void ResizeColumns()
 {
     ResizeDeviceColumns();
+    ResizeEffectColumns();
 }
 
 void CreateControls(HWND root)
@@ -377,21 +380,9 @@ void CreateControls(HWND root)
         g_effectList,
         LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     ui::ApplyListStateImages(g_effectList);
-    {
-        LVCOLUMNW column{};
-        column.mask = LVCF_TEXT | LVCF_WIDTH;
-        column.cx = Scale(180);
-        column.pszText = const_cast<wchar_t*>(L"Effect");
-        ListView_InsertColumn(g_effectList, 0, &column);
-    }
-    for (int i = 0; i < static_cast<int>(EffectKind::Count); ++i) {
-        LVITEMW item{};
-        item.mask = LVIF_TEXT;
-        item.iItem = i;
-        item.pszText =
-            const_cast<wchar_t*>(EffectName(static_cast<EffectKind>(i)));
-        ListView_InsertItem(g_effectList, &item);
-    }
+    AddColumn(g_effectList, 0, L"Effect", 180);
+    AddColumn(g_effectList, 1, L"", 28, LVCFMT_CENTER);
+    g_effectAdd = ui::Button(window, IDC_EFFECT_ADD, L"Add effect");
 
     g_effectGroup =
         ui::GroupFrame(window, IDC_EFFECT_GROUP, L"Effect parameters");
@@ -400,65 +391,116 @@ void CreateControls(HWND root)
     g_monoNote = ui::Label(
         window, IDC_MONO_NOTE,
         L"Copies the processed left channel to every other channel.");
+    g_distFunctionLabel =
+        ui::Label(window, IDC_DIST_FUNCTION_LABEL, L"Function");
+    g_distFunctionCombo =
+        ui::ComboBox(window, IDC_DIST_FUNCTION_COMBO, CBS_DROPDOWNLIST);
+    {
+        const wchar_t* functions[] = {L"Soft", L"Warm", L"Round", L"Tube"};
+        for (const wchar_t* function : functions) {
+            SendMessageW(g_distFunctionCombo, CB_ADDSTRING, 0,
+                         reinterpret_cast<LPARAM>(function));
+        }
+        SendMessageW(g_distFunctionCombo, CB_SETCURSEL, apo::kDistortionSoft,
+                     0);
+    }
+    g_distortionNote = ui::Label(
+        window, IDC_DISTORTION_NOTE,
+        L"The Gain stage sets how hard the curve is driven.\r\n"
+        L"More gain means more saturation and harmonics.");
 
     g_gateThresholdLabel =
         ui::Label(window, IDC_GATE_THRESHOLD_LABEL, L"Threshold (dBFS)");
-    g_gateThresholdEdit = ui::NumberField(window, IDC_GATE_THRESHOLD_EDIT);
+    g_gateThresholdSlider = ui::Slider(
+        window, IDC_GATE_THRESHOLD_SLIDER, {-80.0, 0.0, 1.0, false, 0});
     g_gateRangeLabel =
         ui::Label(window, IDC_GATE_RANGE_LABEL, L"Range (dB)");
-    g_gateRangeEdit = ui::NumberField(window, IDC_GATE_RANGE_EDIT);
+    g_gateRangeSlider = ui::Slider(window, IDC_GATE_RANGE_SLIDER,
+                                   {0.0, 96.0, 1.0, false, 0});
     g_gateAttackLabel =
         ui::Label(window, IDC_GATE_ATTACK_LABEL, L"Attack (ms)");
-    g_gateAttackEdit = ui::NumberField(window, IDC_GATE_ATTACK_EDIT);
+    g_gateAttackSlider = ui::Slider(window, IDC_GATE_ATTACK_SLIDER,
+                                    {0.1, 1000.0, 0.0, true, 0});
     g_gateHoldLabel = ui::Label(window, IDC_GATE_HOLD_LABEL, L"Hold (ms)");
-    g_gateHoldEdit = ui::NumberField(window, IDC_GATE_HOLD_EDIT);
+    g_gateHoldSlider = ui::Slider(window, IDC_GATE_HOLD_SLIDER,
+                                  {0.0, 2000.0, 1.0, false, 0});
     g_gateReleaseLabel =
         ui::Label(window, IDC_GATE_RELEASE_LABEL, L"Release (ms)");
-    g_gateReleaseEdit = ui::NumberField(window, IDC_GATE_RELEASE_EDIT);
+    g_gateReleaseSlider = ui::Slider(window, IDC_GATE_RELEASE_SLIDER,
+                                     {1.0, 5000.0, 0.0, true, 0});
     g_gateLookaheadLabel =
         ui::Label(window, IDC_GATE_LOOKAHEAD_LABEL, L"Lookahead (ms)");
-    g_gateLookaheadEdit = ui::NumberField(window, IDC_GATE_LOOKAHEAD_EDIT);
+    g_gateLookaheadSlider = ui::Slider(window, IDC_GATE_LOOKAHEAD_SLIDER,
+                                       {0.0, 300.0, 1.0, false, 0});
 
     g_compThresholdLabel =
         ui::Label(window, IDC_COMP_THRESHOLD_LABEL, L"Threshold (dBFS)");
-    g_compThresholdEdit = ui::NumberField(window, IDC_COMP_THRESHOLD_EDIT);
+    g_compThresholdSlider = ui::Slider(
+        window, IDC_COMP_THRESHOLD_SLIDER, {-60.0, 0.0, 1.0, false, 0});
     g_compRatioLabel =
         ui::Label(window, IDC_COMP_RATIO_LABEL, L"Ratio (:1)");
-    g_compRatioEdit = ui::NumberField(window, IDC_COMP_RATIO_EDIT);
+    g_compRatioSlider = ui::Slider(window, IDC_COMP_RATIO_SLIDER,
+                                   {1.0, 20.0, 0.1, false, 1});
     g_compAttackLabel =
         ui::Label(window, IDC_COMP_ATTACK_LABEL, L"Attack (ms)");
-    g_compAttackEdit = ui::NumberField(window, IDC_COMP_ATTACK_EDIT);
+    g_compAttackSlider = ui::Slider(window, IDC_COMP_ATTACK_SLIDER,
+                                    {0.1, 1000.0, 0.0, true, 0});
     g_compReleaseLabel =
         ui::Label(window, IDC_COMP_RELEASE_LABEL, L"Release (ms)");
-    g_compReleaseEdit = ui::NumberField(window, IDC_COMP_RELEASE_EDIT);
+    g_compReleaseSlider = ui::Slider(window, IDC_COMP_RELEASE_SLIDER,
+                                     {1.0, 5000.0, 0.0, true, 0});
 
     g_makeupLabel = ui::Label(window, IDC_MAKEUP_LABEL, L"Makeup (dB)");
-    g_makeupEdit = ui::NumberField(window, IDC_MAKEUP_EDIT);
+    g_makeupSlider = ui::Slider(window, IDC_MAKEUP_SLIDER,
+                                {-24.0, 48.0, 0.5, false, 1});
 
     g_dynamicExtend =
         ui::CheckBox(window, IDC_DYNAMIC_EXTEND, L"Extend quiet lows");
     g_dynFrequencyLabel =
         ui::Label(window, IDC_DYN_FREQUENCY_LABEL, L"Frequency (Hz)");
-    g_dynFrequencyEdit = ui::NumberField(window, IDC_DYN_FREQUENCY_EDIT);
+    g_dynFrequencySlider = ui::Slider(window, IDC_DYN_FREQUENCY_SLIDER,
+                                      {20.0, 2000.0, 0.0, true, 0});
     g_dynQLabel = ui::Label(window, IDC_DYN_Q_LABEL, L"Q");
-    g_dynQEdit = ui::NumberField(window, IDC_DYN_Q_EDIT);
+    g_dynQSlider = ui::Slider(window, IDC_DYN_Q_SLIDER,
+                              {0.1, 10.0, 0.0, true, 0});
     g_dynThresholdLabel =
         ui::Label(window, IDC_DYN_THRESHOLD_LABEL, L"Threshold (dBFS)");
-    g_dynThresholdEdit = ui::NumberField(window, IDC_DYN_THRESHOLD_EDIT);
+    g_dynThresholdSlider = ui::Slider(
+        window, IDC_DYN_THRESHOLD_SLIDER, {-80.0, 0.0, 1.0, false, 0});
     g_dynRatioLabel = ui::Label(window, IDC_DYN_RATIO_LABEL, L"Ratio (:1)");
-    g_dynRatioEdit = ui::NumberField(window, IDC_DYN_RATIO_EDIT);
+    g_dynRatioSlider = ui::Slider(window, IDC_DYN_RATIO_SLIDER,
+                                  {1.0, 20.0, 0.1, false, 1});
     g_dynRangeLabel = ui::Label(window, IDC_DYN_RANGE_LABEL, L"Range (dB)");
-    g_dynRangeEdit = ui::NumberField(window, IDC_DYN_RANGE_EDIT);
+    g_dynRangeSlider = ui::Slider(window, IDC_DYN_RANGE_SLIDER,
+                                  {0.0, 36.0, 1.0, false, 0});
     g_dynAttackLabel =
         ui::Label(window, IDC_DYN_ATTACK_LABEL, L"Attack (ms)");
-    g_dynAttackEdit = ui::NumberField(window, IDC_DYN_ATTACK_EDIT);
+    g_dynAttackSlider = ui::Slider(window, IDC_DYN_ATTACK_SLIDER,
+                                   {0.1, 1000.0, 0.0, true, 0});
     g_dynReleaseLabel =
         ui::Label(window, IDC_DYN_RELEASE_LABEL, L"Release (ms)");
-    g_dynReleaseEdit = ui::NumberField(window, IDC_DYN_RELEASE_EDIT);
+    g_dynReleaseSlider = ui::Slider(window, IDC_DYN_RELEASE_SLIDER,
+                                    {1.0, 5000.0, 0.0, true, 0});
+
+    g_reverbMixLabel = ui::Label(window, IDC_REVERB_MIX_LABEL, L"Mix (%)");
+    g_reverbMixSlider = ui::Slider(window, IDC_REVERB_MIX_SLIDER,
+                                   {0.0, 100.0, 1.0, false, 0});
+    g_reverbSizeLabel = ui::Label(window, IDC_REVERB_SIZE_LABEL, L"Size (%)");
+    g_reverbSizeSlider = ui::Slider(window, IDC_REVERB_SIZE_SLIDER,
+                                    {0.0, 100.0, 1.0, false, 0});
+    g_reverbDampingLabel =
+        ui::Label(window, IDC_REVERB_DAMPING_LABEL, L"Damping (%)");
+    g_reverbDampingSlider = ui::Slider(window, IDC_REVERB_DAMPING_SLIDER,
+                                       {0.0, 100.0, 1.0, false, 0});
+    g_reverbPredelayLabel =
+        ui::Label(window, IDC_REVERB_PREDELAY_LABEL, L"Predelay (ms)");
+    g_reverbPredelaySlider = ui::Slider(window, IDC_REVERB_PREDELAY_SLIDER,
+                                        {0.0, 200.0, 1.0, false, 0});
 
     g_noiseReductionLabel =
         ui::Label(window, IDC_NOISE_REDUCTION_LABEL, L"Reduction (dB)");
-    g_noiseReductionEdit = ui::NumberField(window, IDC_NOISE_REDUCTION_EDIT);
+    g_noiseReductionSlider = ui::Slider(window, IDC_NOISE_REDUCTION_SLIDER,
+                                        {0.0, 70.0, 1.0, false, 0});
     g_noiseCapture =
         ui::Button(window, IDC_NOISE_CAPTURE, L"Capture noise profile");
     g_noiseNote = ui::Label(window, IDC_NOISE_NOTE, L"");

@@ -69,24 +69,116 @@ struct DynamicSettings
     double releaseMs = 150.0;
 };
 
-// Per-endpoint DSP settings. Defaults match the tuned sound that used to be
-// compiled into the APO: the old +28 dB input gain now lives in the compressor
-// threshold and makeup gain.
-struct ApoSettings
+// Flat makeup gain. New instances start at unity so adding a Gain effect is
+// safe; the legacy chain explicitly starts at +28 dB.
+struct GainSettings
 {
+    bool enabled = false;
+    double gainDb = 0.0;
+};
+
+// Copies the first (left) channel to every other channel after processing.
+struct MonoSettings
+{
+    bool enabled = false;
+};
+
+// Soft saturation curves. Each shape has unity slope at zero, so the makeup
+// gain stage sets how hard the curve is driven and there is no separate drive
+// control.
+enum DistortionFunction : int
+{
+    kDistortionSoft = 0,
+    kDistortionWarm,
+    kDistortionRound,
+    kDistortionTube,
+    kDistortionFunctionCount,
+};
+
+struct DistortionSettings
+{
+    bool enabled = false;
+    int function = kDistortionSoft;
+};
+
+// Room/hall reverb. `mix` is the wet percentage, `size` sets the decay length,
+// `damping` absorbs high frequencies in the tail, and `predelayMs` adds a gap
+// before the reverb starts.
+struct ReverbSettings
+{
+    bool enabled = false;
+    double mix = 20.0;
+    double size = 50.0;
+    double damping = 50.0;
+    double predelayMs = 20.0;
+};
+
+// Effect types the list can hold. The list order is the DSP order, and a type
+// may appear more than once.
+enum class EffectType : int
+{
+    Noise = 0,
+    Gate,
+    Dynamic,
+    Compressor,
+    Gain,
+    Mono,
+    Distortion,
+    Reverb,
+    Count,
+};
+
+inline constexpr int kMaxEffects = 16;
+
+// Stages that allocate large buffers get a smaller pool so a pathological list
+// cannot exhaust memory. Other types can fill the whole list.
+inline constexpr int kMaxHeavyEffects = 4;
+
+// User-facing label, e.g. "Noise reduction".
+const wchar_t* EffectTypeName(EffectType type);
+
+// Stable token used in the INI file, e.g. "noise".
+const char* EffectTypeKey(EffectType type);
+
+bool ParseEffectType(const std::wstring& text, EffectType& type);
+
+// Maximum number of instances of `type` the DSP pool supports.
+int EffectTypeCapacity(EffectType type);
+
+// One effect in the per-endpoint list. Only the block matching `type` is read;
+// the others stay at their defaults. Keeping every block here makes the whole
+// snapshot trivially copyable and safe to publish through shared memory.
+struct EffectInstance
+{
+    int id = 0;
+    EffectType type = EffectType::Gain;
+
     NoiseSettings noise;
     GateSettings gate;
     CompressorSettings compressor;
     DynamicSettings dynamics;
+    GainSettings gain;
+    MonoSettings mono;
+    DistortionSettings distortion;
+    ReverbSettings reverb;
+};
 
-    // Flat makeup gain. `makeupEnabled` lets the stage be bypassed without
-    // losing the configured value.
-    bool makeupEnabled = true;
-    double makeupDb = 28.0;
+bool EffectEnabled(const EffectInstance& effect);
+void SetEffectEnabled(EffectInstance& effect, bool enabled);
 
-    // Copy the first (left) channel to every other channel after processing.
-    // Useful for a mono source on a stereo interface.
-    bool mono = false;
+// Builds an instance with the type's defaults and enables it.
+EffectInstance MakeEffect(EffectType type, int id);
+
+// Per-endpoint DSP settings. The default constructor builds the legacy fixed
+// chain (noise, gate, dynamic, compressor, gain, mono, distortion, reverb) so
+// existing installations keep their sound and old INI files migrate cleanly.
+struct ApoSettings
+{
+    ApoSettings();
+
+    int effectCount = 0;
+    int nextEffectId = 1;
+    EffectInstance effects[kMaxEffects];
 
     // GUI binding option for devices that publish composite FX entries: replace
     // the driver's composite stream chain with only this APO instead of
@@ -96,7 +188,8 @@ struct ApoSettings
 };
 
 // Clamp every field into a range the DSP can handle safely. Non-finite values
-// fall back to the defaults.
+// fall back to the defaults. Also normalizes effect ids so each instance has a
+// unique positive id.
 void ClampSettings(ApoSettings& settings);
 
 // Filename-safe form of an endpoint GUID. Shared by the per-device settings,

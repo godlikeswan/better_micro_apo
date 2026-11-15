@@ -39,15 +39,18 @@ most advanced tab that is available.
 
 1. Check the capture devices to enable the effect on. Inactive devices are
    shown grayed out.
-2. On a device that uses an effect pack, **Ignore other effects** replaces the
-   driver's composite chains with only this APO. This clears the effect pack's
-   stream, mode, endpoint, keyword-detector, and offload chains, so none of its
+2. On a device that uses an effect pack, **Ignore other effects** leaves only
+   this APO: it drops the driver's endpoint chain and its other composite
+   chains (stream, mode, keyword detector, offload), so none of the pack's
    processing runs. This is per device and is applied with **Apply**; unchecking
    it restores the driver chains from the backup.
 3. Click **Apply** to save the bindings and isolation options. Audio stops for
-   about a second. Devices that use an effect pack are bound in the composite
-   stream chain; other devices use the PreMix slot. **Reset** discards pending
-   device changes.
+   about a second. Every device is bound as an **endpoint effect**, which is
+   also what makes the processing apply to apps that capture raw audio, such as
+   Discord and WhatsApp; stream-slot bindings are skipped for those streams. If
+   a device is still bound by an older build, the view shows **Apply to finish
+   the update** until the migration runs. **Reset** discards pending device
+   changes.
 
 ### Effects
 
@@ -55,8 +58,15 @@ most advanced tab that is available.
    own settings. If a mono source is plugged into the left input of a stereo
    device, enable **Mono** so both sides carry it. This affects every app that
    uses the device.
-2. The list on the left shows every stage. Use the checkboxes to enable or
-   disable a stage, and click a row to edit its parameters on the right.
+2. The list on the left shows the effects for this device in processing order.
+   Use the checkboxes to enable or disable an effect, click a row to edit its
+   parameters on the right, and click the `×` in a row to delete it. **Add
+   effect** opens a picker and appends the chosen type to the end of the list.
+   The same type may appear more than once, and the list order is the DSP order.
+   Adding or deleting an effect applies live without stopping audio. A deleted
+   effect loses its values: adding that type again starts from its defaults.
+   A device can hold up to 16 effects; noise reduction, gate, and reverb are
+   limited to 4 each because they allocate large buffers.
 3. To reduce steady room noise, select **Noise reduction**, keep the room quiet,
    and click **Capture noise profile**. The GUI records about three seconds,
    analyzes the noise spectrum, and saves it for that device. Capturing stops
@@ -72,10 +82,10 @@ most advanced tab that is available.
    maximum level over the last 500 ms and **RMS** is the average level over the
    same window, both measured after the APO. **CLIP** latches when the peak
    reaches full scale, and **drops** counts gaps in the monitor stream.
-5. Effect settings apply automatically about half a second after you stop
-   editing; no **Apply** click is needed. The running APO picks them up without
-   stopping audio. The first change on a device that has not published live
-   settings yet, or after the APO DLL was updated, may restart audio once.
+5. Effect settings apply automatically while you drag and shortly after you
+   stop editing; no **Apply** click is needed. The running APO picks them up
+   without stopping audio. The first change on a device that has not published
+   live settings yet, or after the APO DLL was updated, may restart audio once.
    **Reset** discards pending effect edits. While an effect edit is pending, the
    device selector is locked and **Apply** is highlighted.
 
@@ -103,21 +113,26 @@ The DLL uses the static MSVC runtime and has no third-party dependencies.
 
 ## DSP settings
 
-The chain order is fixed; stages can be disabled, and makeup and mono are
-optional:
+The effect list is built per device and processed from top to bottom. The same
+type may appear more than once, so two gates or two reverbs are allowed. New
+installations start with the original chain:
 
 ```
 optional noise reduction -> optional gate -> optional dynamic (proximity) ->
-peak compressor -> optional makeup gain -> optional mono copy
+peak compressor -> optional makeup gain -> optional mono copy ->
+optional distortion -> optional reverb
 ```
 
+Delete and re-add an effect to move it to the end of the list; drag-and-drop is
+not implemented yet. Every newly added effect starts enabled.
+
 - **Noise reduction** subtracts the captured room-noise spectrum from the input.
-  It runs first, before the gate and compressor, so it sees the raw signal. The
-  profile is captured per device with **Capture noise profile**: the GUI records
-  about three seconds while every stage is temporarily off, then stores the
-  analyzed spectrum next to the device settings. **Reduction** limits how much
-  any frequency can be attenuated. A profile is required; without one the stage
-  stays inactive. It is off by default.
+  In the default chain it runs first, before the gate and compressor, so it sees
+  the raw signal. The profile is captured per device with **Capture noise
+  profile**: the GUI records about three seconds while every effect is
+  temporarily off, then stores the analyzed spectrum next to the device
+  settings. **Reduction** limits how much any frequency can be attenuated. A
+  profile is required; without one the effect is skipped. It is off by default.
 - **Gate** attenuates the signal when it falls below the threshold. `Range` is
   the maximum attenuation while closed, and `Hold` keeps it open after the level
   drops. `Lookahead` delays the audio so the gate opens before a transient
@@ -131,15 +146,24 @@ peak compressor -> optional makeup gain -> optional mono copy
   loud, taming a strong proximity effect up close. Check **Extend quiet lows**
   to do the opposite: lift the band when it is quiet, making distant or thin
   lows fuller. `Threshold`, `Ratio`, `Range`, `Attack`, and `Release` control
-  how much and how fast. It runs before the broadband compressor so it sees the
-  input dynamics. It is off by default.
-- **Gain** enables the makeup gain stage. The configured value is kept while
-  the checkbox is off, so it can be bypassed without losing it.
-- **Makeup** gain is applied after the compressor.
+  how much and how fast. In the default chain it runs before the broadband
+  compressor so it sees the input dynamics. It is off by default.
+- **Gain** applies flat gain. In the default chain it is the makeup gain after
+  the compressor. A newly added Gain starts at 0 dB.
 - **Mono (left to all channels)** duplicates the processed left channel to all
   other channels. It is per device and is saved with the other settings.
+- **Distortion** adds soft saturation. Choose a curve from the **Function**
+  list: `Soft` (tanh), `Warm` (arctan), `Round`, or `Tube` (asymmetric). Every
+  curve has unity slope at zero, so the **Gain** effect sets how hard it is
+  driven; there is no separate drive control. In the default chain it runs
+  before reverb so the tail stays clean. It is off by default.
+- **Reverb** adds a room or hall tail. `Mix` sets the dry/wet balance, `Size`
+  moves from a small room to a long hall, `Damping` controls how quickly the
+  highs fade, and `Predelay` leaves a gap before the tail starts. In the default
+  chain it runs last, after mono, so a mono microphone still gets a wide stereo
+  tail. It is off by default.
 
-Default settings:
+Default settings (the initial list; a new Gain starts at 0 dB instead):
 
 | Noise reduction | Reduction |
 | --- | --- |
@@ -149,21 +173,34 @@ Default settings:
 | --- | --- | --- | --- | --- | --- | --- |
 | off | -50 dBFS | 60 dB | 5 ms | 50 ms | 100 ms | 0 ms |
 
-| Compressor | Threshold | Ratio | Attack | Release | Makeup |
-| --- | --- | --- | --- | --- | --- |
-| enabled | -58 dBFS | 3:1 | 5 ms | 100 ms | +28 dB |
+| Compressor | Threshold | Ratio | Attack | Release |
+| --- | --- | --- | --- | --- |
+| enabled | -58 dBFS | 3:1 | 5 ms | 100 ms |
+
+| Gain | Gain |
+| --- | --- |
+| enabled | +28 dB |
 
 | Dynamic | Mode | Frequency | Q | Threshold | Ratio | Range | Attack | Release |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | off | reduce | 120 Hz | 0.7 | -45 dBFS | 4:1 | 18 dB | 10 ms | 150 ms |
 
-Gain is enabled by default.
+| Distortion | Function |
+| --- | --- |
+| off | Soft |
+
+| Reverb | Mix | Size | Damping | Predelay |
+| --- | --- | --- | --- | --- |
+| off | 20% | 50% | 50% | 20 ms |
 
 Each capture device stores its own settings in
-`C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.ini`. The APO reads
-that file when a stream starts, so one DLL serves every device. **Listen to
-this device** (Effects tab) opens a new stream and plays the saved settings;
-edits are saved live, so the audition follows them.
+`C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.ini`. The file has a
+`[dsp]` section with `version=2`, `effect_count`, `next_effect_id`, and one
+`effect_<n>_*` block per list entry, so duplicates and their order survive a
+restart. Older files are migrated automatically and keep the original chain. The
+APO reads the file when a stream starts, so one DLL serves every device.
+**Listen to this device** (Effects tab) opens a new stream and plays the saved
+settings; edits are saved live, so the audition follows them.
 
 Older settings files that contain the removed `input_gain_db` key are migrated
 automatically: the value is folded into the compressor threshold and makeup
@@ -191,7 +228,12 @@ The GUI clamps values to a safe range:
 | Dynamic range | 0 to 36 dB |
 | Dynamic attack | 0.1 to 1000 ms |
 | Dynamic release | 1 to 5000 ms |
-| Makeup gain | -24 to +48 dB |
+| Gain | -24 to +48 dB |
+| Distortion function | Soft, Warm, Round, or Tube |
+| Reverb mix | 0 to 100% |
+| Reverb size | 0 to 100% |
+| Reverb damping | 0 to 100% |
+| Reverb predelay | 0 to 200 ms |
 
 ## Known limitations
 

@@ -657,9 +657,15 @@ bool ReadNewestBackupText(const Endpoint& endpoint, std::wstring& text)
     return !text.empty();
 }
 
-bool HasCompositeValues(const std::wstring& fx, int first, int last)
+// True when a composite chain other than the endpoint chain is present. The
+// endpoint chain holds this APO, so it must not count as a leftover.
+bool HasOtherCompositeValues(const std::wstring& fx)
 {
-    for (int index = first; index <= last; ++index) {
+    for (int index = kCompositeFirstProp; index <= kCompositeLastProp;
+         ++index) {
+        if (index == kCompositeEndpointIndex) {
+            continue;
+        }
         std::vector<std::wstring> values;
         const std::wstring name = CompositeProp(index);
         if (detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx, name.c_str(),
@@ -671,17 +677,63 @@ bool HasCompositeValues(const std::wstring& fx, int first, int last)
     return false;
 }
 
-// Removes the composite effect chains in the inclusive index range.
-bool ClearCompositeValues(const std::wstring& fx, int first, int last,
-                          const std::wstring& device, std::wstring& log)
+// Drops every composite chain except the endpoint chain. Used by isolation so
+// only this APO is left on the device.
+bool ClearOtherCompositeValues(const std::wstring& fx,
+                               const std::wstring& device, std::wstring& log)
 {
     bool ok = true;
-    for (int index = first; index <= last; ++index) {
+    for (int index = kCompositeFirstProp; index <= kCompositeLastProp;
+         ++index) {
+        if (index == kCompositeEndpointIndex) {
+            continue;
+        }
         const std::wstring name = CompositeProp(index);
         if (!detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx, name.c_str())) {
             log += L"Could not clear " + name + L" on " + device + L".\r\n";
             ok = false;
         }
+    }
+    return ok;
+}
+
+// Removes this APO from the stream and PreMix slots that older versions bound
+// it to. Leaving it there would process non-raw streams twice.
+bool ClearLegacyBinding(const std::wstring& fx, const std::wstring& device,
+                        std::wstring& log)
+{
+    bool ok = true;
+
+    std::vector<std::wstring> stream;
+    if (detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
+                                   kCompositeStreamProp, stream) &&
+        ContainsClsid(stream, kClsid)) {
+        RemoveClsid(stream, kClsid);
+        const bool cleared =
+            stream.empty()
+                ? detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx,
+                                         kCompositeStreamProp)
+                : detail::RegWriteMultiString(HKEY_LOCAL_MACHINE, fx,
+                                              kCompositeStreamProp, stream);
+        if (!cleared) {
+            log += L"Could not clear the stream chain on " + device +
+                   L".\r\n";
+            ok = false;
+        }
+    }
+
+    std::wstring value;
+    if (detail::RegReadString(HKEY_LOCAL_MACHINE, fx, kPreMixProp, value) &&
+        _wcsicmp(value.c_str(), kClsid) == 0 &&
+        !detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx, kPreMixProp)) {
+        log += L"Could not clear the PreMix slot on " + device + L".\r\n";
+        ok = false;
+    }
+    if (detail::RegReadString(HKEY_LOCAL_MACHINE, fx, kStreamProp, value) &&
+        _wcsicmp(value.c_str(), kClsid) == 0 &&
+        !detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx, kStreamProp)) {
+        log += L"Could not clear the Stream slot on " + device + L".\r\n";
+        ok = false;
     }
     return ok;
 }
@@ -764,10 +816,20 @@ bool CreateBackup(const Endpoint& endpoint, std::wstring& file,
     const bool existed = detail::RegReadString(
         HKEY_LOCAL_MACHINE, detail::FxSub(endpoint.id), kPreMixProp, oldValue);
 
+    std::wstring endpointValue;
+    const bool endpointExisted = detail::RegReadString(
+        HKEY_LOCAL_MACHINE, detail::FxSub(endpoint.id), kEndpointProp,
+        endpointValue);
+
     std::vector<std::wstring> composite;
     const bool compositeExisted = detail::RegReadMultiString(
         HKEY_LOCAL_MACHINE, detail::FxSub(endpoint.id), kCompositeStreamProp,
         composite);
+
+    std::vector<std::wstring> compositeEndpoint;
+    const bool compositeEndpointExisted = detail::RegReadMultiString(
+        HKEY_LOCAL_MACHINE, detail::FxSub(endpoint.id),
+        kCompositeEndpointProp, compositeEndpoint);
 
     file = canonical.wstring();
 
@@ -800,6 +862,16 @@ bool CreateBackup(const Endpoint& endpoint, std::wstring& file,
         L"compositeExisted = " + (compositeExisted ? L"True" : L"False") +
         L"\r\n" +
         L"compositeValue = " + JoinValues(composite) + L"\r\n" +
+        L"endpoint   = " + std::wstring(kEndpointProp) + L"\r\n" +
+        L"endpointExisted = " + (endpointExisted ? L"True" : L"False") +
+        L"\r\n" +
+        L"endpointValue = " + endpointValue + L"\r\n" +
+        L"compositeEndpoint = " + std::wstring(kCompositeEndpointProp) +
+        L"\r\n" +
+        L"compositeEndpointExisted = " +
+        (compositeEndpointExisted ? L"True" : L"False") + L"\r\n" +
+        L"compositeEndpointValue = " + JoinValues(compositeEndpoint) +
+        L"\r\n" +
         L"newValue   = " + std::wstring(kClsid) + L"\r\n";
     detail::WriteTextFile(sidecar, text);
 
@@ -861,6 +933,31 @@ bool RestoreBackup(const Endpoint& endpoint, std::wstring& log)
         }
     }
 
+    // The legacy endpoint-effect slot. Restore the driver's APO when the
+    // backup has one; otherwise remove only this APO.
+    std::wstring endpointValue;
+    const bool endpointExisted =
+        !chosen.empty() &&
+        detail::ExtractRegString(text, kEndpointProp, endpointValue);
+    if (endpointExisted && _wcsicmp(endpointValue.c_str(), kClsid) != 0) {
+        if (!detail::RegWriteString(HKEY_LOCAL_MACHINE, fx, kEndpointProp,
+                                    endpointValue)) {
+            log += L"Could not restore the endpoint effect on " +
+                   endpoint.name + L".\r\n";
+            ok = false;
+        }
+    } else {
+        std::wstring current;
+        if (detail::RegReadString(HKEY_LOCAL_MACHINE, fx, kEndpointProp,
+                                  current) &&
+            _wcsicmp(current.c_str(), kClsid) == 0 &&
+            !detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx, kEndpointProp)) {
+            log += L"Could not clear the endpoint effect on " +
+                   endpoint.name + L".\r\n";
+            ok = false;
+        }
+    }
+
     std::vector<std::wstring> target;
     bool writeComposite = false;
     if (compositeExisted) {
@@ -903,6 +1000,30 @@ bool RestoreBackup(const Endpoint& endpoint, std::wstring& log)
         ok = false;
     }
 
+    // Without a backup there is nothing to restore, so just make sure this APO
+    // is gone from the endpoint chain too.
+    if (chosen.empty()) {
+        std::vector<std::wstring> endpointChain;
+        if (detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
+                                       kCompositeEndpointProp,
+                                       endpointChain) &&
+            ContainsClsid(endpointChain, kClsid)) {
+            RemoveClsid(endpointChain, kClsid);
+            const bool cleared =
+                endpointChain.empty()
+                    ? detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx,
+                                             kCompositeEndpointProp)
+                    : detail::RegWriteMultiString(HKEY_LOCAL_MACHINE, fx,
+                                                  kCompositeEndpointProp,
+                                                  endpointChain);
+            if (!cleared) {
+                log += L"Could not clear the endpoint chain on " +
+                       endpoint.name + L".\r\n";
+                ok = false;
+            }
+        }
+    }
+
     std::wstring currentPremix;
     if (detail::RegReadString(HKEY_LOCAL_MACHINE, fx, kPreMixProp,
                               currentPremix) &&
@@ -916,6 +1037,25 @@ bool RestoreBackup(const Endpoint& endpoint, std::wstring& log)
                                    kCompositeStreamProp, currentComposite) &&
         ContainsClsid(currentComposite, kClsid)) {
         log += L"Could not remove the APO from the composite chain on " +
+               endpoint.name + L".\r\n";
+        ok = false;
+    }
+
+    std::wstring currentEndpoint;
+    if (detail::RegReadString(HKEY_LOCAL_MACHINE, fx, kEndpointProp,
+                              currentEndpoint) &&
+        _wcsicmp(currentEndpoint.c_str(), kClsid) == 0) {
+        log += L"Could not remove the APO from the endpoint effect on " +
+               endpoint.name + L".\r\n";
+        ok = false;
+    }
+
+    std::vector<std::wstring> currentEndpointChain;
+    if (detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
+                                   kCompositeEndpointProp,
+                                   currentEndpointChain) &&
+        ContainsClsid(currentEndpointChain, kClsid)) {
+        log += L"Could not remove the APO from the endpoint chain on " +
                endpoint.name + L".\r\n";
         ok = false;
     }
@@ -937,6 +1077,7 @@ struct ApplyPlan {
     std::wstring fx;
     bool wasEnabled = false;
     bool bindingTransition = false;
+    bool bindingUpgrade = false;
     bool isolateChanged = false;
     bool isolateRebind = false;
     bool needsRestart = false;
@@ -978,17 +1119,21 @@ std::vector<ApplyPlan> BuildPlans(const std::vector<Change>& changes,
         // chain is still present. Apply should finish the cleanup without
         // making the user toggle the checkbox off and on again.
         const bool isolateCleanup =
-            change.enable && plan.wasEnabled && it->compositePresent &&
+            change.enable && plan.wasEnabled &&
             plan.targetSettings.isolateEffects &&
-            HasCompositeValues(plan.fx, kCompositeFirstProp + 1,
-                               kCompositeLastProp);
+            HasOtherCompositeValues(plan.fx);
         plan.isolateRebind =
-            change.enable && plan.wasEnabled && it->compositePresent &&
+            change.enable && plan.wasEnabled &&
             (plan.isolateChanged || isolateCleanup);
 
+        // A device bound by an older version still sits in a stream slot,
+        // which raw streams bypass. Move it to the endpoint slot.
+        plan.bindingUpgrade =
+            change.enable && plan.wasEnabled && !it->BoundAtEndpoint();
+
         plan.needsRestart =
-            plan.bindingTransition || plan.isolateRebind ||
-            change.forceRestart;
+            plan.bindingTransition || plan.bindingUpgrade ||
+            plan.isolateRebind || change.forceRestart;
 
         // A running APO that locked before the runtime file existed has no
         // mapping to poll, so the first settings Apply still needs a restart.
@@ -999,6 +1144,47 @@ std::vector<ApplyPlan> BuildPlans(const std::vector<Change>& changes,
     }
 
     return plans;
+}
+
+// Moves bindings written by older versions from the stream and PreMix slots to
+// the endpoint-effect slot. Raw streams skip stream effects, so a binding left
+// in a stream slot would not process apps like Discord.
+bool MigrateEffectBindings(std::wstring& log)
+{
+    bool ok = true;
+    for (const Endpoint& endpoint : EnumEndpoints()) {
+        if (!endpoint.Enabled() || endpoint.BoundAtEndpoint()) {
+            continue;
+        }
+
+        const std::wstring fx = detail::FxSub(endpoint.id);
+        bool bound = false;
+        if (endpoint.compositePresent) {
+            std::vector<std::wstring> chain;
+            detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
+                                       kCompositeEndpointProp, chain);
+            RemoveClsid(chain, kClsid);
+            chain.push_back(kClsid);
+            bound = detail::RegWriteMultiString(HKEY_LOCAL_MACHINE, fx,
+                                                kCompositeEndpointProp, chain);
+        } else {
+            bound = detail::RegWriteString(HKEY_LOCAL_MACHINE, fx,
+                                           kEndpointProp, kClsid);
+        }
+
+        if (!bound) {
+            log += L"Could not move " + endpoint.name +
+                   L" to the endpoint effect slot.\r\n";
+            ok = false;
+            continue;
+        }
+        if (!ClearLegacyBinding(fx, endpoint.name, log)) {
+            ok = false;
+        }
+        log += L"Moved " + endpoint.name +
+               L" to the endpoint effect slot.\r\n";
+    }
+    return ok;
 }
 
 } // namespace
@@ -1079,6 +1265,14 @@ Result InstallFiles()
         return result;
     }
 
+    // A previous version bound devices in stream slots, which raw streams
+    // bypass. Move them to the endpoint slot while the audio service is still
+    // stopped so the change takes effect when it starts again.
+    if (!MigrateEffectBindings(log)) {
+        log += L"Some devices still need Apply to use the endpoint "
+               L"effect.\r\n";
+    }
+
     result.ok = true;
     result.summary = updating ? L"Updated." : L"Installed.";
     result.details = log;
@@ -1103,7 +1297,8 @@ Result UninstallFiles()
     // have been bound or removed since the status was last refreshed.
     for (const auto& endpoint : EnumEndpoints()) {
         if (endpoint.premixOurs || endpoint.compositeOurs ||
-            endpoint.streamOurs) {
+            endpoint.streamOurs || endpoint.endpointOurs ||
+            endpoint.compositeEndpointOurs) {
             if (!RestoreBackup(endpoint, log)) {
                 result.ok = false;
             }
@@ -1113,6 +1308,13 @@ Result UninstallFiles()
                                     detail::FxSub(endpoint.id), kStreamProp)) {
             log += L"Could not remove the Stream slot from " + endpoint.name +
                    L".\r\n";
+            result.ok = false;
+        }
+        if (endpoint.endpointOurs &&
+            !detail::RegDeleteValue(HKEY_LOCAL_MACHINE,
+                                    detail::FxSub(endpoint.id), kEndpointProp)) {
+            log += L"Could not remove the endpoint effect from " +
+                   endpoint.name + L".\r\n";
             result.ok = false;
         }
     }
@@ -1203,6 +1405,7 @@ Result ApplyChanges(const std::vector<Change>& changes)
         const Endpoint& endpoint = *plan.endpoint;
         const std::wstring& fx = plan.fx;
         const bool bindingTransition = plan.bindingTransition;
+        const bool bindingUpgrade = plan.bindingUpgrade;
         const bool isolateChanged = plan.isolateChanged;
         const bool isolateRebind = plan.isolateRebind;
         const ApoSettings& targetSettings = plan.targetSettings;
@@ -1229,7 +1432,7 @@ Result ApplyChanges(const std::vector<Change>& changes)
             }
         }
 
-        if (!bindingTransition && !isolateRebind) {
+        if (!bindingTransition && !bindingUpgrade && !isolateRebind) {
             continue;
         }
 
@@ -1247,72 +1450,76 @@ Result ApplyChanges(const std::vector<Change>& changes)
                 }
             }
 
-            if (endpoint.compositePresent) {
-                std::vector<std::wstring> chain;
-                std::wstring backupText;
-                const bool haveBackup =
-                    ReadNewestBackupText(endpoint, backupText);
+            std::wstring backupText;
+            const bool haveBackup =
+                ReadNewestBackupText(endpoint, backupText);
+            const bool unisolate =
+                isolateChanged && !targetSettings.isolateEffects;
 
-                if (targetSettings.isolateEffects) {
-                    // Remove every other effect-pack chain as well as the
-                    // driver's stream effects, leaving this APO alone.
-                    chain.push_back(kClsid);
-                    if (!ClearCompositeValues(fx, kCompositeFirstProp + 1,
-                                              kCompositeLastProp, endpoint.name,
-                                              log)) {
+            // Bind as an endpoint effect: Windows applies endpoint effects
+            // even to raw streams, while stream effects are skipped for them.
+            // Discord and WhatsApp open the microphone raw, so this is what
+            // makes their audio processed.
+            if (endpoint.compositePresent) {
+                if (unisolate) {
+                    // Put back the effect-pack chains that isolation cleared.
+                    if (haveBackup &&
+                        (!RestoreCompositeValues(
+                             fx, backupText, kCompositeFirstProp,
+                             kCompositeEndpointIndex - 1, endpoint.name,
+                             log) ||
+                         !RestoreCompositeValues(
+                             fx, backupText, kCompositeEndpointIndex + 1,
+                             kCompositeLastProp, endpoint.name, log))) {
                         result.ok = false;
                     }
-                } else {
-                    bool chainLoaded = false;
-                    if (!bindingTransition && haveBackup) {
-                        // Turning isolation off: the backup holds the driver's
-                        // stream chain. A missing value means it was empty.
-                        if (!detail::ExtractRegMultiString(
-                                backupText, kCompositeStreamProp, chain)) {
-                            chain.clear();
-                        }
-                        chainLoaded = true;
-                    }
-                    if (!chainLoaded) {
-                        detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
-                                                   kCompositeStreamProp, chain);
-                    }
-                    RemoveClsid(chain, kClsid);
-                    chain.push_back(kClsid);
-
-                    // Put back the effect-pack chains that isolation cleared.
-                    if (!bindingTransition && haveBackup &&
-                        !RestoreCompositeValues(fx, backupText,
-                                                kCompositeFirstProp + 1,
-                                                kCompositeLastProp,
-                                                endpoint.name, log)) {
+                } else if (targetSettings.isolateEffects) {
+                    // Isolation is a desired state, not just a transition:
+                    // re-apply it if the driver's chains reappeared (for
+                    // example after a driver update).
+                    if (!ClearOtherCompositeValues(fx, endpoint.name, log)) {
                         result.ok = false;
                     }
                 }
+
+                std::vector<std::wstring> chain;
+                if (unisolate && haveBackup) {
+                    if (!detail::ExtractRegMultiString(
+                            backupText, kCompositeEndpointProp, chain)) {
+                        chain.clear();
+                    }
+                } else {
+                    detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
+                                               kCompositeEndpointProp, chain);
+                }
+                if (targetSettings.isolateEffects && !unisolate) {
+                    // Isolation leaves only this APO, so the driver's endpoint
+                    // chain is dropped as well. The backup above holds it and
+                    // turning isolation off puts it back.
+                    chain.clear();
+                }
+                RemoveClsid(chain, kClsid);
+                chain.push_back(kClsid);
                 if (!detail::RegWriteMultiString(HKEY_LOCAL_MACHINE, fx,
-                                                 kCompositeStreamProp, chain)) {
-                    log += L"Could not write the composite chain for " +
+                                                 kCompositeEndpointProp,
+                                                 chain)) {
+                    log += L"Could not write the endpoint effect chain for " +
                            endpoint.name + L".\r\n";
                     result.ok = false;
                     continue;
                 }
-
-                // The single PreMix slot is ignored on these devices, but a
-                // value left by an older version would become active again
-                // if the effect pack ever disappears.
-                std::wstring premix;
-                if (detail::RegReadString(HKEY_LOCAL_MACHINE, fx, kPreMixProp,
-                                          premix) &&
-                    _wcsicmp(premix.c_str(), kClsid) == 0) {
-                    detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx,
-                                           kPreMixProp);
-                }
             } else if (!detail::RegWriteString(HKEY_LOCAL_MACHINE, fx,
-                                               kPreMixProp, kClsid)) {
-                log += L"Could not write the slot for " + endpoint.name +
-                       L".\r\n";
+                                               kEndpointProp, kClsid)) {
+                log += L"Could not write the endpoint effect for " +
+                       endpoint.name + L".\r\n";
                 result.ok = false;
                 continue;
+            }
+
+            // Ours must not stay in a stream slot: raw streams bypass it and
+            // every other stream would process twice.
+            if (!ClearLegacyBinding(fx, endpoint.name, log)) {
+                result.ok = false;
             }
 
             if (endpoint.disableSysFx) {

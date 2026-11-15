@@ -15,14 +15,14 @@
 #include "apo_ids.h"
 #include "apo_settings.h"
 #include "dsp/dsp.h"
+#include "dsp/stages.h"
 #include "runtime_settings.h"
 
 // Minimal capture APO.
 //
-// DSP chain: optional gate -> linked peak compressor -> makeup gain ->
-// optional mono copy. The stages live in src/dsp; ConfigureDsp() assembles the
-// chain, so adding or reordering a stage only touches that function and the
-// settings model.
+// DSP chain: the per-endpoint effect list, processed in list order. The stages
+// themselves live in src/dsp; StagePool owns a fixed pool of them and rebuilds
+// the active order from the settings snapshot without allocating.
 //
 // The DSP settings are loaded per endpoint from
 // C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.ini.
@@ -99,6 +99,7 @@ private:
     apo::NoiseProfile m_noiseProfile;
 
     apo::dsp::Chain m_chain;
+    apo::dsp::StagePool m_stagePool;
     apo::dsp::AudioFormat m_formatInfo;
     std::vector<double> m_scratch;
     UINT32 m_maxFrames = 0;

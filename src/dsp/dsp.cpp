@@ -301,40 +301,22 @@ std::vector<double> AverageMagnitudeSpectrum(const float* samples,
     return sum;
 }
 
-void Chain::Add(std::unique_ptr<Stage> stage)
+void Chain::Add(Stage* stage)
 {
-    if (stage)
+    if (stage != nullptr && m_stages.size() < m_stages.capacity())
     {
-        m_stages.push_back(std::move(stage));
+        m_stages.push_back(stage);
     }
 }
 
 void Chain::Clear()
 {
     m_stages.clear();
-    m_format = AudioFormat{};
-}
-
-void Chain::Configure(const AudioFormat& format)
-{
-    m_format = format;
-    for (auto& stage : m_stages)
-    {
-        stage->Configure(m_format);
-    }
-}
-
-void Chain::Update(const ApoSettings& settings)
-{
-    for (auto& stage : m_stages)
-    {
-        stage->Update(settings, m_format);
-    }
 }
 
 void Chain::Reset()
 {
-    for (auto& stage : m_stages)
+    for (Stage* stage : m_stages)
     {
         stage->Reset();
     }

@@ -13,10 +13,15 @@ inline constexpr wchar_t kFxPropBase[] =
     L"{d04e05a6-594b-4fb6-a80d-01af5eed7d1d}";
 inline constexpr wchar_t kPreMixProp[] = L"{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1";
 inline constexpr wchar_t kStreamProp[] = L"{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},5";
+inline constexpr wchar_t kEndpointProp[] =
+    L"{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},7";
 inline constexpr wchar_t kCompositeStreamProp[] =
     L"{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},13";
+inline constexpr wchar_t kCompositeEndpointProp[] =
+    L"{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},15";
 inline constexpr int kCompositeFirstProp = 13;
 inline constexpr int kCompositeLastProp = 20;
+inline constexpr int kCompositeEndpointIndex = 15;
 inline constexpr wchar_t kDisableSysFxProp[] = L"{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5";
 inline constexpr wchar_t kDeviceNameProp[] = L"{a45c254e-df1c-4efd-8020-67d146a850e0},2";
 inline constexpr wchar_t kFriendlyNameProp[] = L"{b3f8fa53-0004-438e-9003-51a46e139bfc},6";
@@ -37,21 +42,34 @@ struct Endpoint {
     DWORD state = 0;
     bool premixOurs = false;
     bool streamOurs = false;
+    bool endpointOurs = false;
     bool disableSysFx = false;
 
     // Composite effect packs replace the single FX values on some devices.
     // When present, Windows ignores the legacy PreMix slot.
     bool compositePresent = false;
     bool compositeOurs = false;
+    bool compositeEndpointOurs = false;
 
     // The saved isolate option is on, the device is bound, and some other
     // composite effect chain is still present. Apply can clean this up without
     // requiring the user to toggle the checkbox.
     bool isolatePendingCleanup = false;
 
+    // The APO is bound as an endpoint effect (EFX), because Windows applies
+    // endpoint effects even to raw streams while stream effects are skipped.
+    // Effect-pack devices keep the endpoint chain in a composite slot; older
+    // devices use the single legacy slot.
+    bool BoundAtEndpoint() const
+    {
+        return compositePresent ? compositeEndpointOurs : endpointOurs;
+    }
+
+    // Bindings written by older versions (stream and PreMix slots) still count
+    // as enabled so Apply can move them to the endpoint slot.
     bool Enabled() const
     {
-        return compositePresent ? compositeOurs : premixOurs;
+        return BoundAtEndpoint() || compositeOurs || premixOurs || streamOurs;
     }
 
     // Per-device settings, loaded from ProgramData and edited by the GUI.
