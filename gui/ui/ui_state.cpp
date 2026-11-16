@@ -40,6 +40,7 @@ HWND g_effectList = nullptr;
 HWND g_effectAdd = nullptr;
 HWND g_effectGroup = nullptr;
 HWND g_effectHeading = nullptr;
+HWND g_effectGraph = nullptr;
 HWND g_effectsUnsaved = nullptr;
 HWND g_effectsApply = nullptr;
 HWND g_effectsReset = nullptr;

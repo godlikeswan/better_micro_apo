@@ -73,6 +73,7 @@ add_executable(better_micro_apo_gui WIN32
     gui/ui/theme.cpp
     gui/ui/ui_state.cpp
     gui/ui/widgets.cpp
+    gui/ui/graph.cpp
     gui/ui/effect_dialog.cpp
     "${CMAKE_BINARY_DIR}/apo_dll.rc"
 )

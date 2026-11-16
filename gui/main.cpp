@@ -5,6 +5,7 @@
 #include "runtime_settings.h"
 
 #include "ui/effect_dialog.h"
+#include "ui/graph.h"
 #include "ui/structure.h"
 #include "ui/theme.h"
 #include "ui/ui_state.h"
@@ -111,6 +112,7 @@ void UpdateViewAvailability();
 void SetActiveView(View view);
 void UpdateDevicesUi();
 void UpdateEffectsUi();
+void RefreshEffectGraph();
 bool ValidEffectIndex();
 
 int CountEffectType(const apo::ApoSettings& settings, apo::EffectType type)
@@ -337,12 +339,19 @@ void UpdateViewVisibility()
              g_effectsApply, g_effectsReset},
             effects);
 
+    ShowWindow(g_effectGraph,
+               (effects && HasEffectSelection() &&
+                ui::GraphSupported(g_effectType))
+                   ? SW_SHOW
+                   : SW_HIDE);
+
     for (int i = 0; i < static_cast<int>(apo::EffectType::Count); ++i) {
         ShowEffectControls(static_cast<apo::EffectType>(i), false);
     }
     if (effects && HasEffectSelection()) {
         ShowEffectControls(g_effectType, true);
     }
+    RefreshEffectGraph();
 }
 
 void EnableEffectControls(bool enabled)
@@ -376,6 +385,7 @@ void EnableEffectControls(bool enabled)
         g_reverbDampingLabel, g_reverbDampingSlider,
         g_reverbPredelayLabel, g_reverbPredelaySlider,
         g_noiseReductionLabel, g_noiseReductionSlider, g_noiseCapture,
+        g_effectGraph,
     };
     for (HWND control : controls) {
         EnableWindow(control, enabled);
@@ -395,7 +405,9 @@ void ClearEffectEditor()
     SendMessageW(g_distFunctionCombo, CB_SETCURSEL, apo::kDistortionTanh, 0);
     SetWindowTextW(g_effectHeading, L"Select an effect");
     SetWindowTextW(g_noiseNote, L"");
+    ShowWindow(g_effectGraph, SW_HIDE);
     g_effectLoading = false;
+    RefreshEffectGraph();
 }
 
 // Rebuilds the list rows from the selected endpoint's effect array. Called when
@@ -449,6 +461,84 @@ void RebuildEffectList()
     SendMessageW(g_effectList, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(g_effectList, nullptr, TRUE);
     g_effectLoading = false;
+}
+
+// Copies the editor controls into `effect`. The sliders always hold valid
+// values, but ClampSettings still runs after this so a programmatic value
+// cannot escape the supported range.
+void ReadEffectControls(apo::EffectInstance& effect)
+{
+    switch (effect.type) {
+    case apo::EffectType::Noise:
+        GetSliderValue(g_noiseReductionSlider, effect.noise.reductionDb);
+        break;
+    case apo::EffectType::Gate:
+        GetSliderValue(g_gateThresholdSlider, effect.gate.thresholdDb);
+        GetSliderValue(g_gateRangeSlider, effect.gate.rangeDb);
+        GetSliderValue(g_gateAttackSlider, effect.gate.attackMs);
+        GetSliderValue(g_gateHoldSlider, effect.gate.holdMs);
+        GetSliderValue(g_gateReleaseSlider, effect.gate.releaseMs);
+        GetSliderValue(g_gateLookaheadSlider, effect.gate.lookaheadMs);
+        break;
+    case apo::EffectType::Dynamic:
+        GetSliderValue(g_dynFrequencySlider, effect.dynamics.frequencyHz);
+        GetSliderValue(g_dynQSlider, effect.dynamics.q);
+        GetSliderValue(g_dynThresholdSlider, effect.dynamics.thresholdDb);
+        GetSliderValue(g_dynRatioSlider, effect.dynamics.ratio);
+        GetSliderValue(g_dynRangeSlider, effect.dynamics.rangeDb);
+        GetSliderValue(g_dynAttackSlider, effect.dynamics.attackMs);
+        GetSliderValue(g_dynReleaseSlider, effect.dynamics.releaseMs);
+        effect.dynamics.expand =
+            SendMessageW(g_dynamicExtend, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        break;
+    case apo::EffectType::Compressor:
+        GetSliderValue(g_compThresholdSlider, effect.compressor.thresholdDb);
+        GetSliderValue(g_compRatioSlider, effect.compressor.ratio);
+        GetSliderValue(g_compAttackSlider, effect.compressor.attackMs);
+        GetSliderValue(g_compReleaseSlider, effect.compressor.releaseMs);
+        break;
+    case apo::EffectType::Gain:
+        GetSliderValue(g_makeupSlider, effect.gain.gainDb);
+        break;
+    case apo::EffectType::Mono:
+        break;
+    case apo::EffectType::Distortion: {
+        const int function = static_cast<int>(
+            SendMessageW(g_distFunctionCombo, CB_GETCURSEL, 0, 0));
+        if (function >= 0 && function < apo::kDistortionFunctionCount) {
+            effect.distortion.function = function;
+        }
+        GetSliderValue(g_distDriveSlider, effect.distortion.driveDb);
+        GetSliderValue(g_distCurvatureSlider, effect.distortion.curvature);
+        GetSliderValue(g_distOutputSlider, effect.distortion.outputDb);
+        break;
+    }
+    case apo::EffectType::Reverb:
+        GetSliderValue(g_reverbMixSlider, effect.reverb.mix);
+        GetSliderValue(g_reverbSizeSlider, effect.reverb.size);
+        GetSliderValue(g_reverbDampingSlider, effect.reverb.damping);
+        GetSliderValue(g_reverbPredelaySlider, effect.reverb.predelayMs);
+        break;
+    default:
+        break;
+    }
+}
+
+// Redraws the curve from the values currently in the editor. Called on every
+// change, including while a slider is still being dragged, so the graph always
+// shows what the next apply will send to the APO.
+void RefreshEffectGraph()
+{
+    if (g_effectGraph == nullptr) {
+        return;
+    }
+
+    apo::EffectInstance effect;
+    if (HasEffectSelection()) {
+        effect = g_endpoints[g_effectIndex].settings.effects[g_effectSelection];
+        ReadEffectControls(effect);
+    }
+    ui::SetGraphEffect(g_effectGraph, effect);
 }
 
 void ShowEffectForSelected()
@@ -505,6 +595,11 @@ void ShowEffectForSelected()
         ShowEffectControls(effect.type, true);
     }
 
+    ShowWindow(g_effectGraph,
+               (g_view == View::Effects && ui::GraphSupported(effect.type))
+                   ? SW_SHOW
+                   : SW_HIDE);
+
     const bool hasProfile = apo::FileExists(
         apo::NoiseProfilePath(g_endpoints[g_effectIndex].id));
     SetWindowTextW(
@@ -515,6 +610,7 @@ void ShowEffectForSelected()
             : L"Stay quiet for ~3 s while capturing.\r\n"
               L"Audio stops briefly.");
     g_effectLoading = false;
+    RefreshEffectGraph();
 }
 
 bool CommitEffectEditor(bool showValues = true)
@@ -528,60 +624,7 @@ bool CommitEffectEditor(bool showValues = true)
 
     // Sliders always hold a valid, in-range value, so there is nothing to
     // reject here. The settings are clamped again below for safety.
-    switch (effect.type) {
-    case apo::EffectType::Noise:
-        GetSliderValue(g_noiseReductionSlider, effect.noise.reductionDb);
-        break;
-    case apo::EffectType::Gate:
-        GetSliderValue(g_gateThresholdSlider, effect.gate.thresholdDb);
-        GetSliderValue(g_gateRangeSlider, effect.gate.rangeDb);
-        GetSliderValue(g_gateAttackSlider, effect.gate.attackMs);
-        GetSliderValue(g_gateHoldSlider, effect.gate.holdMs);
-        GetSliderValue(g_gateReleaseSlider, effect.gate.releaseMs);
-        GetSliderValue(g_gateLookaheadSlider, effect.gate.lookaheadMs);
-        break;
-    case apo::EffectType::Dynamic:
-        GetSliderValue(g_dynFrequencySlider, effect.dynamics.frequencyHz);
-        GetSliderValue(g_dynQSlider, effect.dynamics.q);
-        GetSliderValue(g_dynThresholdSlider, effect.dynamics.thresholdDb);
-        GetSliderValue(g_dynRatioSlider, effect.dynamics.ratio);
-        GetSliderValue(g_dynRangeSlider, effect.dynamics.rangeDb);
-        GetSliderValue(g_dynAttackSlider, effect.dynamics.attackMs);
-        GetSliderValue(g_dynReleaseSlider, effect.dynamics.releaseMs);
-        effect.dynamics.expand =
-            SendMessageW(g_dynamicExtend, BM_GETCHECK, 0, 0) == BST_CHECKED;
-        break;
-    case apo::EffectType::Compressor:
-        GetSliderValue(g_compThresholdSlider, effect.compressor.thresholdDb);
-        GetSliderValue(g_compRatioSlider, effect.compressor.ratio);
-        GetSliderValue(g_compAttackSlider, effect.compressor.attackMs);
-        GetSliderValue(g_compReleaseSlider, effect.compressor.releaseMs);
-        break;
-    case apo::EffectType::Gain:
-        GetSliderValue(g_makeupSlider, effect.gain.gainDb);
-        break;
-    case apo::EffectType::Mono:
-        break;
-    case apo::EffectType::Distortion: {
-        const int function = static_cast<int>(
-            SendMessageW(g_distFunctionCombo, CB_GETCURSEL, 0, 0));
-        if (function >= 0 && function < apo::kDistortionFunctionCount) {
-            effect.distortion.function = function;
-        }
-        GetSliderValue(g_distDriveSlider, effect.distortion.driveDb);
-        GetSliderValue(g_distCurvatureSlider, effect.distortion.curvature);
-        GetSliderValue(g_distOutputSlider, effect.distortion.outputDb);
-        break;
-    }
-    case apo::EffectType::Reverb:
-        GetSliderValue(g_reverbMixSlider, effect.reverb.mix);
-        GetSliderValue(g_reverbSizeSlider, effect.reverb.size);
-        GetSliderValue(g_reverbDampingSlider, effect.reverb.damping);
-        GetSliderValue(g_reverbPredelaySlider, effect.reverb.predelayMs);
-        break;
-    default:
-        break;
-    }
+    ReadEffectControls(effect);
 
     apo::ClampSettings(settings);
     g_endpoints[g_effectIndex].settings = settings;
@@ -644,6 +687,7 @@ bool CommitEffectEditor(bool showValues = true)
         }
         g_effectLoading = false;
     }
+    RefreshEffectGraph();
     return true;
 }
 
@@ -654,6 +698,7 @@ void MarkSettingsDirty()
     }
     g_endpoints[g_effectIndex].settingsDirty = true;
     UpdateEffectsUi();
+    RefreshEffectGraph();
 
     // Effect settings reach the running APO through the runtime file. Apply
     // them without stopping the audio service.
@@ -1148,6 +1193,7 @@ void ResetEffects()
     RebuildEffectList();
     ShowEffectForSelected();
     UpdateEffectsUi();
+    Relayout();
 }
 
 // ---------------------------------------------------------------------------

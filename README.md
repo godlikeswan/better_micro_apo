@@ -67,6 +67,10 @@ most advanced tab that is available.
    effect loses its values: adding that type again starts from its defaults.
    A device can hold up to 16 effects; noise reduction, gate, and reverb are
    limited to 4 each because they allocate large buffers.
+   For distortion, compressor, and gate effects, the top of the parameter panel
+   draws a live transfer curve from the same math as the DSP, so it follows the
+   sliders and shows what the stage actually applies. The dynamic effect shows
+   the shape of its selected frequency band instead.
 3. To reduce steady room noise, select **Noise reduction**, keep the room quiet,
    and click **Capture noise profile**. The GUI records about three seconds,
    analyzes the noise spectrum, and saves it for that device. Capturing stops

@@ -83,9 +83,9 @@ struct MonoSettings
     bool enabled = false;
 };
 
-// Soft saturation curves. Each shape has unity slope at zero, so the makeup
-// gain stage sets how hard the curve is driven and there is no separate drive
-// control.
+// Saturation curves. Each function is odd and maps full scale to full scale.
+// `curvature` sets how hard it bends and `driveDb` how far the signal is
+// pushed into it.
 enum DistortionFunction : int
 {
     kDistortionTanh = 0,

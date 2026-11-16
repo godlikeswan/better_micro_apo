@@ -1,6 +1,7 @@
 #include "structure.h"
 
 #include "apo.h"
+#include "graph.h"
 #include "theme.h"
 #include "ui_state.h"
 #include "widgets.h"
@@ -256,7 +257,22 @@ void LayoutEffects(int x, int y, int width, int height)
     const int innerY = top + Scale(24);
     const int innerWidth = paramWidth - Scale(28);
     MoveWindow(g_effectHeading, innerX, innerY, innerWidth, Scale(22), TRUE);
-    LayoutEffectParams(innerX, innerY + Scale(28), innerWidth);
+
+    // The graph sits directly below the title and spans the panel width. Only
+    // effect types with a curve reserve that space; the rest keep the full
+    // height for their controls.
+    int paramsY = innerY + Scale(28);
+    if (ui::GraphSupported(g_effectType)) {
+        const int graphTop = paramsY;
+        const int available = panelHeight - (graphTop - top) - Scale(12);
+        int graphHeight =
+            std::clamp(available * 2 / 5, Scale(110), Scale(180));
+        graphHeight = std::min(graphHeight, std::max(available, Scale(60)));
+        MoveWindow(g_effectGraph, innerX, graphTop, innerWidth, graphHeight,
+                   TRUE);
+        paramsY = graphTop + graphHeight + Scale(10);
+    }
+    LayoutEffectParams(innerX, paramsY, innerWidth);
 
     const int bottomY = top + panelHeight + gap;
     MoveWindow(g_listen, x, bottomY, Scale(230), Scale(22), TRUE);
@@ -391,6 +407,7 @@ void CreateControls(HWND root)
         ui::GroupFrame(window, IDC_EFFECT_GROUP, L"Effect parameters");
     g_effectHeading = ui::Label(window, IDC_EFFECT_HEADING, L"Noise reduction");
     ui::ApplyFont(g_effectHeading, g_boldFont);
+    g_effectGraph = ui::Graph(window, IDC_EFFECT_GRAPH);
     g_monoNote = ui::Label(
         window, IDC_MONO_NOTE,
         L"Copies the processed left channel to every other channel.");

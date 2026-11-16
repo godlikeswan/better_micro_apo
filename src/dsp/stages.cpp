@@ -750,72 +750,14 @@ void DistortionStage::Update(const EffectInstance& effect,
 
     // Fold the function and curvature into one coefficient pair so the
     // real-time path only evaluates the curve itself.
-    const double curve =
-        std::clamp(m_settings.curvature / 100.0, 0.0, 1.0);
-    switch (m_settings.function)
-    {
-    case kDistortionArctan:
-        m_curve = 0.5 * std::pow(20.0, curve);
-        m_curveNorm = std::atan(m_curve);
-        break;
-    case kDistortionCubic:
-        // Blend from linear to the classic cubic soft clip; the result stays
-        // monotonic for every curvature.
-        m_curve = curve;
-        m_curveNorm = 1.0;
-        break;
-    case kDistortionLog:
-        m_curve = 0.02 * std::pow(1000.0, curve);
-        m_curveNorm = std::log1p(m_curve);
-        break;
-    case kDistortionExp:
-        m_curve = 0.02 * std::pow(1000.0, curve);
-        m_curveNorm = -std::expm1(-m_curve);
-        break;
-    case kDistortionErf:
-        m_curve = 0.25 * std::pow(24.0, curve);
-        m_curveNorm = std::erf(m_curve);
-        break;
-    case kDistortionTanh:
-    default:
-        m_curve = 0.5 * std::pow(16.0, curve);
-        m_curveNorm = std::tanh(m_curve);
-        break;
-    }
-
+    m_curve = MakeDistortionCurve(m_settings.function, m_settings.curvature);
     m_drive = DecibelsToLinear(m_settings.driveDb);
     m_output = DecibelsToLinear(m_settings.outputDb);
 }
 
 double DistortionStage::Shape(double value) const
 {
-    switch (m_settings.function)
-    {
-    case kDistortionArctan:
-        return std::atan(m_curve * value) / m_curveNorm;
-    case kDistortionCubic: {
-        // The polynomial leaves [-1, 1] outside the unit interval, so the
-        // driven signal is clipped first.
-        const double input = std::clamp(value, -1.0, 1.0);
-        const double soft = 1.5 * input - 0.5 * input * input * input;
-        return (1.0 - m_curve) * input + m_curve * soft;
-    }
-    case kDistortionLog: {
-        const double shaped =
-            std::log1p(m_curve * std::fabs(value)) / m_curveNorm;
-        return std::copysign(shaped, value);
-    }
-    case kDistortionExp: {
-        const double shaped =
-            -std::expm1(-m_curve * std::fabs(value)) / m_curveNorm;
-        return std::copysign(shaped, value);
-    }
-    case kDistortionErf:
-        return std::erf(m_curve * value) / m_curveNorm;
-    case kDistortionTanh:
-    default:
-        return std::tanh(m_curve * value) / m_curveNorm;
-    }
+    return ShapeDistortion(m_curve, m_settings.function, value);
 }
 
 void DistortionStage::Process(double* samples, UINT32 frames, UINT32 channels)

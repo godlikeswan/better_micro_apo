@@ -187,7 +187,9 @@ private:
 // Soft saturation with a selectable curve: tanh, arctan, cubic polynomial,
 // logarithmic, exponential, or error function. `driveDb` sets the level into
 // the curve, `curvature` how hard it bends, and `outputDb` the level after it.
-// Every curve is odd and maps +-1 to +-1, so there is no DC offset to remove.
+// Every curve is odd and maps full scale to full scale, so there is no DC
+// offset to remove. The curve math lives in dsp/transfer.h so the GUI can draw
+// the same shape.
 class DistortionStage final : public Stage
 {
 public:
@@ -202,8 +204,7 @@ private:
     DistortionSettings m_settings;
     // Curve coefficients derived from the function and curvature in Update, so
     // the real-time path only evaluates the curve itself.
-    double m_curve = 1.0;
-    double m_curveNorm = 1.0;
+    DistortionCurve m_curve;
     double m_drive = 1.0;
     double m_output = 1.0;
 };

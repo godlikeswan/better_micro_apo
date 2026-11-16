@@ -48,6 +48,7 @@ enum : int {
     IDC_EFFECT_ADD,
     IDC_EFFECT_GROUP,
     IDC_EFFECT_HEADING,
+    IDC_EFFECT_GRAPH,
     IDC_EFFECTS_UNSAVED,
     IDC_EFFECTS_APPLY,
     IDC_EFFECTS_RESET,
@@ -173,6 +174,7 @@ extern HWND g_effectList;
 extern HWND g_effectAdd;
 extern HWND g_effectGroup;
 extern HWND g_effectHeading;
+extern HWND g_effectGraph;
 extern HWND g_effectsUnsaved;
 extern HWND g_effectsApply;
 extern HWND g_effectsReset;

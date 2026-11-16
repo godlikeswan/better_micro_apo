@@ -9,6 +9,7 @@ struct Palette {
     COLORREF text;
     COLORREF disabledText;
     COLORREF frame;
+    COLORREF graphGrid;
     COLORREF error;
     COLORREF editBackground;
     COLORREF editText;

@@ -68,6 +68,7 @@ void BuildTheme(bool dark)
         theme.color.text = RGB(240, 240, 240);
         theme.color.disabledText = RGB(132, 132, 132);
         theme.color.frame = RGB(92, 92, 92);
+        theme.color.graphGrid = RGB(62, 62, 62);
         theme.color.error = RGB(255, 120, 120);
         theme.color.editBackground = RGB(45, 45, 45);
         theme.color.editText = RGB(240, 240, 240);
@@ -92,6 +93,7 @@ void BuildTheme(bool dark)
         theme.color.text = RGB(0, 0, 0);
         theme.color.disabledText = RGB(109, 109, 109);
         theme.color.frame = RGB(160, 160, 160);
+        theme.color.graphGrid = RGB(205, 205, 205);
         theme.color.error = RGB(200, 0, 0);
         theme.color.editBackground = RGB(255, 255, 255);
         theme.color.editText = RGB(0, 0, 0);

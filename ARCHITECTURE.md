@@ -79,6 +79,11 @@ identity and aggregation are handled by ATL (`CComObjectRootEx`, `CComCoClass`,
   derived in `Update`, leaving only the curve evaluation in the real-time path.
   In the initial list it runs after mono and before reverb so the tail stays
   clean.
+- The distortion, gate, and compressor transfer functions live in
+  `src/dsp/transfer.h`. The stages and the GUI's curve control call the same
+  inline functions, so those displayed curves cannot drift from the audio path.
+  The dynamic graph draws the analog band-pass prototype that `DynamicStage`
+  approximates with its state-variable filter.
 - `ReverbStage` is a Freeverb-style room/hall reverb: eight damped comb filters
   feed four allpass filters per channel, with the classic stereo spread between
   even and odd channels. In the initial list it runs last, after mono, so a mono

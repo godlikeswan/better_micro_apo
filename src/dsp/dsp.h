@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "apo_settings.h"
+#include "transfer.h"
 
 // Format conversion and the stage/chain framework used by the APO. Keeping
 // this separate from the COM plumbing makes adding or reordering a DSP stage a
@@ -37,11 +38,6 @@ struct AudioFormat
 // Converts one interleaved sample to and from the normalized [-1, 1] range.
 double DecodeSample(SampleFormat format, const BYTE* buffer, size_t index);
 void EncodeSample(SampleFormat format, BYTE* buffer, size_t index, double value);
-
-inline double DecibelsToLinear(double decibels)
-{
-    return std::pow(10.0, decibels / 20.0);
-}
 
 // One-pole smoothing coefficient for a time constant in milliseconds.
 inline double TimeCoefficient(double milliseconds, double sampleRate)
