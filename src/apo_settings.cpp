@@ -201,6 +201,20 @@ const wchar_t* EffectTypeName(EffectType type)
     }
 }
 
+const wchar_t* DistortionFunctionName(int function)
+{
+    switch (function)
+    {
+    case kDistortionTanh:   return L"Tanh";
+    case kDistortionArctan: return L"Arctan";
+    case kDistortionCubic:  return L"Cubic polynomial";
+    case kDistortionLog:    return L"Logarithmic";
+    case kDistortionExp:    return L"Exponential";
+    case kDistortionErf:    return L"Error function";
+    default:                return L"";
+    }
+}
+
 const char* EffectTypeKey(EffectType type)
 {
     switch (type)
@@ -379,10 +393,13 @@ void ClampEffect(EffectInstance& effect)
         break;
 
     case EffectType::Distortion:
-        if (effect.distortion.function < kDistortionSoft ||
+        if (effect.distortion.function < 0 ||
             effect.distortion.function >= kDistortionFunctionCount) {
-            effect.distortion.function = kDistortionSoft;
+            effect.distortion.function = kDistortionTanh;
         }
+        ClampFinite(effect.distortion.driveDb, 0.0, 0.0, 36.0);
+        ClampFinite(effect.distortion.curvature, 50.0, 0.0, 100.0);
+        ClampFinite(effect.distortion.outputDb, 0.0, -24.0, 12.0);
         break;
 
     case EffectType::Reverb:
@@ -457,6 +474,20 @@ struct KeyValue
     std::wstring key;
     std::wstring value;
 };
+
+// v2 INI files and the legacy chain stored the old curve names by index.
+// Keep the closest named curve instead of silently switching to the default.
+int MigrateDistortionFunction(int function)
+{
+    switch (function)
+    {
+    case 0: return kDistortionTanh;   // Soft
+    case 1: return kDistortionArctan; // Warm
+    case 2: return kDistortionCubic;  // Round
+    case 3: return kDistortionExp;    // Tube
+    default: return function;
+    }
+}
 
 const std::wstring* FindValue(const std::vector<KeyValue>& entries,
                               const std::wstring& key)
@@ -554,6 +585,9 @@ void LoadEffectFields(const std::vector<KeyValue>& entries, int index,
 
     case EffectType::Distortion:
         getInt(L"distortion_function", effect.distortion.function);
+        getDouble(L"distortion_drive_db", effect.distortion.driveDb);
+        getDouble(L"distortion_curvature", effect.distortion.curvature);
+        getDouble(L"distortion_output_db", effect.distortion.outputDb);
         break;
 
     case EffectType::Reverb:
@@ -656,6 +690,9 @@ void LoadLegacyFields(const std::vector<KeyValue>& entries,
     if (EffectInstance* effect = FindEffect(settings, EffectType::Distortion)) {
         getBool(L"distortion_enabled", effect->distortion.enabled);
         getInt(L"distortion_function", effect->distortion.function);
+        getDouble(L"distortion_drive_db", effect->distortion.driveDb);
+        getDouble(L"distortion_curvature", effect->distortion.curvature);
+        getDouble(L"distortion_output_db", effect->distortion.outputDb);
     }
     if (EffectInstance* effect = FindEffect(settings, EffectType::Reverb)) {
         getBool(L"reverb_enabled", effect->reverb.enabled);
@@ -724,6 +761,11 @@ bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
                      Trim(line.substr(equals + 1))});
     }
 
+    int version = 0;
+    if (const std::wstring* versionText = FindValue(entries, L"version")) {
+        ParseInt(*versionText, version);
+    }
+
     const std::wstring* countText = FindValue(entries, L"effect_count");
     if (countText != nullptr) {
         int count = 0;
@@ -765,6 +807,18 @@ bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
         LoadLegacyFields(entries, settings);
     }
 
+    // Version 3 replaced the abstract curve names with named functions. Older
+    // files stored the old indices, which point at different curves now.
+    if (version < 3) {
+        for (int i = 0; i < settings.effectCount; ++i) {
+            if (settings.effects[i].type == EffectType::Distortion) {
+                settings.effects[i].distortion.function =
+                    MigrateDistortionFunction(
+                        settings.effects[i].distortion.function);
+            }
+        }
+    }
+
     ClampSettings(settings);
     return true;
 }
@@ -779,7 +833,7 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
 
     std::string text;
     text += "[dsp]\n";
-    text += "version=2\n";
+    text += "version=3\n";
     text += "effect_count=" + std::to_string(settings.effectCount) + "\n";
     text += "next_effect_id=" + std::to_string(settings.nextEffectId) + "\n";
     text += std::string("isolate_effects=") +
@@ -857,6 +911,12 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
         case EffectType::Distortion:
             text += prefix + "distortion_function=" +
                     std::to_string(effect.distortion.function) + "\n";
+            text += prefix + "distortion_drive_db=" +
+                    FormatDouble(effect.distortion.driveDb) + "\n";
+            text += prefix + "distortion_curvature=" +
+                    FormatDouble(effect.distortion.curvature) + "\n";
+            text += prefix + "distortion_output_db=" +
+                    FormatDouble(effect.distortion.outputDb) + "\n";
             break;
 
         case EffectType::Reverb:

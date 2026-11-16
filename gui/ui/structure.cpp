@@ -206,7 +206,10 @@ void LayoutEffectParams(int x, int y, int width)
         MoveWindow(g_distFunctionCombo, x + labelWidth, y,
                    Scale(180), Scale(200), TRUE);
         y += Scale(34);
-        MoveWindow(g_distortionNote, x, y, width, Scale(52), TRUE);
+        placePair(g_distDriveLabel, g_distDriveSlider,
+                  g_distCurvatureLabel, g_distCurvatureSlider);
+        placePair(g_distOutputLabel, g_distOutputSlider, nullptr, nullptr);
+        MoveWindow(g_distortionNote, x, y, width, Scale(44), TRUE);
         break;
     case apo::EffectType::Reverb:
         placePair(g_reverbMixLabel, g_reverbMixSlider, g_reverbSizeLabel,
@@ -395,19 +398,30 @@ void CreateControls(HWND root)
         ui::Label(window, IDC_DIST_FUNCTION_LABEL, L"Function");
     g_distFunctionCombo =
         ui::ComboBox(window, IDC_DIST_FUNCTION_COMBO, CBS_DROPDOWNLIST);
-    {
-        const wchar_t* functions[] = {L"Soft", L"Warm", L"Round", L"Tube"};
-        for (const wchar_t* function : functions) {
-            SendMessageW(g_distFunctionCombo, CB_ADDSTRING, 0,
-                         reinterpret_cast<LPARAM>(function));
-        }
-        SendMessageW(g_distFunctionCombo, CB_SETCURSEL, apo::kDistortionSoft,
-                     0);
+    for (int i = 0; i < apo::kDistortionFunctionCount; ++i) {
+        SendMessageW(g_distFunctionCombo, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(
+                         apo::DistortionFunctionName(i)));
     }
+    SendMessageW(g_distFunctionCombo, CB_SETCURSEL, apo::kDistortionTanh, 0);
+
+    g_distDriveLabel = ui::Label(window, IDC_DIST_DRIVE_LABEL, L"Drive (dB)");
+    g_distDriveSlider = ui::Slider(window, IDC_DIST_DRIVE_SLIDER,
+                                   {0.0, 36.0, 0.5, false, 1});
+    g_distCurvatureLabel =
+        ui::Label(window, IDC_DIST_CURVATURE_LABEL, L"Curvature (%)");
+    g_distCurvatureSlider = ui::Slider(window, IDC_DIST_CURVATURE_SLIDER,
+                                       {0.0, 100.0, 1.0, false, 0});
+    g_distOutputLabel =
+        ui::Label(window, IDC_DIST_OUTPUT_LABEL, L"Output (dB)");
+    g_distOutputSlider = ui::Slider(window, IDC_DIST_OUTPUT_SLIDER,
+                                    {-24.0, 12.0, 0.5, false, 1});
+
     g_distortionNote = ui::Label(
         window, IDC_DISTORTION_NOTE,
-        L"The Gain stage sets how hard the curve is driven.\r\n"
-        L"More gain means more saturation and harmonics.");
+        L"Drive pushes the signal into the curve; Output sets the level after "
+        L"it.\r\nCurvature bends the curve from nearly linear to fully "
+        L"saturated.");
 
     g_gateThresholdLabel =
         ui::Label(window, IDC_GATE_THRESHOLD_LABEL, L"Threshold (dBFS)");

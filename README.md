@@ -153,10 +153,12 @@ not implemented yet. Every newly added effect starts enabled.
 - **Mono (left to all channels)** duplicates the processed left channel to all
   other channels. It is per device and is saved with the other settings.
 - **Distortion** adds soft saturation. Choose a curve from the **Function**
-  list: `Soft` (tanh), `Warm` (arctan), `Round`, or `Tube` (asymmetric). Every
-  curve has unity slope at zero, so the **Gain** effect sets how hard it is
-  driven; there is no separate drive control. In the default chain it runs
-  before reverb so the tail stays clean. It is off by default.
+  list: `Tanh`, `Arctan`, `Cubic polynomial`, `Logarithmic`, `Exponential`, or
+  `Error function`. **Drive** sets the level into the curve, **Curvature**
+  bends it from nearly linear to fully saturated, and **Output** sets the level
+  after it. Every curve is symmetric and maps full scale to full scale. In the
+  default chain it runs before reverb so the tail stays clean. It is off by
+  default.
 - **Reverb** adds a room or hall tail. `Mix` sets the dry/wet balance, `Size`
   moves from a small room to a long hall, `Damping` controls how quickly the
   highs fade, and `Predelay` leaves a gap before the tail starts. In the default
@@ -185,9 +187,9 @@ Default settings (the initial list; a new Gain starts at 0 dB instead):
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | off | reduce | 120 Hz | 0.7 | -45 dBFS | 4:1 | 18 dB | 10 ms | 150 ms |
 
-| Distortion | Function |
-| --- | --- |
-| off | Soft |
+| Distortion | Function | Drive | Curvature | Output |
+| --- | --- | --- | --- | --- |
+| off | Tanh | 0 dB | 50% | 0 dB |
 
 | Reverb | Mix | Size | Damping | Predelay |
 | --- | --- | --- | --- | --- |
@@ -229,7 +231,10 @@ The GUI clamps values to a safe range:
 | Dynamic attack | 0.1 to 1000 ms |
 | Dynamic release | 1 to 5000 ms |
 | Gain | -24 to +48 dB |
-| Distortion function | Soft, Warm, Round, or Tube |
+| Distortion function | Tanh, Arctan, Cubic polynomial, Logarithmic, Exponential, or Error function |
+| Distortion drive | 0 to 36 dB |
+| Distortion curvature | 0 to 100% |
+| Distortion output | -24 to +12 dB |
 | Reverb mix | 0 to 100% |
 | Reverb size | 0 to 100% |
 | Reverb damping | 0 to 100% |

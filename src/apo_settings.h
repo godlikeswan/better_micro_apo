@@ -88,17 +88,25 @@ struct MonoSettings
 // control.
 enum DistortionFunction : int
 {
-    kDistortionSoft = 0,
-    kDistortionWarm,
-    kDistortionRound,
-    kDistortionTube,
+    kDistortionTanh = 0,
+    kDistortionArctan,
+    kDistortionCubic,
+    kDistortionLog,
+    kDistortionExp,
+    kDistortionErf,
     kDistortionFunctionCount,
 };
 
 struct DistortionSettings
 {
     bool enabled = false;
-    int function = kDistortionSoft;
+    int function = kDistortionTanh;
+    // Input gain into the curve, in dB.
+    double driveDb = 0.0;
+    // How hard the curve bends, 0 = almost linear, 100 = fully saturated.
+    double curvature = 50.0;
+    // Level after the curve, in dB.
+    double outputDb = 0.0;
 };
 
 // Room/hall reverb. `mix` is the wet percentage, `size` sets the decay length,
@@ -136,6 +144,9 @@ inline constexpr int kMaxHeavyEffects = 4;
 
 // User-facing label, e.g. "Noise reduction".
 const wchar_t* EffectTypeName(EffectType type);
+
+// User-facing curve name, e.g. "Tanh" or "Error function".
+const wchar_t* DistortionFunctionName(int function);
 
 // Stable token used in the INI file, e.g. "noise".
 const char* EffectTypeKey(EffectType type);

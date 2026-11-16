@@ -742,63 +742,79 @@ void MonoStage::Process(double* samples, UINT32 frames, UINT32 channels)
     }
 }
 
-void DistortionStage::Configure(const AudioFormat& format)
-{
-    m_channels = format.channels;
-    m_dcInput.assign(m_channels, 0.0);
-    m_dcOutput.assign(m_channels, 0.0);
-
-    // The tube curve is asymmetric, so its even harmonics leave a DC offset.
-    // A 10 Hz one-pole highpass removes it without audibly touching the lows.
-    constexpr double kPi = 3.14159265358979323846;
-    constexpr double kDcCutoffHz = 10.0;
-    const double sampleRate = EffectiveSampleRate(format);
-    m_dcCoefficient = std::exp(-2.0 * kPi * kDcCutoffHz / sampleRate);
-
-    Reset();
-}
-
 void DistortionStage::Update(const EffectInstance& effect,
                              const AudioFormat& format)
 {
     (void)format;
-    const bool wasEnabled = m_settings.enabled;
-    const int oldFunction = m_settings.function;
     m_settings = effect.distortion;
 
-    // Switching curves or bypass state invalidates the DC blocker state.
-    if (wasEnabled != m_settings.enabled ||
-        oldFunction != m_settings.function)
+    // Fold the function and curvature into one coefficient pair so the
+    // real-time path only evaluates the curve itself.
+    const double curve =
+        std::clamp(m_settings.curvature / 100.0, 0.0, 1.0);
+    switch (m_settings.function)
     {
-        Reset();
+    case kDistortionArctan:
+        m_curve = 0.5 * std::pow(20.0, curve);
+        m_curveNorm = std::atan(m_curve);
+        break;
+    case kDistortionCubic:
+        // Blend from linear to the classic cubic soft clip; the result stays
+        // monotonic for every curvature.
+        m_curve = curve;
+        m_curveNorm = 1.0;
+        break;
+    case kDistortionLog:
+        m_curve = 0.02 * std::pow(1000.0, curve);
+        m_curveNorm = std::log1p(m_curve);
+        break;
+    case kDistortionExp:
+        m_curve = 0.02 * std::pow(1000.0, curve);
+        m_curveNorm = -std::expm1(-m_curve);
+        break;
+    case kDistortionErf:
+        m_curve = 0.25 * std::pow(24.0, curve);
+        m_curveNorm = std::erf(m_curve);
+        break;
+    case kDistortionTanh:
+    default:
+        m_curve = 0.5 * std::pow(16.0, curve);
+        m_curveNorm = std::tanh(m_curve);
+        break;
     }
-}
 
-void DistortionStage::Reset()
-{
-    std::fill(m_dcInput.begin(), m_dcInput.end(), 0.0);
-    std::fill(m_dcOutput.begin(), m_dcOutput.end(), 0.0);
+    m_drive = DecibelsToLinear(m_settings.driveDb);
+    m_output = DecibelsToLinear(m_settings.outputDb);
 }
 
 double DistortionStage::Shape(double value) const
 {
-    constexpr double kPi = 3.14159265358979323846;
-
     switch (m_settings.function)
     {
-    case kDistortionWarm:
-        // Normalized arctan: unity slope at zero and a bounded output.
-        return (2.0 / kPi) * std::atan(value * (kPi / 2.0));
-    case kDistortionRound:
-        return value / (1.0 + std::fabs(value));
-    case kDistortionTube:
-        // Compress the negative half harder than the positive half for even
-        // harmonics, while keeping the slope at zero at one.
-        return (value >= 0.0) ? std::tanh(value)
-                              : std::tanh(1.5 * value) / 1.5;
-    case kDistortionSoft:
+    case kDistortionArctan:
+        return std::atan(m_curve * value) / m_curveNorm;
+    case kDistortionCubic: {
+        // The polynomial leaves [-1, 1] outside the unit interval, so the
+        // driven signal is clipped first.
+        const double input = std::clamp(value, -1.0, 1.0);
+        const double soft = 1.5 * input - 0.5 * input * input * input;
+        return (1.0 - m_curve) * input + m_curve * soft;
+    }
+    case kDistortionLog: {
+        const double shaped =
+            std::log1p(m_curve * std::fabs(value)) / m_curveNorm;
+        return std::copysign(shaped, value);
+    }
+    case kDistortionExp: {
+        const double shaped =
+            -std::expm1(-m_curve * std::fabs(value)) / m_curveNorm;
+        return std::copysign(shaped, value);
+    }
+    case kDistortionErf:
+        return std::erf(m_curve * value) / m_curveNorm;
+    case kDistortionTanh:
     default:
-        return std::tanh(value);
+        return std::tanh(m_curve * value) / m_curveNorm;
     }
 }
 
@@ -810,31 +826,10 @@ void DistortionStage::Process(double* samples, UINT32 frames, UINT32 channels)
         return;
     }
 
-    const bool dcBlock =
-        m_settings.function == kDistortionTube &&
-        channels == m_channels && m_dcInput.size() == channels &&
-        m_dcOutput.size() == channels;
-
     const size_t count = static_cast<size_t>(frames) * channels;
     for (size_t i = 0; i < count; ++i)
     {
-        const double shaped = Shape(samples[i]);
-        if (!dcBlock)
-        {
-            samples[i] = shaped;
-            continue;
-        }
-
-        const UINT32 channel = static_cast<UINT32>(i % channels);
-        double output = shaped - m_dcInput[channel] +
-                        m_dcCoefficient * m_dcOutput[channel];
-        m_dcInput[channel] = (std::fabs(shaped) < 1e-20) ? 0.0 : shaped;
-        if (std::fabs(output) < 1e-20)
-        {
-            output = 0.0;
-        }
-        m_dcOutput[channel] = output;
-        samples[i] = output;
+        samples[i] = Shape(samples[i] * m_drive) * m_output;
     }
 }
 

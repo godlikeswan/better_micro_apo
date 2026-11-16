@@ -184,28 +184,28 @@ private:
     bool m_enabled = false;
 };
 
-// Soft saturation with a selectable curve. Every function has unity slope at
-// zero, so the makeup gain stage controls how hard it is driven. The tube curve
-// is asymmetric, so its output passes through a DC blocker to remove the offset
-// the asymmetry creates.
+// Soft saturation with a selectable curve: tanh, arctan, cubic polynomial,
+// logarithmic, exponential, or error function. `driveDb` sets the level into
+// the curve, `curvature` how hard it bends, and `outputDb` the level after it.
+// Every curve is odd and maps +-1 to +-1, so there is no DC offset to remove.
 class DistortionStage final : public Stage
 {
 public:
     DistortionStage() = default;
 
-    void Configure(const AudioFormat& format) override;
     void Update(const EffectInstance& effect, const AudioFormat& format) override;
-    void Reset() override;
     void Process(double* samples, UINT32 frames, UINT32 channels) override;
 
 private:
     double Shape(double value) const;
 
     DistortionSettings m_settings;
-    UINT32 m_channels = 0;
-    double m_dcCoefficient = 0.0;
-    std::vector<double> m_dcInput;
-    std::vector<double> m_dcOutput;
+    // Curve coefficients derived from the function and curvature in Update, so
+    // the real-time path only evaluates the curve itself.
+    double m_curve = 1.0;
+    double m_curveNorm = 1.0;
+    double m_drive = 1.0;
+    double m_output = 1.0;
 };
 
 // Room/hall reverb built from the Freeverb comb/allpass network. It runs last

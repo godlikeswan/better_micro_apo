@@ -71,12 +71,14 @@ identity and aggregation are handled by ATL (`CComObjectRootEx`, `CComCoClass`,
   broadband compressor so it sees the input dynamics.
 - Optional mono mode copies the processed left channel to every other channel,
   for a mono source connected to input 1 of a stereo interface.
-- `DistortionStage` applies a selectable soft saturation curve: `Soft` (tanh),
-  `Warm` (normalized arctan), `Round` (`x / (1 + |x|)`), or `Tube` (asymmetric
-  tanh). Every curve has unity slope at zero, so a Gain effect sets how hard it
-  is driven and there is no separate drive control. The tube curve is
-  asymmetric, so its output passes through a 10 Hz DC blocker. In the initial
-  list it runs after mono and before reverb so the tail stays clean.
+- `DistortionStage` applies a selectable soft saturation curve: tanh, arctan,
+  cubic polynomial, logarithmic, exponential, or error function. `driveDb` sets
+  the level into the curve, `curvature` bends it from nearly linear to fully
+  saturated, and `outputDb` sets the level after it. Every curve is odd and
+  maps -1..1 to -1..1, so no DC blocker is needed. The curve coefficients are
+  derived in `Update`, leaving only the curve evaluation in the real-time path.
+  In the initial list it runs after mono and before reverb so the tail stays
+  clean.
 - `ReverbStage` is a Freeverb-style room/hall reverb: eight damped comb filters
   feed four allpass filters per channel, with the classic stereo spread between
   even and odd channels. In the initial list it runs last, after mono, so a mono

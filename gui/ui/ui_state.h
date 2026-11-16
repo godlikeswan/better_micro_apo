@@ -93,6 +93,12 @@ enum : int {
     IDC_DYN_RELEASE_SLIDER,
     IDC_DIST_FUNCTION_LABEL,
     IDC_DIST_FUNCTION_COMBO,
+    IDC_DIST_DRIVE_LABEL,
+    IDC_DIST_DRIVE_SLIDER,
+    IDC_DIST_CURVATURE_LABEL,
+    IDC_DIST_CURVATURE_SLIDER,
+    IDC_DIST_OUTPUT_LABEL,
+    IDC_DIST_OUTPUT_SLIDER,
     IDC_DISTORTION_NOTE,
     IDC_REVERB_MIX_LABEL,
     IDC_REVERB_MIX_SLIDER,
@@ -211,6 +217,12 @@ extern HWND g_dynReleaseLabel;
 extern HWND g_dynReleaseSlider;
 extern HWND g_distFunctionLabel;
 extern HWND g_distFunctionCombo;
+extern HWND g_distDriveLabel;
+extern HWND g_distDriveSlider;
+extern HWND g_distCurvatureLabel;
+extern HWND g_distCurvatureSlider;
+extern HWND g_distOutputLabel;
+extern HWND g_distOutputSlider;
 extern HWND g_distortionNote;
 extern HWND g_reverbMixLabel;
 extern HWND g_reverbMixSlider;

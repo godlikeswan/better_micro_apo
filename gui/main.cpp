@@ -292,7 +292,10 @@ void ShowEffectControls(apo::EffectType type, bool show)
         showAll({g_monoNote});
         break;
     case apo::EffectType::Distortion:
-        showAll({g_distFunctionLabel, g_distFunctionCombo, g_distortionNote});
+        showAll({g_distFunctionLabel, g_distFunctionCombo,
+                 g_distDriveLabel, g_distDriveSlider,
+                 g_distCurvatureLabel, g_distCurvatureSlider,
+                 g_distOutputLabel, g_distOutputSlider, g_distortionNote});
         break;
     case apo::EffectType::Reverb:
         showAll({g_reverbMixLabel, g_reverbMixSlider, g_reverbSizeLabel,
@@ -365,6 +368,9 @@ void EnableEffectControls(bool enabled)
         g_dynAttackLabel, g_dynAttackSlider,
         g_dynReleaseLabel, g_dynReleaseSlider,
         g_distFunctionLabel, g_distFunctionCombo,
+        g_distDriveLabel, g_distDriveSlider,
+        g_distCurvatureLabel, g_distCurvatureSlider,
+        g_distOutputLabel, g_distOutputSlider,
         g_reverbMixLabel, g_reverbMixSlider,
         g_reverbSizeLabel, g_reverbSizeSlider,
         g_reverbDampingLabel, g_reverbDampingSlider,
@@ -386,7 +392,7 @@ void ClearEffectEditor()
         ShowEffectControls(static_cast<apo::EffectType>(i), false);
     }
     SendMessageW(g_dynamicExtend, BM_SETCHECK, BST_UNCHECKED, 0);
-    SendMessageW(g_distFunctionCombo, CB_SETCURSEL, apo::kDistortionSoft, 0);
+    SendMessageW(g_distFunctionCombo, CB_SETCURSEL, apo::kDistortionTanh, 0);
     SetWindowTextW(g_effectHeading, L"Select an effect");
     SetWindowTextW(g_noiseNote, L"");
     g_effectLoading = false;
@@ -482,6 +488,9 @@ void ShowEffectForSelected()
     SetSliderValue(g_reverbPredelaySlider, effect.reverb.predelayMs);
     SendMessageW(g_distFunctionCombo, CB_SETCURSEL,
                  effect.distortion.function, 0);
+    SetSliderValue(g_distDriveSlider, effect.distortion.driveDb);
+    SetSliderValue(g_distCurvatureSlider, effect.distortion.curvature);
+    SetSliderValue(g_distOutputSlider, effect.distortion.outputDb);
     SendMessageW(g_dynamicExtend, BM_SETCHECK,
                  effect.dynamics.expand ? BST_CHECKED : BST_UNCHECKED, 0);
 
@@ -556,10 +565,12 @@ bool CommitEffectEditor(bool showValues = true)
     case apo::EffectType::Distortion: {
         const int function = static_cast<int>(
             SendMessageW(g_distFunctionCombo, CB_GETCURSEL, 0, 0));
-        if (function >= apo::kDistortionSoft &&
-            function < apo::kDistortionFunctionCount) {
+        if (function >= 0 && function < apo::kDistortionFunctionCount) {
             effect.distortion.function = function;
         }
+        GetSliderValue(g_distDriveSlider, effect.distortion.driveDb);
+        GetSliderValue(g_distCurvatureSlider, effect.distortion.curvature);
+        GetSliderValue(g_distOutputSlider, effect.distortion.outputDb);
         break;
     }
     case apo::EffectType::Reverb:
@@ -618,6 +629,9 @@ bool CommitEffectEditor(bool showValues = true)
         case apo::EffectType::Distortion:
             SendMessageW(g_distFunctionCombo, CB_SETCURSEL,
                          shown.distortion.function, 0);
+            SetSliderValue(g_distDriveSlider, shown.distortion.driveDb);
+            SetSliderValue(g_distCurvatureSlider, shown.distortion.curvature);
+            SetSliderValue(g_distOutputSlider, shown.distortion.outputDb);
             break;
         case apo::EffectType::Reverb:
             SetSliderValue(g_reverbMixSlider, shown.reverb.mix);
@@ -2142,6 +2156,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_REVERB_SIZE_SLIDER:
         case IDC_REVERB_DAMPING_SLIDER:
         case IDC_REVERB_PREDELAY_SLIDER:
+        case IDC_DIST_DRIVE_SLIDER:
+        case IDC_DIST_CURVATURE_SLIDER:
+        case IDC_DIST_OUTPUT_SLIDER:
             if (ui::IsSliderChange(HIWORD(wParam))) {
                 MarkSettingsDirty();
             }
