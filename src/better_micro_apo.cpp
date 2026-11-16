@@ -93,10 +93,11 @@ namespace
 
     std::wstring DescribeEffects(const apo::ApoSettings& settings)
     {
+        const apo::EffectPreset& preset = apo::ActivePreset(settings);
         std::wstring text;
-        for (int index = 0; index < settings.effectCount; ++index)
+        for (int index = 0; index < preset.effectCount; ++index)
         {
-            const apo::EffectInstance& effect = settings.effects[index];
+            const apo::EffectInstance& effect = preset.effects[index];
             if (!text.empty())
             {
                 text += L", ";

@@ -35,6 +35,8 @@ HWND g_devicesReset = nullptr;
 
 HWND g_effectDeviceLabel = nullptr;
 HWND g_effectDeviceCombo = nullptr;
+HWND g_effectPresetLabel = nullptr;
+HWND g_effectPresetCombo = nullptr;
 HWND g_effectListGroup = nullptr;
 HWND g_effectList = nullptr;
 HWND g_effectAdd = nullptr;

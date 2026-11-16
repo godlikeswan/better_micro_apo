@@ -19,20 +19,14 @@ identity and aggregation are handled by ATL (`CComObjectRootEx`, `CComCoClass`,
   equal the valid-bit size).
 - The DSP is a list of `apo::dsp::Stage` objects (`src/dsp`). `StagePool`
   preallocates a fixed number of stages per effect type in `LockForProcess`.
-  `StagePool::Update` walks the device's effect list, binds each enabled effect
-  to a pooled stage by its stable instance id, retunes it in place, and fills a
-  non-owning `Chain` in list order. The same type may appear more than once, and
-  the list order is the processing order. `Update` clears and refills the chain
-  without allocating, so it can run from the runtime polling path. Heavy types
-  (noise reduction, gate, reverb) are capped at four instances each; the whole
-  list is capped at `kMaxEffects` (16).
-
-  The initial list reproduces the old fixed chain:
-
-  ```
-  NoiseStage -> GateStage -> DynamicStage -> CompressorStage
-  -> GainStage (makeup) -> MonoStage -> DistortionStage -> ReverbStage
-  ```
+  `StagePool::Update` walks the active preset's effect list, binds each enabled
+  effect to a pooled stage by its stable instance id, retunes it in place, and
+  fills a non-owning `Chain` in list order. The same type may appear more than
+  once, and the list order is the processing order. `Update` clears and refills
+  the chain without allocating, so it can run from the runtime polling path.
+  Heavy types (noise reduction, gate, reverb) are capped at four instances each;
+  the whole list is capped at `kMaxEffects` (16). Each device has four presets
+  and only `presetIndex` is processed at a time.
 
   Adding a new effect type means writing one `Stage` subclass, extending
   `EffectType`, and adding it to `StagePool::Configure`; the real-time path does
@@ -109,17 +103,16 @@ values, and precomputes the DSP coefficients. `APOProcess` only uses the
 cached instance state, so the real-time path does no file I/O and no
 allocation. Missing files fall back to the defaults.
 
-The INI file has a `[dsp]` section with `version=2`, `effect_count`,
-`next_effect_id`, `isolate_effects`, and one block per list entry:
-`effect_<n>_type`, `effect_<n>_id`, `effect_<n>_enabled`, plus the same
-parameter keys used before with the `effect_<n>_` prefix (for example
-`effect_0_gate_threshold_db` or `effect_1_reverb_mix`). `effect_<n>_id` is the
-stable instance id the pool uses to rebind a stage after a live update. Files
-without `effect_count` are migrated to the initial list; legacy keys
-(`threshold_db`, `ratio`, `attack_ms`, `release_ms`) are still read for the
-compressor. A legacy `input_gain_db` key is folded into the compressor
-threshold and Gain effect (`threshold -= input_gain`, `gain += input_gain`) so
-settings written before the input gain stage was removed keep the same sound.
+The INI file has a `[dsp]` section with `version=4`, `preset_count`,
+`preset_index`, `isolate_effects`, and one block per preset entry:
+`preset_<p>_effect_<n>_type`, `preset_<p>_effect_<n>_id`,
+`preset_<p>_effect_<n>_enabled`, plus the same parameter keys used before with
+the `preset_<p>_effect_<n>_` prefix (for example
+`preset_0_effect_0_gate_threshold_db`). `preset_<p>_effect_<n>_id` is the
+stable instance id the pool uses to rebind a stage after a live update. Each
+device has four independent lists, and only `preset_index` is processed at a
+time. Files written before version 4 are not migrated: they load as four empty
+presets, and only `isolate_effects` is carried over.
 
 The captured noise profile is stored next to the settings as
 `C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.noise`. The file has a
@@ -203,11 +196,15 @@ the old stream slots; effect edits are left to the Effects view. **Reset**
 restores the persisted checkboxes and reloads only the saved isolation value, so
 effect edits made in the other view survive.
 
-The **Effects** view lists bound devices in a dropdown and shows that device's
-effect list in processing order. The checkboxes map directly to each instance's
-enable flag in `ApoSettings`; selecting a row swaps the parameter panel on the
-right to that instance's type. Column 1 of each row is a `×` delete button
-(handled through `NM_CLICK`). **Add effect** opens a modal type picker
+The **Effects** view lists bound devices in a dropdown, with a **Preset**
+selector (1–4) next to it, and shows the selected preset's effect list in
+processing order. Each device has four independent lists; switching presets
+commits the editor, rebuilds the list from that preset, and publishes the
+selection through the live runtime channel. Effects added to a preset stay with
+that preset. The checkboxes map directly to each instance's enable flag in the
+active `EffectPreset`; selecting a row swaps the parameter panel on the right to
+that instance's type. Column 1 of each row is a `×` delete button (handled
+through `NM_CLICK`). **Add effect** opens a modal type picker
 (`gui/ui/effect_dialog.cpp`) and appends the new instance to the end of the
 list; types already at their per-type capacity are left out of the picker. The
 same type may appear more than once, and deleting an instance discards its
@@ -222,9 +219,10 @@ pending isolation edit.
 
 Each view tracks its own pending state. `Endpoint::settingsDirty` covers effect
 edits, while `isolateSaved`/`isolationDirty` cover the isolation checkbox. An
-effect edit marks the device dirty, locks the dropdown, and highlights Apply
-until the debounced live apply saves it (or Apply is used because the live
-channel is not available). A Devices Apply keeps unsaved effect edits in memory
+effect edit marks the device dirty, locks the device dropdown, and highlights
+Apply until the debounced live apply saves it (or Apply is used because the live
+channel is not available). The preset dropdown stays enabled: switching presets
+does not discard edits. A Devices Apply keeps unsaved effect edits in memory
 across the endpoint refresh instead of silently discarding them.
 
 ## Listen monitor

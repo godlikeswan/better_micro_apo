@@ -117,9 +117,13 @@ The DLL uses the static MSVC runtime and has no third-party dependencies.
 
 ## DSP settings
 
-The effect list is built per device and processed from top to bottom. The same
-type may appear more than once, so two gates or two reverbs are allowed. New
-installations start with the original chain:
+Each device has four independent presets. A new device starts with four empty
+presets and preset 1 selected. The **Preset** selector next to the device
+selector switches the list; effects added to a preset stay with that preset.
+The selected preset is processed from top to bottom. The same type may appear
+more than once, so two gates or two reverbs are allowed.
+
+A typical list can be built in any order, for example:
 
 ```
 optional noise reduction -> optional gate -> optional dynamic (proximity) ->
@@ -131,12 +135,12 @@ Delete and re-add an effect to move it to the end of the list; drag-and-drop is
 not implemented yet. Every newly added effect starts enabled.
 
 - **Noise reduction** subtracts the captured room-noise spectrum from the input.
-  In the default chain it runs first, before the gate and compressor, so it sees
-  the raw signal. The profile is captured per device with **Capture noise
-  profile**: the GUI records about three seconds while every effect is
-  temporarily off, then stores the analyzed spectrum next to the device
-  settings. **Reduction** limits how much any frequency can be attenuated. A
-  profile is required; without one the effect is skipped. It is off by default.
+  Place it first, before the gate and compressor, so it sees the raw signal. The
+  profile is captured per device with **Capture noise profile**: the GUI records
+  about three seconds while every effect is temporarily off, then stores the
+  analyzed spectrum next to the device settings. **Reduction** limits how much
+  any frequency can be attenuated. A profile is required; without one the effect
+  is skipped. It is off by default.
 - **Gate** attenuates the signal when it falls below the threshold. `Range` is
   the maximum attenuation while closed, and `Hold` keeps it open after the level
   drops. `Lookahead` delays the audio so the gate opens before a transient
@@ -150,26 +154,25 @@ not implemented yet. Every newly added effect starts enabled.
   loud, taming a strong proximity effect up close. Check **Extend quiet lows**
   to do the opposite: lift the band when it is quiet, making distant or thin
   lows fuller. `Threshold`, `Ratio`, `Range`, `Attack`, and `Release` control
-  how much and how fast. In the default chain it runs before the broadband
-  compressor so it sees the input dynamics. It is off by default.
-- **Gain** applies flat gain. In the default chain it is the makeup gain after
-  the compressor. A newly added Gain starts at 0 dB.
+  how much and how fast. Place it before the broadband compressor so it sees the
+  input dynamics. It is off by default.
+- **Gain** applies flat gain. It is the makeup gain after the compressor. A
+  newly added Gain starts at 0 dB.
 - **Mono (left to all channels)** duplicates the processed left channel to all
   other channels. It is per device and is saved with the other settings.
 - **Distortion** adds soft saturation. Choose a curve from the **Function**
   list: `Tanh`, `Arctan`, `Cubic polynomial`, `Logarithmic`, `Exponential`, or
   `Error function`. **Drive** sets the level into the curve, **Curvature**
   bends it from nearly linear to fully saturated, and **Output** sets the level
-  after it. Every curve is symmetric and maps full scale to full scale. In the
-  default chain it runs before reverb so the tail stays clean. It is off by
-  default.
+  after it. Every curve is symmetric and maps full scale to full scale. Place it
+  before reverb so the tail stays clean. It is off by default.
 - **Reverb** adds a room or hall tail. `Mix` sets the dry/wet balance, `Size`
   moves from a small room to a long hall, `Damping` controls how quickly the
-  highs fade, and `Predelay` leaves a gap before the tail starts. In the default
-  chain it runs last, after mono, so a mono microphone still gets a wide stereo
-  tail. It is off by default.
+  highs fade, and `Predelay` leaves a gap before the tail starts. Place it last,
+  after mono, so a mono microphone still gets a wide stereo tail. It is off by
+  default.
 
-Default settings (the initial list; a new Gain starts at 0 dB instead):
+Default settings (a newly added effect):
 
 | Noise reduction | Reduction |
 | --- | --- |
@@ -201,16 +204,14 @@ Default settings (the initial list; a new Gain starts at 0 dB instead):
 
 Each capture device stores its own settings in
 `C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.ini`. The file has a
-`[dsp]` section with `version=2`, `effect_count`, `next_effect_id`, and one
-`effect_<n>_*` block per list entry, so duplicates and their order survive a
-restart. Older files are migrated automatically and keep the original chain. The
-APO reads the file when a stream starts, so one DLL serves every device.
+`[dsp]` section with `version=4`, `preset_count`, `preset_index`,
+`isolate_effects`, and one `preset_<p>_effect_<n>_*` block per preset entry, so
+duplicates, their order, and the selected preset survive a restart. Files
+written by earlier versions are not migrated: every device loads with four
+empty presets, and only `isolate_effects` is carried over. The APO reads the
+file when a stream starts, so one DLL serves every device.
 **Listen to this device** (Effects tab) opens a new stream and plays the saved
 settings; edits are saved live, so the audition follows them.
-
-Older settings files that contain the removed `input_gain_db` key are migrated
-automatically: the value is folded into the compressor threshold and makeup
-gain, so the sound stays the same.
 
 The GUI clamps values to a safe range:
 

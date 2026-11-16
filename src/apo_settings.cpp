@@ -299,29 +299,22 @@ EffectInstance MakeEffect(EffectType type, int id)
     return effect;
 }
 
-ApoSettings::ApoSettings()
+EffectPreset& ActivePreset(ApoSettings& settings)
 {
-    // The chain that used to be compiled in, in its original order. Keeping the
-    // same ids and defaults makes an old INI load into exactly the same sound.
-    effectCount = 8;
-    nextEffectId = 9;
+    const int index =
+        (settings.presetIndex >= 0 && settings.presetIndex < kPresetCount)
+            ? settings.presetIndex
+            : 0;
+    return settings.presets[index];
+}
 
-    effects[0] = MakeEffect(EffectType::Noise, 1);
-    effects[0].noise.enabled = false;
-    effects[1] = MakeEffect(EffectType::Gate, 2);
-    effects[1].gate.enabled = false;
-    effects[2] = MakeEffect(EffectType::Dynamic, 3);
-    effects[2].dynamics.enabled = false;
-    effects[3] = MakeEffect(EffectType::Compressor, 4);
-    effects[4] = MakeEffect(EffectType::Gain, 5);
-    effects[4].gain.gainDb = 28.0;
-    effects[4].gain.enabled = true;
-    effects[5] = MakeEffect(EffectType::Mono, 6);
-    effects[5].mono.enabled = false;
-    effects[6] = MakeEffect(EffectType::Distortion, 7);
-    effects[6].distortion.enabled = false;
-    effects[7] = MakeEffect(EffectType::Reverb, 8);
-    effects[7].reverb.enabled = false;
+const EffectPreset& ActivePreset(const ApoSettings& settings)
+{
+    const int index =
+        (settings.presetIndex >= 0 && settings.presetIndex < kPresetCount)
+            ? settings.presetIndex
+            : 0;
+    return settings.presets[index];
 }
 
 std::wstring SafeEndpointId(const std::wstring& endpointId)
@@ -419,42 +412,48 @@ void ClampEffect(EffectInstance& effect)
 
 void ClampSettings(ApoSettings& settings)
 {
-    settings.effectCount =
-        static_cast<int>(Clamp(settings.effectCount, 0, kMaxEffects));
-
-    for (int i = 0; i < settings.effectCount; ++i) {
-        if (static_cast<int>(settings.effects[i].type) < 0 ||
-            settings.effects[i].type >= EffectType::Count) {
-            settings.effects[i].type = EffectType::Gain;
-        }
-        ClampEffect(settings.effects[i]);
+    if (settings.presetIndex < 0 || settings.presetIndex >= kPresetCount) {
+        settings.presetIndex = 0;
     }
 
-    // Give every instance a unique positive id. This also repairs hand-edited
-    // files without changing the ids of well-formed entries.
-    int next = (settings.nextEffectId > 0) ? settings.nextEffectId : 1;
-    for (int i = 0; i < settings.effectCount; ++i) {
-        if (settings.effects[i].id <= 0) {
-            settings.effects[i].id = next++;
+    for (EffectPreset& preset : settings.presets) {
+        preset.effectCount =
+            static_cast<int>(Clamp(preset.effectCount, 0, kMaxEffects));
+
+        for (int i = 0; i < preset.effectCount; ++i) {
+            if (static_cast<int>(preset.effects[i].type) < 0 ||
+                preset.effects[i].type >= EffectType::Count) {
+                preset.effects[i].type = EffectType::Gain;
+            }
+            ClampEffect(preset.effects[i]);
         }
-    }
-    for (int i = 0; i < settings.effectCount; ++i) {
-        for (int j = 0; j < i; ++j) {
-            if (settings.effects[j].id == settings.effects[i].id) {
-                settings.effects[i].id = next++;
-                break;
+
+        // Give every instance a unique positive id inside this preset. This
+        // also repairs hand-edited files without changing well-formed ids.
+        int next = (preset.nextEffectId > 0) ? preset.nextEffectId : 1;
+        for (int i = 0; i < preset.effectCount; ++i) {
+            if (preset.effects[i].id <= 0) {
+                preset.effects[i].id = next++;
             }
         }
-    }
+        for (int i = 0; i < preset.effectCount; ++i) {
+            for (int j = 0; j < i; ++j) {
+                if (preset.effects[j].id == preset.effects[i].id) {
+                    preset.effects[i].id = next++;
+                    break;
+                }
+            }
+        }
 
-    int maxId = 0;
-    for (int i = 0; i < settings.effectCount; ++i) {
-        maxId = std::max(maxId, settings.effects[i].id);
+        int maxId = 0;
+        for (int i = 0; i < preset.effectCount; ++i) {
+            maxId = std::max(maxId, preset.effects[i].id);
+        }
+        if (next <= maxId) {
+            next = maxId + 1;
+        }
+        preset.nextEffectId = next;
     }
-    if (next <= maxId) {
-        next = maxId + 1;
-    }
-    settings.nextEffectId = next;
 }
 
 std::wstring SettingsDirectory()
@@ -475,20 +474,6 @@ struct KeyValue
     std::wstring value;
 };
 
-// v2 INI files and the legacy chain stored the old curve names by index.
-// Keep the closest named curve instead of silently switching to the default.
-int MigrateDistortionFunction(int function)
-{
-    switch (function)
-    {
-    case 0: return kDistortionTanh;   // Soft
-    case 1: return kDistortionArctan; // Warm
-    case 2: return kDistortionCubic;  // Round
-    case 3: return kDistortionExp;    // Tube
-    default: return function;
-    }
-}
-
 const std::wstring* FindValue(const std::vector<KeyValue>& entries,
                               const std::wstring& key)
 {
@@ -500,21 +485,9 @@ const std::wstring* FindValue(const std::vector<KeyValue>& entries,
     return nullptr;
 }
 
-EffectInstance* FindEffect(ApoSettings& settings, EffectType type)
+void LoadEffectFields(const std::vector<KeyValue>& entries,
+                      const std::wstring& prefix, EffectInstance& effect)
 {
-    for (int i = 0; i < settings.effectCount; ++i) {
-        if (settings.effects[i].type == type) {
-            return &settings.effects[i];
-        }
-    }
-    return nullptr;
-}
-
-void LoadEffectFields(const std::vector<KeyValue>& entries, int index,
-                      EffectInstance& effect)
-{
-    const std::wstring prefix = L"effect_" + std::to_wstring(index) + L"_";
-
     auto getDouble = [&](const wchar_t* field, double& value) {
         const std::wstring* text = FindValue(entries, prefix + field);
         if (text != nullptr) {
@@ -602,119 +575,6 @@ void LoadEffectFields(const std::vector<KeyValue>& entries, int index,
     }
 }
 
-void LoadLegacyFields(const std::vector<KeyValue>& entries,
-                      ApoSettings& settings)
-{
-    auto getDouble = [&](const wchar_t* key, double& value) {
-        const std::wstring* text = FindValue(entries, key);
-        if (text != nullptr) {
-            ParseDouble(*text, value);
-        }
-    };
-    auto getBool = [&](const wchar_t* key, bool& value) {
-        const std::wstring* text = FindValue(entries, key);
-        if (text != nullptr) {
-            ParseBool(*text, value);
-        }
-    };
-    auto getInt = [&](const wchar_t* key, int& value) {
-        const std::wstring* text = FindValue(entries, key);
-        if (text != nullptr) {
-            ParseInt(*text, value);
-        }
-    };
-
-    bool hasLegacyInputGain = false;
-    double legacyInputGainDb = 0.0;
-    getDouble(L"input_gain_db", legacyInputGainDb);
-    if (FindValue(entries, L"input_gain_db") != nullptr) {
-        hasLegacyInputGain = ParseDouble(
-            *FindValue(entries, L"input_gain_db"), legacyInputGainDb);
-    }
-
-    if (EffectInstance* effect = FindEffect(settings, EffectType::Noise)) {
-        getBool(L"noise_enabled", effect->noise.enabled);
-        getDouble(L"noise_reduction_db", effect->noise.reductionDb);
-    }
-    if (EffectInstance* effect = FindEffect(settings, EffectType::Gate)) {
-        getBool(L"gate_enabled", effect->gate.enabled);
-        getDouble(L"gate_threshold_db", effect->gate.thresholdDb);
-        getDouble(L"gate_range_db", effect->gate.rangeDb);
-        getDouble(L"gate_attack_ms", effect->gate.attackMs);
-        getDouble(L"gate_hold_ms", effect->gate.holdMs);
-        getDouble(L"gate_release_ms", effect->gate.releaseMs);
-        getDouble(L"gate_lookahead_ms", effect->gate.lookaheadMs);
-    }
-    if (EffectInstance* effect = FindEffect(settings, EffectType::Dynamic)) {
-        getBool(L"dynamic_enabled", effect->dynamics.enabled);
-        getBool(L"dynamic_expand", effect->dynamics.expand);
-        getDouble(L"dynamic_frequency_hz", effect->dynamics.frequencyHz);
-        getDouble(L"dynamic_q", effect->dynamics.q);
-        getDouble(L"dynamic_threshold_db", effect->dynamics.thresholdDb);
-        getDouble(L"dynamic_ratio", effect->dynamics.ratio);
-        getDouble(L"dynamic_range_db", effect->dynamics.rangeDb);
-        getDouble(L"dynamic_attack_ms", effect->dynamics.attackMs);
-        getDouble(L"dynamic_release_ms", effect->dynamics.releaseMs);
-    }
-    if (EffectInstance* effect = FindEffect(settings, EffectType::Compressor)) {
-        getBool(L"compressor_enabled", effect->compressor.enabled);
-        if (FindValue(entries, L"compressor_threshold_db") != nullptr) {
-            getDouble(L"compressor_threshold_db",
-                      effect->compressor.thresholdDb);
-        } else {
-            getDouble(L"threshold_db", effect->compressor.thresholdDb);
-        }
-        if (FindValue(entries, L"compressor_ratio") != nullptr) {
-            getDouble(L"compressor_ratio", effect->compressor.ratio);
-        } else {
-            getDouble(L"ratio", effect->compressor.ratio);
-        }
-        if (FindValue(entries, L"compressor_attack_ms") != nullptr) {
-            getDouble(L"compressor_attack_ms", effect->compressor.attackMs);
-        } else {
-            getDouble(L"attack_ms", effect->compressor.attackMs);
-        }
-        if (FindValue(entries, L"compressor_release_ms") != nullptr) {
-            getDouble(L"compressor_release_ms", effect->compressor.releaseMs);
-        } else {
-            getDouble(L"release_ms", effect->compressor.releaseMs);
-        }
-    }
-    if (EffectInstance* effect = FindEffect(settings, EffectType::Gain)) {
-        getBool(L"makeup_enabled", effect->gain.enabled);
-        getDouble(L"makeup_db", effect->gain.gainDb);
-    }
-    if (EffectInstance* effect = FindEffect(settings, EffectType::Mono)) {
-        getBool(L"mono", effect->mono.enabled);
-    }
-    if (EffectInstance* effect = FindEffect(settings, EffectType::Distortion)) {
-        getBool(L"distortion_enabled", effect->distortion.enabled);
-        getInt(L"distortion_function", effect->distortion.function);
-        getDouble(L"distortion_drive_db", effect->distortion.driveDb);
-        getDouble(L"distortion_curvature", effect->distortion.curvature);
-        getDouble(L"distortion_output_db", effect->distortion.outputDb);
-    }
-    if (EffectInstance* effect = FindEffect(settings, EffectType::Reverb)) {
-        getBool(L"reverb_enabled", effect->reverb.enabled);
-        getDouble(L"reverb_mix", effect->reverb.mix);
-        getDouble(L"reverb_size", effect->reverb.size);
-        getDouble(L"reverb_damping", effect->reverb.damping);
-        getDouble(L"reverb_predelay_ms", effect->reverb.predelayMs);
-    }
-
-    getBool(L"isolate_effects", settings.isolateEffects);
-
-    if (hasLegacyInputGain) {
-        if (EffectInstance* effect =
-                FindEffect(settings, EffectType::Compressor)) {
-            effect->compressor.thresholdDb -= legacyInputGainDb;
-        }
-        if (EffectInstance* effect = FindEffect(settings, EffectType::Gain)) {
-            effect->gain.gainDb += legacyInputGainDb;
-        }
-    }
-}
-
 } // namespace
 
 bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
@@ -761,23 +621,37 @@ bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
                      Trim(line.substr(equals + 1))});
     }
 
-    int version = 0;
-    if (const std::wstring* versionText = FindValue(entries, L"version")) {
-        ParseInt(*versionText, version);
+    // Files older than version 4 kept a single effect list. They load as four
+    // empty presets; only the isolation binding option is carried over.
+    if (const std::wstring* isolateText =
+            FindValue(entries, L"isolate_effects")) {
+        ParseBool(*isolateText, settings.isolateEffects);
     }
 
-    const std::wstring* countText = FindValue(entries, L"effect_count");
-    if (countText != nullptr) {
-        int count = 0;
-        if (!ParseInt(*countText, count)) {
-            count = 0;
-        }
-        settings.effectCount =
-            static_cast<int>(Clamp(count, 0, kMaxEffects));
+    if (const std::wstring* indexText =
+            FindValue(entries, L"preset_index")) {
+        ParseInt(*indexText, settings.presetIndex);
+    }
 
-        for (int i = 0; i < settings.effectCount; ++i) {
+    for (int p = 0; p < kPresetCount; ++p) {
+        const std::wstring presetPrefix =
+            L"preset_" + std::to_wstring(p) + L"_";
+        EffectPreset& preset = settings.presets[p];
+
+        const std::wstring* countText =
+            FindValue(entries, presetPrefix + L"effect_count");
+        if (countText != nullptr) {
+            int count = 0;
+            if (!ParseInt(*countText, count)) {
+                count = 0;
+            }
+            preset.effectCount =
+                static_cast<int>(Clamp(count, 0, kMaxEffects));
+        }
+
+        for (int i = 0; i < preset.effectCount; ++i) {
             const std::wstring prefix =
-                L"effect_" + std::to_wstring(i) + L"_";
+                presetPrefix + L"effect_" + std::to_wstring(i) + L"_";
             EffectType type = EffectType::Gain;
             const std::wstring* typeText =
                 FindValue(entries, prefix + L"type");
@@ -785,37 +659,18 @@ bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
                 ParseEffectType(*typeText, type);
             }
 
-            settings.effects[i] = MakeEffect(type, 0);
+            preset.effects[i] = MakeEffect(type, 0);
             const std::wstring* idText = FindValue(entries, prefix + L"id");
             if (idText != nullptr) {
-                ParseInt(*idText, settings.effects[i].id);
+                ParseInt(*idText, preset.effects[i].id);
             }
-            LoadEffectFields(entries, i, settings.effects[i]);
+            LoadEffectFields(entries, prefix, preset.effects[i]);
         }
 
         const std::wstring* nextText =
-            FindValue(entries, L"next_effect_id");
+            FindValue(entries, presetPrefix + L"next_effect_id");
         if (nextText != nullptr) {
-            ParseInt(*nextText, settings.nextEffectId);
-        }
-        const std::wstring* isolateText =
-            FindValue(entries, L"isolate_effects");
-        if (isolateText != nullptr) {
-            ParseBool(*isolateText, settings.isolateEffects);
-        }
-    } else {
-        LoadLegacyFields(entries, settings);
-    }
-
-    // Version 3 replaced the abstract curve names with named functions. Older
-    // files stored the old indices, which point at different curves now.
-    if (version < 3) {
-        for (int i = 0; i < settings.effectCount; ++i) {
-            if (settings.effects[i].type == EffectType::Distortion) {
-                settings.effects[i].distortion.function =
-                    MigrateDistortionFunction(
-                        settings.effects[i].distortion.function);
-            }
+            ParseInt(*nextText, preset.nextEffectId);
         }
     }
 
@@ -833,105 +688,116 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
 
     std::string text;
     text += "[dsp]\n";
-    text += "version=3\n";
-    text += "effect_count=" + std::to_string(settings.effectCount) + "\n";
-    text += "next_effect_id=" + std::to_string(settings.nextEffectId) + "\n";
+    text += "version=4\n";
+    text += "preset_count=" + std::to_string(kPresetCount) + "\n";
+    text += "preset_index=" + std::to_string(settings.presetIndex) + "\n";
     text += std::string("isolate_effects=") +
             (settings.isolateEffects ? "1" : "0") + "\n";
 
-    for (int i = 0; i < settings.effectCount; ++i) {
-        const EffectInstance& effect = settings.effects[i];
-        const std::string prefix =
-            "effect_" + std::to_string(i) + "_";
-        text += prefix + "id=" + std::to_string(effect.id) + "\n";
-        text += prefix + "type=" + EffectTypeKey(effect.type) + "\n";
-        text += prefix + "enabled=" + (EffectEnabled(effect) ? "1" : "0") +
+    for (int p = 0; p < kPresetCount; ++p) {
+        const EffectPreset& preset = settings.presets[p];
+        const std::string presetPrefix =
+            "preset_" + std::to_string(p) + "_";
+        text += presetPrefix +
+                "effect_count=" + std::to_string(preset.effectCount) + "\n";
+        text += presetPrefix +
+                "next_effect_id=" + std::to_string(preset.nextEffectId) +
                 "\n";
 
-        switch (effect.type)
-        {
-        case EffectType::Noise:
-            text += prefix + "noise_reduction_db=" +
-                    FormatDouble(effect.noise.reductionDb) + "\n";
-            break;
+        for (int i = 0; i < preset.effectCount; ++i) {
+            const EffectInstance& effect = preset.effects[i];
+            const std::string prefix =
+                presetPrefix + "effect_" + std::to_string(i) + "_";
+            text += prefix + "id=" + std::to_string(effect.id) + "\n";
+            text += prefix + "type=" + EffectTypeKey(effect.type) + "\n";
+            text += prefix + "enabled=" +
+                    (EffectEnabled(effect) ? "1" : "0") + "\n";
 
-        case EffectType::Gate:
-            text += prefix + "gate_threshold_db=" +
-                    FormatDouble(effect.gate.thresholdDb) + "\n";
-            text += prefix + "gate_range_db=" +
-                    FormatDouble(effect.gate.rangeDb) + "\n";
-            text += prefix + "gate_attack_ms=" +
-                    FormatDouble(effect.gate.attackMs) + "\n";
-            text += prefix + "gate_hold_ms=" +
-                    FormatDouble(effect.gate.holdMs) + "\n";
-            text += prefix + "gate_release_ms=" +
-                    FormatDouble(effect.gate.releaseMs) + "\n";
-            text += prefix + "gate_lookahead_ms=" +
-                    FormatDouble(effect.gate.lookaheadMs) + "\n";
-            break;
+            switch (effect.type)
+            {
+            case EffectType::Noise:
+                text += prefix + "noise_reduction_db=" +
+                        FormatDouble(effect.noise.reductionDb) + "\n";
+                break;
 
-        case EffectType::Dynamic:
-            text += prefix + "dynamic_expand=" +
-                    (effect.dynamics.expand ? "1" : "0") + "\n";
-            text += prefix + "dynamic_frequency_hz=" +
-                    FormatDouble(effect.dynamics.frequencyHz) + "\n";
-            text += prefix + "dynamic_q=" +
-                    FormatDouble(effect.dynamics.q) + "\n";
-            text += prefix + "dynamic_threshold_db=" +
-                    FormatDouble(effect.dynamics.thresholdDb) + "\n";
-            text += prefix + "dynamic_ratio=" +
-                    FormatDouble(effect.dynamics.ratio) + "\n";
-            text += prefix + "dynamic_range_db=" +
-                    FormatDouble(effect.dynamics.rangeDb) + "\n";
-            text += prefix + "dynamic_attack_ms=" +
-                    FormatDouble(effect.dynamics.attackMs) + "\n";
-            text += prefix + "dynamic_release_ms=" +
-                    FormatDouble(effect.dynamics.releaseMs) + "\n";
-            break;
+            case EffectType::Gate:
+                text += prefix + "gate_threshold_db=" +
+                        FormatDouble(effect.gate.thresholdDb) + "\n";
+                text += prefix + "gate_range_db=" +
+                        FormatDouble(effect.gate.rangeDb) + "\n";
+                text += prefix + "gate_attack_ms=" +
+                        FormatDouble(effect.gate.attackMs) + "\n";
+                text += prefix + "gate_hold_ms=" +
+                        FormatDouble(effect.gate.holdMs) + "\n";
+                text += prefix + "gate_release_ms=" +
+                        FormatDouble(effect.gate.releaseMs) + "\n";
+                text += prefix + "gate_lookahead_ms=" +
+                        FormatDouble(effect.gate.lookaheadMs) + "\n";
+                break;
 
-        case EffectType::Compressor:
-            text += prefix + "compressor_threshold_db=" +
-                    FormatDouble(effect.compressor.thresholdDb) + "\n";
-            text += prefix + "compressor_ratio=" +
-                    FormatDouble(effect.compressor.ratio) + "\n";
-            text += prefix + "compressor_attack_ms=" +
-                    FormatDouble(effect.compressor.attackMs) + "\n";
-            text += prefix + "compressor_release_ms=" +
-                    FormatDouble(effect.compressor.releaseMs) + "\n";
-            break;
+            case EffectType::Dynamic:
+                text += prefix + "dynamic_expand=" +
+                        (effect.dynamics.expand ? "1" : "0") + "\n";
+                text += prefix + "dynamic_frequency_hz=" +
+                        FormatDouble(effect.dynamics.frequencyHz) + "\n";
+                text += prefix + "dynamic_q=" +
+                        FormatDouble(effect.dynamics.q) + "\n";
+                text += prefix + "dynamic_threshold_db=" +
+                        FormatDouble(effect.dynamics.thresholdDb) + "\n";
+                text += prefix + "dynamic_ratio=" +
+                        FormatDouble(effect.dynamics.ratio) + "\n";
+                text += prefix + "dynamic_range_db=" +
+                        FormatDouble(effect.dynamics.rangeDb) + "\n";
+                text += prefix + "dynamic_attack_ms=" +
+                        FormatDouble(effect.dynamics.attackMs) + "\n";
+                text += prefix + "dynamic_release_ms=" +
+                        FormatDouble(effect.dynamics.releaseMs) + "\n";
+                break;
 
-        case EffectType::Gain:
-            text += prefix + "gain_db=" +
-                    FormatDouble(effect.gain.gainDb) + "\n";
-            break;
+            case EffectType::Compressor:
+                text += prefix + "compressor_threshold_db=" +
+                        FormatDouble(effect.compressor.thresholdDb) + "\n";
+                text += prefix + "compressor_ratio=" +
+                        FormatDouble(effect.compressor.ratio) + "\n";
+                text += prefix + "compressor_attack_ms=" +
+                        FormatDouble(effect.compressor.attackMs) + "\n";
+                text += prefix + "compressor_release_ms=" +
+                        FormatDouble(effect.compressor.releaseMs) + "\n";
+                break;
 
-        case EffectType::Mono:
-            break;
+            case EffectType::Gain:
+                text += prefix + "gain_db=" +
+                        FormatDouble(effect.gain.gainDb) + "\n";
+                break;
 
-        case EffectType::Distortion:
-            text += prefix + "distortion_function=" +
-                    std::to_string(effect.distortion.function) + "\n";
-            text += prefix + "distortion_drive_db=" +
-                    FormatDouble(effect.distortion.driveDb) + "\n";
-            text += prefix + "distortion_curvature=" +
-                    FormatDouble(effect.distortion.curvature) + "\n";
-            text += prefix + "distortion_output_db=" +
-                    FormatDouble(effect.distortion.outputDb) + "\n";
-            break;
+            case EffectType::Mono:
+                break;
 
-        case EffectType::Reverb:
-            text += prefix + "reverb_mix=" +
-                    FormatDouble(effect.reverb.mix) + "\n";
-            text += prefix + "reverb_size=" +
-                    FormatDouble(effect.reverb.size) + "\n";
-            text += prefix + "reverb_damping=" +
-                    FormatDouble(effect.reverb.damping) + "\n";
-            text += prefix + "reverb_predelay_ms=" +
-                    FormatDouble(effect.reverb.predelayMs) + "\n";
-            break;
+            case EffectType::Distortion:
+                text += prefix + "distortion_function=" +
+                        std::to_string(effect.distortion.function) + "\n";
+                text += prefix + "distortion_drive_db=" +
+                        FormatDouble(effect.distortion.driveDb) + "\n";
+                text += prefix + "distortion_curvature=" +
+                        FormatDouble(effect.distortion.curvature) + "\n";
+                text += prefix + "distortion_output_db=" +
+                        FormatDouble(effect.distortion.outputDb) + "\n";
+                break;
 
-        default:
-            break;
+            case EffectType::Reverb:
+                text += prefix + "reverb_mix=" +
+                        FormatDouble(effect.reverb.mix) + "\n";
+                text += prefix + "reverb_size=" +
+                        FormatDouble(effect.reverb.size) + "\n";
+                text += prefix + "reverb_damping=" +
+                        FormatDouble(effect.reverb.damping) + "\n";
+                text += prefix + "reverb_predelay_ms=" +
+                        FormatDouble(effect.reverb.predelayMs) + "\n";
+                break;
+
+            default:
+                break;
+            }
         }
     }
 

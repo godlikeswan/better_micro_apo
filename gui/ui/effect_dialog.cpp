@@ -30,9 +30,10 @@ struct DialogState {
 
 int CountType(const apo::ApoSettings& settings, apo::EffectType type)
 {
+    const apo::EffectPreset& preset = apo::ActivePreset(settings);
     int count = 0;
-    for (int i = 0; i < settings.effectCount; ++i) {
-        if (settings.effects[i].type == type) {
+    for (int i = 0; i < preset.effectCount; ++i) {
+        if (preset.effects[i].type == type) {
             ++count;
         }
     }

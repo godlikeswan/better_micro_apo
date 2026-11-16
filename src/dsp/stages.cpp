@@ -1056,9 +1056,10 @@ void StagePool::Update(const ApoSettings& settings, const AudioFormat& format,
 
     int used[static_cast<int>(EffectType::Count)] = {};
 
-    for (int index = 0; index < settings.effectCount; ++index)
+    const EffectPreset& preset = ActivePreset(settings);
+    for (int index = 0; index < preset.effectCount; ++index)
     {
-        const EffectInstance& effect = settings.effects[index];
+        const EffectInstance& effect = preset.effects[index];
         if (!EffectEnabled(effect))
         {
             continue;

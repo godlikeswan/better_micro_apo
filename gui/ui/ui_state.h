@@ -43,6 +43,8 @@ enum : int {
     // Effects view.
     IDC_EFFECT_DEVICE_LABEL,
     IDC_EFFECT_DEVICE_COMBO,
+    IDC_EFFECT_PRESET_LABEL,
+    IDC_EFFECT_PRESET_COMBO,
     IDC_EFFECT_LIST_GROUP,
     IDC_EFFECT_LIST,
     IDC_EFFECT_ADD,
@@ -169,6 +171,8 @@ extern HWND g_devicesReset;
 // Effects view.
 extern HWND g_effectDeviceLabel;
 extern HWND g_effectDeviceCombo;
+extern HWND g_effectPresetLabel;
+extern HWND g_effectPresetCombo;
 extern HWND g_effectListGroup;
 extern HWND g_effectList;
 extern HWND g_effectAdd;

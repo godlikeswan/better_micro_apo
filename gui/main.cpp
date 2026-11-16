@@ -117,9 +117,10 @@ bool ValidEffectIndex();
 
 int CountEffectType(const apo::ApoSettings& settings, apo::EffectType type)
 {
+    const apo::EffectPreset& preset = apo::ActivePreset(settings);
     int count = 0;
-    for (int i = 0; i < settings.effectCount; ++i) {
-        if (settings.effects[i].type == type) {
+    for (int i = 0; i < preset.effectCount; ++i) {
+        if (preset.effects[i].type == type) {
             ++count;
         }
     }
@@ -130,7 +131,8 @@ bool HasEffectSelection()
 {
     return ValidEffectIndex() && g_effectSelection >= 0 &&
            g_effectSelection <
-               g_endpoints[g_effectIndex].settings.effectCount;
+               apo::ActivePreset(g_endpoints[g_effectIndex].settings)
+                   .effectCount;
 }
 
 // ---------------------------------------------------------------------------
@@ -333,10 +335,11 @@ void UpdateViewVisibility()
              g_devicesApply, g_devicesReset},
             devices);
 
-    showAll({g_effectDeviceLabel, g_effectDeviceCombo, g_effectListGroup,
-             g_effectList, g_effectAdd, g_effectGroup, g_effectHeading,
-             g_listen, g_listenNote, g_meter, g_effectsUnsaved,
-             g_effectsApply, g_effectsReset},
+    showAll({g_effectDeviceLabel, g_effectDeviceCombo, g_effectPresetLabel,
+             g_effectPresetCombo, g_effectListGroup, g_effectList,
+             g_effectAdd, g_effectGroup, g_effectHeading, g_listen,
+             g_listenNote, g_meter, g_effectsUnsaved, g_effectsApply,
+             g_effectsReset},
             effects);
 
     ShowWindow(g_effectGraph,
@@ -416,7 +419,8 @@ void RebuildEffectList()
 {
     int count = 0;
     if (ValidEffectIndex()) {
-        count = g_endpoints[g_effectIndex].settings.effectCount;
+        count =
+            apo::ActivePreset(g_endpoints[g_effectIndex].settings).effectCount;
     }
 
     if (count == 0) {
@@ -432,9 +436,10 @@ void RebuildEffectList()
     ListView_DeleteAllItems(g_effectList);
 
     if (count > 0) {
-        const apo::ApoSettings& settings = g_endpoints[g_effectIndex].settings;
+        const apo::EffectPreset& preset =
+            apo::ActivePreset(g_endpoints[g_effectIndex].settings);
         for (int i = 0; i < count; ++i) {
-            const apo::EffectInstance& effect = settings.effects[i];
+            const apo::EffectInstance& effect = preset.effects[i];
             LVITEMW item{};
             item.mask = LVIF_TEXT;
             item.iItem = i;
@@ -453,9 +458,10 @@ void RebuildEffectList()
                               LVIS_SELECTED | LVIS_FOCUSED,
                               LVIS_SELECTED | LVIS_FOCUSED);
         ListView_EnsureVisible(g_effectList, g_effectSelection, FALSE);
-        g_effectType = g_endpoints[g_effectIndex]
-                           .settings.effects[g_effectSelection]
-                           .type;
+        g_effectType =
+            apo::ActivePreset(g_endpoints[g_effectIndex].settings)
+                .effects[g_effectSelection]
+                .type;
     }
 
     SendMessageW(g_effectList, WM_SETREDRAW, TRUE, 0);
@@ -535,7 +541,8 @@ void RefreshEffectGraph()
 
     apo::EffectInstance effect;
     if (HasEffectSelection()) {
-        effect = g_endpoints[g_effectIndex].settings.effects[g_effectSelection];
+        effect = apo::ActivePreset(g_endpoints[g_effectIndex].settings)
+                     .effects[g_effectSelection];
         ReadEffectControls(effect);
     }
     ui::SetGraphEffect(g_effectGraph, effect);
@@ -543,13 +550,19 @@ void RefreshEffectGraph()
 
 void ShowEffectForSelected()
 {
+    if (ValidEffectIndex()) {
+        SendMessageW(g_effectPresetCombo, CB_SETCURSEL,
+                     g_endpoints[g_effectIndex].settings.presetIndex, 0);
+    }
+
     if (!HasEffectSelection()) {
         ClearEffectEditor();
         return;
     }
 
     const apo::EffectInstance& effect =
-        g_endpoints[g_effectIndex].settings.effects[g_effectSelection];
+        apo::ActivePreset(g_endpoints[g_effectIndex].settings)
+            .effects[g_effectSelection];
     g_effectType = effect.type;
 
     g_effectLoading = true;
@@ -620,7 +633,8 @@ bool CommitEffectEditor(bool showValues = true)
     }
 
     apo::ApoSettings settings = g_endpoints[g_effectIndex].settings;
-    apo::EffectInstance& effect = settings.effects[g_effectSelection];
+    apo::EffectInstance& effect =
+        apo::ActivePreset(settings).effects[g_effectSelection];
 
     // Sliders always hold a valid, in-range value, so there is nothing to
     // reject here. The settings are clamped again below for safety.
@@ -633,7 +647,8 @@ bool CommitEffectEditor(bool showValues = true)
     // auto-apply path leaves the controls alone so it cannot move a slider
     // while the user is still dragging it.
     if (showValues) {
-        const apo::EffectInstance& shown = settings.effects[g_effectSelection];
+        const apo::EffectInstance& shown =
+            apo::ActivePreset(settings).effects[g_effectSelection];
         g_effectLoading = true;
         switch (shown.type) {
         case apo::EffectType::Noise:
@@ -721,15 +736,16 @@ void AddEffect(apo::EffectType type)
     }
 
     apo::ApoSettings& settings = g_endpoints[g_effectIndex].settings;
-    if (settings.effectCount >= apo::kMaxEffects ||
+    apo::EffectPreset& preset = apo::ActivePreset(settings);
+    if (preset.effectCount >= apo::kMaxEffects ||
         CountEffectType(settings, type) >= apo::EffectTypeCapacity(type)) {
         return;
     }
 
-    settings.effects[settings.effectCount] =
-        apo::MakeEffect(type, settings.nextEffectId++);
-    g_effectSelection = settings.effectCount;
-    ++settings.effectCount;
+    preset.effects[preset.effectCount] =
+        apo::MakeEffect(type, preset.nextEffectId++);
+    g_effectSelection = preset.effectCount;
+    ++preset.effectCount;
 
     // The list order is the processing order, so the new effect is appended at
     // the end. Deleting it later discards its values; adding the same type
@@ -747,20 +763,21 @@ void DeleteEffect(int row)
     }
 
     apo::ApoSettings& settings = g_endpoints[g_effectIndex].settings;
-    if (row < 0 || row >= settings.effectCount) {
+    apo::EffectPreset& preset = apo::ActivePreset(settings);
+    if (row < 0 || row >= preset.effectCount) {
         return;
     }
 
-    for (int i = row; i + 1 < settings.effectCount; ++i) {
-        settings.effects[i] = settings.effects[i + 1];
+    for (int i = row; i + 1 < preset.effectCount; ++i) {
+        preset.effects[i] = preset.effects[i + 1];
     }
-    --settings.effectCount;
-    settings.effects[settings.effectCount] = apo::EffectInstance{};
+    --preset.effectCount;
+    preset.effects[preset.effectCount] = apo::EffectInstance{};
 
     if (g_effectSelection > row) {
         --g_effectSelection;
     } else if (g_effectSelection == row) {
-        g_effectSelection = (row < settings.effectCount) ? row : row - 1;
+        g_effectSelection = (row < preset.effectCount) ? row : row - 1;
     }
 
     RebuildEffectList();
@@ -1047,13 +1064,18 @@ void UpdateEffectsUi()
     // Lock the device selector while edits are pending so a half-edited
     // device cannot be left behind. Apply or Reset unlocks it.
     EnableWindow(g_effectDeviceCombo, !g_busy && available && !dirty);
+    // The preset selector only changes which list is edited, so it stays usable
+    // while edits are pending; the switch commits the editor and applies live.
+    EnableWindow(g_effectPresetCombo, !g_busy && available && hasDevice);
     // Keep the list enabled while busy: the native disabled state repaints the
     // whole control light. Interaction is rejected in the notification
     // handler instead.
     EnableWindow(g_effectList, available && hasDevice);
     EnableEffectControls(!g_busy && available && hasDevice);
     const int effectCount =
-        hasDevice ? g_endpoints[g_effectIndex].settings.effectCount : 0;
+        hasDevice ? apo::ActivePreset(g_endpoints[g_effectIndex].settings)
+                        .effectCount
+                  : 0;
     EnableWindow(g_effectAdd,
                  !g_busy && available && hasDevice &&
                      effectCount < apo::kMaxEffects);
@@ -1604,8 +1626,9 @@ void DoCaptureNoiseProfile()
     // The profile must be raw room noise: disable every effect so the APO is a
     // plain passthrough for the duration of the capture.
     apo::ApoSettings snapshot = captureBase;
-    for (int i = 0; i < snapshot.effectCount; ++i) {
-        apo::SetEffectEnabled(snapshot.effects[i], false);
+    apo::EffectPreset& snapshotPreset = apo::ActivePreset(snapshot);
+    for (int i = 0; i < snapshotPreset.effectCount; ++i) {
+        apo::SetEffectEnabled(snapshotPreset.effects[i], false);
     }
 
     StopListening();
@@ -1668,22 +1691,24 @@ void DoCaptureNoiseProfile()
         }
 
         apo::ApoSettings final = captureBase;
+        apo::EffectPreset& finalPreset = apo::ActivePreset(final);
         if (captured) {
             // Turn on the first Noise effect, or append one when the list has
             // no noise stage yet and still has room.
             bool enabledNoise = false;
-            for (int i = 0; i < final.effectCount; ++i) {
-                if (final.effects[i].type == apo::EffectType::Noise) {
-                    apo::SetEffectEnabled(final.effects[i], true);
+            for (int i = 0; i < finalPreset.effectCount; ++i) {
+                if (finalPreset.effects[i].type == apo::EffectType::Noise) {
+                    apo::SetEffectEnabled(finalPreset.effects[i], true);
                     enabledNoise = true;
                     break;
                 }
             }
-            if (!enabledNoise && final.effectCount < apo::kMaxEffects) {
-                final.effects[final.effectCount] =
+            if (!enabledNoise &&
+                finalPreset.effectCount < apo::kMaxEffects) {
+                finalPreset.effects[finalPreset.effectCount] =
                     apo::MakeEffect(apo::EffectType::Noise,
-                                    final.nextEffectId++);
-                ++final.effectCount;
+                                    finalPreset.nextEffectId++);
+                ++finalPreset.effectCount;
             }
         }
 
@@ -1741,7 +1766,8 @@ void OnEffectListChanged(const NMLISTVIEW& item)
     }
 
     apo::ApoSettings& settings = g_endpoints[g_effectIndex].settings;
-    if (item.iItem >= settings.effectCount) {
+    apo::EffectPreset& preset = apo::ActivePreset(settings);
+    if (item.iItem >= preset.effectCount) {
         return;
     }
 
@@ -1751,7 +1777,7 @@ void OnEffectListChanged(const NMLISTVIEW& item)
     if (checkChanged) {
         const bool checked =
             ((item.uNewState & LVIS_STATEIMAGEMASK) >> 12) == 2;
-        apo::SetEffectEnabled(settings.effects[item.iItem], checked);
+        apo::SetEffectEnabled(preset.effects[item.iItem], checked);
         MarkSettingsDirty();
     }
 
@@ -1768,7 +1794,7 @@ void OnEffectListChanged(const NMLISTVIEW& item)
             return;
         }
         g_effectSelection = item.iItem;
-        g_effectType = settings.effects[g_effectSelection].type;
+        g_effectType = preset.effects[g_effectSelection].type;
         UpdateViewVisibility();
         ShowEffectForSelected();
         Relayout();
@@ -1820,6 +1846,37 @@ void OnEffectComboChanged()
     RebuildEffectList();
     ShowEffectForSelected();
     UpdateEffectsUi();
+    RepaintAll();
+}
+
+void OnEffectPresetChanged()
+{
+    if (g_comboLoading || !ValidEffectIndex()) {
+        return;
+    }
+    if (!CommitEffectEditor()) {
+        return;
+    }
+
+    const int item = static_cast<int>(
+        SendMessageW(g_effectPresetCombo, CB_GETCURSEL, 0, 0));
+    if (item < 0 || item >= apo::kPresetCount) {
+        return;
+    }
+
+    apo::ApoSettings& settings = g_endpoints[g_effectIndex].settings;
+    if (settings.presetIndex == item) {
+        return;
+    }
+
+    // Only the selected preset changes. The editor and list are rebuilt from
+    // the new list, and the switch reaches the running APO through the normal
+    // live-apply path.
+    settings.presetIndex = item;
+    g_effectSelection = 0;
+    RebuildEffectList();
+    ShowEffectForSelected();
+    MarkSettingsDirty();
     RepaintAll();
 }
 
@@ -2172,6 +2229,13 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
                 RepaintAll();
             }
             break;
+        case IDC_EFFECT_PRESET_COMBO:
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                OnEffectPresetChanged();
+            } else if (HIWORD(wParam) == CBN_CLOSEUP) {
+                RepaintAll();
+            }
+            break;
         case IDC_DIST_FUNCTION_COMBO:
             if (HIWORD(wParam) == CBN_SELCHANGE) {
                 MarkSettingsDirty();
@@ -2372,9 +2436,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
 
 std::wstring DescribeEffectList(const apo::ApoSettings& settings)
 {
+    const apo::EffectPreset& preset = apo::ActivePreset(settings);
     std::wstring text;
-    for (int i = 0; i < settings.effectCount; ++i) {
-        const apo::EffectInstance& effect = settings.effects[i];
+    for (int i = 0; i < preset.effectCount; ++i) {
+        const apo::EffectInstance& effect = preset.effects[i];
         if (i > 0) {
             text += L",";
         }

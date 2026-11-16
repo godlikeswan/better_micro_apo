@@ -138,6 +138,10 @@ enum class EffectType : int
 
 inline constexpr int kMaxEffects = 16;
 
+// Each device keeps this many independent effect lists. The selected preset is
+// the one the APO processes and the GUI edits.
+inline constexpr int kPresetCount = 4;
+
 // Stages that allocate large buffers get a smaller pool so a pathological list
 // cannot exhaust memory. Other types can fill the whole list.
 inline constexpr int kMaxHeavyEffects = 4;
@@ -180,16 +184,22 @@ void SetEffectEnabled(EffectInstance& effect, bool enabled);
 // Builds an instance with the type's defaults and enables it.
 EffectInstance MakeEffect(EffectType type, int id);
 
-// Per-endpoint DSP settings. The default constructor builds the legacy fixed
-// chain (noise, gate, dynamic, compressor, gain, mono, distortion, reverb) so
-// existing installations keep their sound and old INI files migrate cleanly.
-struct ApoSettings
+// One independent effects list. `nextEffectId` only needs to be unique inside
+// this preset because only one preset is active at a time.
+struct EffectPreset
 {
-    ApoSettings();
-
     int effectCount = 0;
     int nextEffectId = 1;
     EffectInstance effects[kMaxEffects];
+};
+
+// Per-endpoint DSP settings. A new device starts with four empty presets; the
+// first one is selected. Effects added to a preset stay with it when another
+// preset is selected.
+struct ApoSettings
+{
+    int presetIndex = 0;
+    EffectPreset presets[kPresetCount];
 
     // GUI binding option for devices that publish composite FX entries: replace
     // the driver's composite stream chain with only this APO instead of
@@ -197,6 +207,9 @@ struct ApoSettings
     // read by the GUI from the same INI file.
     bool isolateEffects = false;
 };
+
+EffectPreset& ActivePreset(ApoSettings& settings);
+const EffectPreset& ActivePreset(const ApoSettings& settings);
 
 // Clamp every field into a range the DSP can handle safely. Non-finite values
 // fall back to the defaults. Also normalizes effect ids so each instance has a

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <string>
 
 namespace {
 
@@ -234,6 +235,14 @@ void LayoutEffects(int x, int y, int width, int height)
     MoveWindow(g_effectDeviceCombo, x + labelWidth, y, comboWidth,
                Scale(200), TRUE);
 
+    const int presetLabelWidth = Scale(52);
+    const int presetComboWidth = Scale(64);
+    const int presetX = x + labelWidth + comboWidth + Scale(16);
+    MoveWindow(g_effectPresetLabel, presetX, y + Scale(3), presetLabelWidth,
+               Scale(20), TRUE);
+    MoveWindow(g_effectPresetCombo, presetX + presetLabelWidth, y,
+               presetComboWidth, Scale(200), TRUE);
+
     const int top = y + Scale(34);
     const int bottomHeight = Scale(100);
     const int panelHeight = height - Scale(34) - bottomHeight;
@@ -390,6 +399,16 @@ void CreateControls(HWND root)
         ui::Label(window, IDC_EFFECT_DEVICE_LABEL, L"Device:");
     g_effectDeviceCombo =
         ui::ComboBox(window, IDC_EFFECT_DEVICE_COMBO, CBS_DROPDOWNLIST);
+    g_effectPresetLabel =
+        ui::Label(window, IDC_EFFECT_PRESET_LABEL, L"Preset:");
+    g_effectPresetCombo =
+        ui::ComboBox(window, IDC_EFFECT_PRESET_COMBO, CBS_DROPDOWNLIST);
+    for (int i = 0; i < apo::kPresetCount; ++i) {
+        const std::wstring text = std::to_wstring(i + 1);
+        SendMessageW(g_effectPresetCombo, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(text.c_str()));
+    }
+    SendMessageW(g_effectPresetCombo, CB_SETCURSEL, 0, 0);
 
     g_effectListGroup = ui::GroupFrame(window, IDC_EFFECT_LIST_GROUP, L"Effects");
     g_effectList = ui::ReportList(
