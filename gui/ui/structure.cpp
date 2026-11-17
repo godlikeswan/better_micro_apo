@@ -177,9 +177,13 @@ void LayoutEffectParams(int x, int y, int width)
         if (icon == nullptr) {
             return;
         }
-        MoveWindow(icon, columnX + labelWidth - iconSize, rowY - Scale(2),
-                   iconSize, iconSize, TRUE);
+        MoveWindow(icon, columnX + labelWidth - iconSize, rowY, iconSize,
+                   iconSize, TRUE);
         ShowWindow(icon, SW_SHOW);
+        // The icon overlays the right end of the parameter label. Showing a
+        // child can reorder siblings, so keep it above the label explicitly.
+        SetWindowPos(icon, HWND_TOP, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     };
 
     auto placePair = [&](HWND leftLabel, HWND leftSlider, int leftReset,
