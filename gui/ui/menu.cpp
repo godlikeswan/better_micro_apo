@@ -16,11 +16,16 @@ struct MenuEntry {
 
 const MenuEntry kFile{L"&File", true};
 const MenuEntry kView{L"&View", true};
+const MenuEntry kAbout{L"&About", true};
+const MenuEntry kInstall{L"Install / &Update", false};
+const MenuEntry kUninstall{L"&Uninstall", false};
 const MenuEntry kExit{L"E&xit", false};
-const MenuEntry kSimple{L"&Simple", false};
-const MenuEntry kAdvanced{L"&Advanced", false};
+const MenuEntry kShowAllDevices{L"&Show all devices", false};
+const MenuEntry kInfo{L"&Info", false};
+const MenuEntry kOpenLog{L"&Open log", false};
 
 HMENU g_menuBar = nullptr;
+HMENU g_fileMenu = nullptr;
 HMENU g_viewMenu = nullptr;
 
 void InsertOwnerDrawItem(HMENU menu, UINT id, const MenuEntry* entry,
@@ -61,24 +66,6 @@ void ApplyMenuBackground(HWND window)
     }
 }
 
-void CheckMode(gui::InterfaceMode mode)
-{
-    if (g_viewMenu == nullptr) {
-        return;
-    }
-
-    // CheckMenuItem changes only the state, so the owner-draw type survives.
-    // CheckMenuRadioItem would replace the item type and hide the custom text.
-    CheckMenuItem(g_viewMenu, IDM_VIEW_SIMPLE,
-                  MF_BYCOMMAND | MF_UNCHECKED);
-    CheckMenuItem(g_viewMenu, IDM_VIEW_ADVANCED,
-                  MF_BYCOMMAND | MF_UNCHECKED);
-    CheckMenuItem(g_viewMenu,
-                  mode == gui::InterfaceMode::Advanced ? IDM_VIEW_ADVANCED
-                                                       : IDM_VIEW_SIMPLE,
-                  MF_BYCOMMAND | MF_CHECKED);
-}
-
 HFONT MenuFont()
 {
     return g_font != nullptr ? g_font
@@ -87,7 +74,7 @@ HFONT MenuFont()
 
 } // namespace
 
-void CreateMenuBar(HWND window, gui::InterfaceMode mode)
+void CreateMenuBar(HWND window, bool showAllDevices)
 {
     DestroyMenuBar(window);
 
@@ -96,30 +83,41 @@ void CreateMenuBar(HWND window, gui::InterfaceMode mode)
         return;
     }
 
-    HMENU fileMenu = CreatePopupMenu();
+    g_fileMenu = CreatePopupMenu();
     g_viewMenu = CreatePopupMenu();
-    if (fileMenu == nullptr || g_viewMenu == nullptr) {
-        if (fileMenu != nullptr) {
-            DestroyMenu(fileMenu);
+    HMENU aboutMenu = CreatePopupMenu();
+    if (g_fileMenu == nullptr || g_viewMenu == nullptr ||
+        aboutMenu == nullptr) {
+        if (g_fileMenu != nullptr) {
+            DestroyMenu(g_fileMenu);
         }
         if (g_viewMenu != nullptr) {
             DestroyMenu(g_viewMenu);
         }
+        if (aboutMenu != nullptr) {
+            DestroyMenu(aboutMenu);
+        }
         DestroyMenu(g_menuBar);
         g_menuBar = nullptr;
+        g_fileMenu = nullptr;
         g_viewMenu = nullptr;
         return;
     }
 
-    InsertOwnerDrawItem(fileMenu, IDM_FILE_EXIT, &kExit, nullptr);
-    InsertOwnerDrawItem(g_viewMenu, IDM_VIEW_SIMPLE, &kSimple, nullptr);
-    InsertOwnerDrawItem(g_viewMenu, IDM_VIEW_ADVANCED, &kAdvanced,
-                        nullptr);
-    InsertOwnerDrawItem(g_menuBar, 0, &kFile, fileMenu);
+    InsertOwnerDrawItem(g_fileMenu, IDM_FILE_INSTALL, &kInstall, nullptr);
+    InsertOwnerDrawItem(g_fileMenu, IDM_FILE_UNINSTALL, &kUninstall, nullptr);
+    InsertOwnerDrawItem(g_fileMenu, IDM_FILE_EXIT, &kExit, nullptr);
+    InsertOwnerDrawItem(g_viewMenu, IDM_VIEW_SHOW_ALL_DEVICES,
+                        &kShowAllDevices, nullptr);
+    InsertOwnerDrawItem(aboutMenu, IDM_ABOUT_INFO, &kInfo, nullptr);
+    InsertOwnerDrawItem(aboutMenu, IDM_ABOUT_OPEN_LOG, &kOpenLog, nullptr);
+
+    InsertOwnerDrawItem(g_menuBar, 0, &kFile, g_fileMenu);
     InsertOwnerDrawItem(g_menuBar, 0, &kView, g_viewMenu);
+    InsertOwnerDrawItem(g_menuBar, 0, &kAbout, aboutMenu);
 
     SetMenu(window, g_menuBar);
-    CheckMode(mode);
+    UpdateMenuShowAllDevices(window, showAllDevices);
     ApplyMenuBackground(window);
 }
 
@@ -135,6 +133,7 @@ void DestroyMenuBar(HWND window)
     // Destroying the menu bar also destroys its popup menus.
     DestroyMenu(g_menuBar);
     g_menuBar = nullptr;
+    g_fileMenu = nullptr;
     g_viewMenu = nullptr;
 }
 
@@ -143,9 +142,36 @@ void RefreshMenuBar(HWND window)
     ApplyMenuBackground(window);
 }
 
-void UpdateMenuMode(HWND window, gui::InterfaceMode mode)
+void UpdateMenuShowAllDevices(HWND window, bool checked)
 {
-    CheckMode(mode);
+    if (g_viewMenu == nullptr) {
+        return;
+    }
+    CheckMenuItem(g_viewMenu, IDM_VIEW_SHOW_ALL_DEVICES,
+                  MF_BYCOMMAND |
+                      (checked ? MF_CHECKED : MF_UNCHECKED));
+    if (window != nullptr) {
+        DrawMenuBar(window);
+    }
+}
+
+void UpdateMenuCommands(HWND window, bool busy, bool installEnabled,
+                        bool uninstallEnabled)
+{
+    if (g_fileMenu == nullptr || g_viewMenu == nullptr) {
+        return;
+    }
+
+    const UINT installState = (!busy && installEnabled) ? MF_ENABLED : MF_GRAYED;
+    const UINT uninstallState =
+        (!busy && uninstallEnabled) ? MF_ENABLED : MF_GRAYED;
+    EnableMenuItem(g_fileMenu, IDM_FILE_INSTALL, MF_BYCOMMAND | installState);
+    EnableMenuItem(g_fileMenu, IDM_FILE_UNINSTALL,
+                   MF_BYCOMMAND | uninstallState);
+    EnableMenuItem(g_fileMenu, IDM_FILE_EXIT,
+                   MF_BYCOMMAND | (busy ? MF_GRAYED : MF_ENABLED));
+    EnableMenuItem(g_viewMenu, IDM_VIEW_SHOW_ALL_DEVICES,
+                   MF_BYCOMMAND | (busy ? MF_GRAYED : MF_ENABLED));
     if (window != nullptr) {
         DrawMenuBar(window);
     }
@@ -165,9 +191,11 @@ bool MeasureMenuItem(HWND window, MEASUREITEMSTRUCT* item)
     HDC dc = GetDC(window);
     HGDIOBJ oldFont = SelectObject(dc, MenuFont());
 
-    SIZE textSize{};
-    GetTextExtentPoint32W(dc, entry->text,
-                          static_cast<int>(wcslen(entry->text)), &textSize);
+    // Measure what DrawText actually renders: mnemonic ampersands are not
+    // visible, so GetTextExtentPoint32W makes top-level items too wide.
+    RECT textRect{};
+    DrawTextW(dc, entry->text, -1, &textRect, DT_SINGLELINE | DT_CALCRECT);
+    const int textWidth = textRect.right - textRect.left;
 
     TEXTMETRICW metrics{};
     GetTextMetricsW(dc, &metrics);
@@ -177,10 +205,10 @@ bool MeasureMenuItem(HWND window, MEASUREITEMSTRUCT* item)
 
     const int height = metrics.tmHeight + Scale(8);
     if (entry->topLevel) {
-        item->itemWidth = textSize.cx + Scale(20);
+        item->itemWidth = textWidth + Scale(4);
         item->itemHeight = height;
     } else {
-        item->itemWidth = textSize.cx + Scale(40);
+        item->itemWidth = textWidth + Scale(40);
         item->itemHeight = height + Scale(2);
     }
     return true;

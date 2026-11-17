@@ -104,15 +104,15 @@ cached instance state, so the real-time path does no file I/O and no
 allocation. Missing files fall back to the defaults.
 
 The INI file has a `[dsp]` section with `version=4`, `preset_count`,
-`preset_index`, `isolate_effects`, and one block per preset entry:
+`preset_index`, `isolate_effects=1`, and one block per preset entry:
 `preset_<p>_effect_<n>_type`, `preset_<p>_effect_<n>_id`,
 `preset_<p>_effect_<n>_enabled`, plus the same parameter keys used before with
 the `preset_<p>_effect_<n>_` prefix (for example
 `preset_0_effect_0_gate_threshold_db`). `preset_<p>_effect_<n>_id` is the
 stable instance id the pool uses to rebind a stage after a live update. Each
 device has four independent lists, and only `preset_index` is processed at a
-time. Files written before version 4 are not migrated: they load as four empty
-presets, and only `isolate_effects` is carried over.
+time. Files written by earlier versions are not migrated: they load as four
+empty presets.
 
 The captured noise profile is stored next to the settings as
 `C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.noise`. The file has a
@@ -123,14 +123,16 @@ channels, and resamples the bins if the profile and the stream use different
 sample rates. A missing or invalid profile leaves the noise pool empty, so a
 Noise effect in the list is skipped even when it is enabled.
 
-`isolate_effects` is a GUI binding option rather than a DSP value: it tells the
-GUI to leave only this APO on the device by dropping the driver's endpoint chain
-and the driver's other composite chains. The APO still reads it from the same
-INI file but does not use it while processing.
+`isolate_effects` is a legacy INI key rather than a DSP value: `ClampSettings`
+forces it on for every load, save, and runtime publish, and `SaveSettings`
+writes it as `1`. The GUI leaves only this APO on every enabled device by
+dropping the driver's endpoint chain and its other composite chains. The APO
+reads the key for compatibility but does not use it while processing, and no
+value from older files is migrated.
 
 The GUI writes the INI files when effect settings are auto-applied (about half
-a second after the last edit) or when **Apply** runs, and publishes the same
-snapshot to `C:\ProgramData\better_micro_apo\runtime\{endpoint-guid}.dat`. The
+a second after the last edit) and publishes the same snapshot to
+`C:\ProgramData\better_micro_apo\runtime\{endpoint-guid}.dat`. The
 APO maps that file read-only in `LockForProcess` and polls a generation counter
 from `APOProcess`; a new generation retunes the existing stages in place through
 `StagePool::Update`. A seqlock (`sequence`) makes a torn read impossible, and the
@@ -139,56 +141,62 @@ single generation load unless the settings changed, so the real-time path still
 does no file I/O and no allocation. On restart the INI remains authoritative:
 `LockForProcess` baselines the generation to the snapshot it just loaded.
 
-Binding and isolation changes still restart the audio service so the engine
-reloads the endpoint's effect chain. A settings-only change skips the restart
-unless the endpoint has no usable runtime file yet (the running APO would have
-no mapping to poll).
+Binding changes still restart the audio service so the engine reloads the
+endpoint's effect chain. Clearing other effects is part of that bind and uses
+the same restart. A settings-only change skips the restart unless the endpoint
+has no usable runtime file yet (the running APO would have no mapping to poll).
 
 ## GUI structure
 
-`gui/main.cpp` has two interface modes. **Advanced** is split into three tabbed
-views; the tab order also expresses the prerequisite chain, so a later tab stays
-disabled until the earlier step is done: **Install** is always available,
-**Devices** requires the APO files or at least one bound device, and **Effects**
-requires a full install and at least one bound device. The app opens on the most
-advanced available tab and falls back when an operation removes a prerequisite.
+`gui/main.cpp` owns one Effects-like screen. There are no tabs and no
+Simple/Advanced mode. The screen has a device selector, the main **Enable**
+checkbox, a **Preset** selector (1–4) next to the device selector, the effects
+list and parameter editor, **Listen to this device**, and the status line.
 
-**Simple** is the default mode. It hides the tab control and lays the Effects
-editor over the full content area, adding an **Enable** checkbox between the
-device and preset selectors. Its device selector lists every active capture
-endpoint (`apo::IsDeviceActive`), not only bound ones. Checking **Enable**
-verifies the installed files and APO registration, installs or updates when
-needed, and binds the device. Unchecking it unbinds the device, or uninstalls
-the files and registration when no other device is bound. Effect edits on an
-unbound Simple device are saved without a runtime publish, so the next Enable
-starts from them.
+The device selector lists active capture endpoints by default. **View → Show
+all devices** adds every endpoint found in the registry capture key, with
+inactive ones marked `[unplugged]`, `[not present]`, or `[disabled]`. Its state
+is persisted in `C:\ProgramData\better_micro_apo\gui.ini` as `show_all_devices`
+(default `0`). Inactive endpoints can be edited but cannot be enabled.
+
+The menu bar is **File → Install / Update**, **File → Uninstall**, **File →
+Exit**, **View → Show all devices**, **About → Info**, and **About → Open log**.
+Install and Uninstall
+are manual entry points; the main **Enable** checkbox performs the same work
+automatically. Checking it installs or updates the APO when needed and binds the
+selected device. Unchecking it unbinds the device, and uninstalls the files and
+registration when it was the last enabled device. Device settings, backups, and
+logs are kept. No confirmation dialogs are shown for these commands; menu
+commands and controls are disabled while a background operation is running.
+
+**About → Info** opens a manual modal loop modeled on the effect picker
+(`gui/ui/info_dialog.cpp`). It shows a snapshot of the embedded and installed
+DLL hashes (FNV-1a, exposed by `FilesStatus`), the install path and DLL file
+name, the COM CLSID, COM/APO/capture registry key status, an overall summary of
+`installed`, `not installed`, partial registration, or an old DLL, and `Applied
+to N devices` when installed. It never runs a blocking operation while the
+dialog is open and follows live theme changes.
 
 The UI is split into small modules so a view describes *what* controls it has
 without also owning their construction or geometry. `gui/ui/ui_state.*` holds
-the control identifiers, handles, fonts, DPI, and the selected view/effect;
+the control identifiers, handles, fonts, DPI, and selected effect;
 `gui/ui/widgets.*` provides the reusable control factories, font helpers, and
 the owner-drawn effect sliders; `gui/ui/structure.*` builds the control tree and
 lays it out; `gui/ui/menu.*` owns the themed menu bar; and `gui/ui/theme.*` owns
 the palette, system-theme detection, native control theming, and the
 `WM_CTLCOLOR` handlers. `gui/main.cpp` keeps the app logic, background work,
 monitor, and message routing. Changing how a slider looks or behaves, or adding
-a control to a view, is therefore local to the widget factory, the view
-construction, and its layout function.
+a control, is therefore local to the widget factory, the control construction,
+and its layout function.
 
 The theme follows the Windows app mode (`AppsUseLightTheme`). The app reads it
 before creating any window and reacts to `WM_SETTINGCHANGE`/`WM_THEMECHANGED`
 for live switching. Light mode keeps the native themed appearance. Dark mode
-applies the DWM dark title bar, themes the native combo, list, and header
-controls, and owner-draws the tab strip, push buttons, checkboxes, and sliders
-through subclasses in `gui/ui/widgets.cpp`. The tab item parameter stores
-whether a tab is reachable, so the custom painter can gray out unavailable tabs.
-
-The native menu bar is owner-drawn by `gui/ui/menu.cpp` and uses the theme
+applies the DWM dark title bar, themes the native combo and list controls, and
+owner-draws push buttons, checkboxes, sliders, and menu items in
+`gui/ui/widgets.cpp` and `gui/ui/menu.cpp`. The menu bar uses the theme
 background brush through `SetMenuInfo(MIM_BACKGROUND)`, so it follows the same
-light/dark palette and is refreshed on theme changes. `gui/preferences.*`
-persists the **View** mode in `C:\ProgramData\better_micro_apo\gui.ini`; the
-default is **Simple**. Switching modes takes effect immediately, and the choice
-is written when the app exits.
+light/dark palette and is refreshed on theme changes.
 
 List checkboxes are drawn from the control's state image list. In dark mode the
 app replaces the two native glyphs inside that list (`ImageList_Replace`) instead
@@ -201,47 +209,33 @@ bitmap. The list maps check-state index 1 (unchecked) to image 0 and index 2
 checkboxes. Switching back to light mode keeps the native glyphs that comctl32
 rebuilds for the light theme.
 
-While a background operation runs, both lists stay enabled and reject state
-changes in `LVN_ITEMCHANGING`. Disabling a themed list makes the native control
-paint its disabled background light, which caused a white panel for the whole
-busy period. Full repaints invalidate the window and its children without
-`RDW_UPDATENOW`, so layout changes coalesce into one paint instead of flashing
-intermediate frames.
+While a background operation runs, the effect list stays enabled and rejects
+state changes in `LVN_ITEMCHANGING`; the controls themselves are disabled. Full
+repaints invalidate the window and its children without `RDW_UPDATENOW`, so
+layout changes coalesce into one paint instead of flashing intermediate frames
+or a white panel. The mouse cursor is never changed to a busy shape.
 
-The **Devices** view owns binding and the per-device `isolate_effects` option.
-Its Apply writes bindings and isolation and finishes any pending migration from
-the old stream slots; effect edits are left to the Effects view. **Reset**
-restores the persisted checkboxes and reloads only the saved isolation value, so
-effect edits made in the other view survive.
+The effects editor lists the selected preset's effects in processing order.
+**Preset** switches which of the four lists is edited. The checkboxes map
+directly to each instance's enable flag in the active `EffectPreset`; selecting
+a row swaps the parameter panel on the right to that instance's type. Column 1
+of each row is a `×` delete button (handled through `NM_CLICK`). **Add effect**
+opens a modal type picker (`gui/ui/effect_dialog.cpp`) and appends the new
+instance to the end of the list; types already at their per-type capacity are
+left out of the picker. The same type may appear more than once, and deleting an
+instance discards its values. Adding or deleting rebuilds the list view and
+marks the device dirty, but goes through the live runtime channel rather than an
+audio restart.
 
-The **Effects** view lists bound devices in a dropdown, with a **Preset**
-selector (1–4) next to it, and shows the selected preset's effect list in
-processing order. Each device has four independent lists; switching presets
-commits the editor, rebuilds the list from that preset, and publishes the
-selection through the live runtime channel. Effects added to a preset stay with
-that preset. The checkboxes map directly to each instance's enable flag in the
-active `EffectPreset`; selecting a row swaps the parameter panel on the right to
-that instance's type. Column 1 of each row is a `×` delete button (handled
-through `NM_CLICK`). **Add effect** opens a modal type picker
-(`gui/ui/effect_dialog.cpp`) and appends the new instance to the end of the
-list; types already at their per-type capacity are left out of the picker. The
-same type may appear more than once, and deleting an instance discards its
-values. Adding or deleting rebuilds the list view and marks the device dirty,
-but still goes through the live runtime channel rather than an audio restart.
-Edits are saved and published automatically after a short debounce, so the
-running APO picks them up without interrupting audio; a restart is only needed
-the first time an endpoint has no runtime file or when the installed DLL
-predates the runtime channel. **Apply** remains as the fallback for those cases,
-and **Reset** reloads the persisted effect settings while preserving any
-pending isolation edit.
-
-Each view tracks its own pending state. `Endpoint::settingsDirty` covers effect
-edits, while `isolateSaved`/`isolationDirty` cover the isolation checkbox. An
-effect edit marks the device dirty, locks the device dropdown, and highlights
-Apply until the debounced live apply saves it (or Apply is used because the live
-channel is not available). The preset dropdown stays enabled: switching presets
-does not discard edits. A Devices Apply keeps unsaved effect edits in memory
-across the endpoint refresh instead of silently discarding them.
+`Endpoint::settingsDirty` covers effect edits. An edit marks the device dirty
+and locks the device dropdown until the debounced live apply saves it; when the
+live channel is unavailable, the normal apply path performs the one restart
+needed to install it. The preset dropdown stays enabled because switching
+presets does not discard edits. Install, Uninstall, Enable, and **Refresh** carry
+unsaved effect edits in memory across the endpoint refresh instead of silently
+discarding them. Each editable parameter has a small borderless ↺ icon that
+restores only that parameter to the default from `apo::MakeEffect` and disables
+itself once the value matches that default; there is no global Reset.
 
 ## Listen monitor
 
@@ -253,7 +247,7 @@ decays instead of holding the previous level. The GUI timer samples these
 counters every 100 ms and keeps a 500 ms history: the displayed peak is the
 maximum of that history and the RMS is
 `sqrt(sum(sumSquares) / sum(samples))`. Clip and drop counters are latched and
-reset when listening starts. **Apply** stops the monitor only when the change
+reset when listening starts. An apply stops the monitor only when the change
 requires an audio restart, and then starts it again for the same endpoint when
 the work finishes. Settings-only applies leave the monitor running.
 
@@ -300,17 +294,17 @@ reports raw-processing support, so a stream-slot binding silently stops
 processing there. Older builds bound the APO in the PreMix slot (`...,1`) and
 later in the composite stream chain (`...,13`). The bind path now also removes
 this APO from `...,1`, `...,5`, and `...,13` so a migrated device is not
-processed twice. A device that is still bound only through an old slot reports
-as pending; **Apply** migrates it, and **Install**/**Update** runs the same
+processed twice. A device that is still bound only through an old slot is
+migrated when **Enable** applies it; **Install**/**Update** runs the same
 migration while audio is stopped.
 
-The per-device `isolate_effects` option leaves only this APO on the device. It
-keeps this APO's entry in the endpoint chain (`...,15`), drops the driver's
-entries from that chain, and clears the other composite chains: mode (`...,14`),
-keyword detector (`...,16`-`...,18`), and offload (`...,19`-`...,20`).
-Isolation is a desired state, not just a transition, so it is re-applied on
-every Apply while it is set; a driver that republishes its chains is cleaned up
-again. Turning it off rebuilds the chains from the canonical backup.
+Isolation is unconditional on every enabled device. It keeps this APO's entry
+in the endpoint chain (`...,15`), drops the driver's entries from that chain, and
+clears the other composite chains: mode (`...,14`), keyword detector
+(`...,16`-`...,18`), and offload (`...,19`-`...,20`). It is a desired state, not
+just a transition, so an apply re-clears the chains if a driver republishes them.
+There is no option to turn it off; disabling or uninstalling rebuilds the
+chains from the canonical backup.
 
 Before changing any slot the GUI exports the whole `FxProperties` key with
 `reg.exe` to a single canonical file per endpoint,

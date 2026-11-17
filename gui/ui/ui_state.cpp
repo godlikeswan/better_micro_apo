@@ -5,33 +5,8 @@ HWND g_window = nullptr;
 
 HWND g_title = nullptr;
 HWND g_refresh = nullptr;
-HWND g_tabs = nullptr;
 HWND g_pageBackground = nullptr;
 HWND g_status = nullptr;
-HWND g_logButton = nullptr;
-
-HWND g_groupFiles = nullptr;
-HWND g_dllLabel = nullptr;
-HWND g_dllValue = nullptr;
-HWND g_dllStatus = nullptr;
-HWND g_comLabel = nullptr;
-HWND g_comValue = nullptr;
-HWND g_comStatus = nullptr;
-HWND g_apoLabel = nullptr;
-HWND g_apoValue = nullptr;
-HWND g_apoStatus = nullptr;
-HWND g_overall = nullptr;
-HWND g_filesNote = nullptr;
-HWND g_install = nullptr;
-HWND g_uninstall = nullptr;
-
-HWND g_groupDevices = nullptr;
-HWND g_list = nullptr;
-HWND g_isolate = nullptr;
-HWND g_hint = nullptr;
-HWND g_devicesUnsaved = nullptr;
-HWND g_devicesApply = nullptr;
-HWND g_devicesReset = nullptr;
 
 HWND g_effectDeviceLabel = nullptr;
 HWND g_effectDeviceCombo = nullptr;
@@ -43,13 +18,10 @@ HWND g_effectAdd = nullptr;
 HWND g_effectGroup = nullptr;
 HWND g_effectHeading = nullptr;
 HWND g_effectGraph = nullptr;
-HWND g_effectsUnsaved = nullptr;
-HWND g_effectsApply = nullptr;
-HWND g_effectsReset = nullptr;
+HWND g_mainEnable = nullptr;
+HWND g_mainHint = nullptr;
 HWND g_monoNote = nullptr;
-
-HWND g_simpleEnable = nullptr;
-HWND g_simpleHint = nullptr;
+HWND g_paramResetButtons[ParamResetCount]{};
 
 HWND g_gateThresholdLabel = nullptr;
 HWND g_gateThresholdSlider = nullptr;
@@ -110,7 +82,6 @@ HWND g_noiseReductionSlider = nullptr;
 HWND g_noiseCapture = nullptr;
 HWND g_noiseNote = nullptr;
 HWND g_listen = nullptr;
-HWND g_listenNote = nullptr;
 HWND g_meter = nullptr;
 
 HFONT g_font = nullptr;
@@ -118,6 +89,5 @@ HFONT g_boldFont = nullptr;
 HFONT g_titleFont = nullptr;
 int g_dpi = 96;
 
-View g_view = View::Install;
 int g_effectSelection = -1;
 apo::EffectType g_effectType = apo::EffectType::Noise;

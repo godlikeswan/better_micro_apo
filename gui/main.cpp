@@ -7,6 +7,7 @@
 
 #include "ui/effect_dialog.h"
 #include "ui/graph.h"
+#include "ui/info_dialog.h"
 #include "ui/menu.h"
 #include "ui/structure.h"
 #include "ui/theme.h"
@@ -67,18 +68,19 @@ std::deque<MeterEntry> g_meterHistory;
 std::wstring g_meterText;
 
 bool g_busy = false;
-bool g_loading = false;         // Guard for the device list.
 bool g_effectLoading = false;   // Guard for the effect list/editor.
 bool g_comboLoading = false;    // Guard for the device combo.
-bool g_tabLoading = false;      // Guard for programmatic tab changes.
+
+// Persisted View menu choice. Off means the selector lists active capture
+// devices only; on adds inactive endpoints with a state marker.
+bool g_showAllDevices = false;
 
 std::vector<apo::Endpoint> g_endpoints;
 apo::FilesStatus g_files;
 std::thread g_worker;
 apo::Result g_result;
 
-int g_deviceIndex = -1;   // Selected row in the Devices list.
-int g_effectIndex = -1;   // Selected endpoint in the Effects combo.
+int g_effectIndex = -1;   // Selected endpoint in the device combo.
 
 constexpr unsigned kNoiseCaptureMs = 3000;
 
@@ -93,46 +95,24 @@ int g_captureIndex = -1;
 apo::ApoSettings g_captureSettings;
 bool g_captureSucceeded = false;
 
-// A noise capture restarts audio and saves the effect settings. Keep any
-// pending isolation edit separate so the capture does not mark it as applied.
-bool g_captureIsolationDirty = false;
-bool g_captureIsolatePending = false;
-bool g_captureIsolateSaved = false;
-
 // Apply briefly stops the audio service, which also stops the monitor stream.
 // Remember the listening state so it can be restarted once Apply finishes.
 bool g_resumeListen = false;
 std::wstring g_resumeListenId;
 
-// Devices Apply refreshes the endpoint list. Keep effect edits that are still
-// unsaved so switching views and applying device bindings does not discard
-// them.
+// Install/Uninstall refreshes the endpoint list. Keep unsaved effect edits so
+// the refresh does not silently discard them.
 bool g_preserveDirtyEffects = false;
 
-// Persisted View menu choice. Simple reuses the Effects editor without tabs;
-// Advanced keeps the Install / Devices / Effects tabs.
-gui::InterfaceMode g_interfaceMode = gui::InterfaceMode::Simple;
-
-bool SimpleMode()
-{
-    return g_interfaceMode == gui::InterfaceMode::Simple;
-}
-
-// The Effects controls are shared by the Effects tab and the Simple view.
-bool IsEffectView()
-{
-    return g_view == View::Effects || g_view == View::Simple;
-}
-
 // Forward declarations for helpers that are used before their definitions.
-void UpdateViewAvailability();
-void SetActiveView(View view);
-void UpdateDevicesUi();
+void UpdateMainUi();
 void UpdateEffectsUi();
-void UpdateSimpleUi();
+void UpdateParamResetButtons();
+void MarkSettingsDirty();
 void RefreshEffectGraph();
 bool ValidEffectIndex();
-void DoSimpleEnable(bool enable);
+void DoEnable(bool enable);
+void UpdateChromeUi();
 
 int CountEffectType(const apo::ApoSettings& settings, apo::EffectType type)
 {
@@ -155,35 +135,42 @@ bool HasEffectSelection()
 }
 
 // ---------------------------------------------------------------------------
-// View and dirty-state helpers
+// Device and dirty-state helpers
 // ---------------------------------------------------------------------------
 
-bool AnyBound()
+bool EndpointVisible(const apo::Endpoint& endpoint)
 {
-    return std::any_of(g_endpoints.begin(), g_endpoints.end(),
-                       [](const apo::Endpoint& endpoint) {
-                           return endpoint.Enabled();
-                       });
+    return g_showAllDevices || apo::IsDeviceActive(endpoint.state);
 }
 
-bool DevicesAvailable()
+const wchar_t* SelectorMarker(DWORD state)
 {
-    return g_files.FullyInstalled() || AnyBound();
+    if ((state & 2) != 0) {
+        return L"[disabled]";
+    }
+    if ((state & 8) != 0) {
+        return L"[unplugged]";
+    }
+    if ((state & 4) != 0) {
+        return L"[not present]";
+    }
+    return nullptr;
 }
 
-// Advanced-mode prerequisite for the Effects tab. This stays independent of the
-// interface mode so the tab availability stored while Simple mode is active is
-// still correct when the user switches back.
-bool EffectsAvailable()
+std::wstring SelectorLabel(const apo::Endpoint& endpoint)
 {
-    return g_files.FullyInstalled() && AnyBound();
+    if (!g_showAllDevices || apo::IsDeviceActive(endpoint.state)) {
+        return endpoint.name;
+    }
+    const wchar_t* marker = SelectorMarker(endpoint.state);
+    return marker != nullptr ? endpoint.name + L" " + marker : endpoint.name;
 }
 
-// The Simple view can edit settings before anything is installed or bound; its
-// controls are gated by the selected device instead.
-bool EffectEditorAvailable()
+int BoundDeviceCount()
 {
-    return SimpleMode() || EffectsAvailable();
+    return static_cast<int>(std::count_if(
+        g_endpoints.begin(), g_endpoints.end(),
+        [](const apo::Endpoint& endpoint) { return endpoint.Enabled(); }));
 }
 
 bool EffectsDirty()
@@ -194,103 +181,13 @@ bool EffectsDirty()
                        });
 }
 
-// An endpoint bound by an older version still sits in a stream slot, which raw
-// streams bypass. Treat it as a pending change so Apply can move it.
-bool NeedsBindingUpgrade(const apo::Endpoint& endpoint)
-{
-    return endpoint.Enabled() && !endpoint.BoundAtEndpoint();
-}
-
-bool AnyBindingUpgrade()
-{
-    return std::any_of(g_endpoints.begin(), g_endpoints.end(),
-                       [](const apo::Endpoint& endpoint) {
-                           return NeedsBindingUpgrade(endpoint);
-                       });
-}
-
-bool DevicesDirty()
-{
-    if (g_list == nullptr) {
-        return false;
-    }
-    for (size_t i = 0; i < g_endpoints.size(); ++i) {
-        const bool checked =
-            ListView_GetCheckState(g_list, static_cast<int>(i)) != FALSE;
-        if (checked != g_endpoints[i].Enabled()) {
-            return true;
-        }
-        if (g_endpoints[i].isolationDirty ||
-            g_endpoints[i].isolatePendingCleanup) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool DevicesPending()
-{
-    return DevicesDirty() || AnyBindingUpgrade();
-}
-
 bool ValidEffectIndex()
 {
     if (g_effectIndex < 0 ||
         g_effectIndex >= static_cast<int>(g_endpoints.size())) {
         return false;
     }
-
-    // The Simple view lists every active capture device, not only the ones that
-    // are already bound. Advanced keeps its bound-only behaviour.
-    if (SimpleMode()) {
-        return apo::IsDeviceActive(g_endpoints[g_effectIndex].state);
-    }
-    return g_endpoints[g_effectIndex].Enabled();
-}
-
-View DefaultView()
-{
-    if (EffectsAvailable()) {
-        return View::Effects;
-    }
-    if (DevicesAvailable()) {
-        return View::Devices;
-    }
-    return View::Install;
-}
-
-int ViewToTab(View view)
-{
-    // The Simple view has no tab; callers that need a tab index only run in
-    // Advanced mode, but keep this safe for the shared helpers.
-    if (view == View::Simple) {
-        return 0;
-    }
-    return static_cast<int>(view);
-}
-
-View TabToView(int tab)
-{
-    switch (tab) {
-    case 1:
-        return View::Devices;
-    case 2:
-        return View::Effects;
-    default:
-        return View::Install;
-    }
-}
-
-bool TabAvailable(int tab)
-{
-    switch (tab) {
-    case 1:
-        return DevicesAvailable();
-    case 2:
-        return EffectsAvailable();
-    default:
-        return true;
-    }
+    return EndpointVisible(g_endpoints[g_effectIndex]);
 }
 
 // ---------------------------------------------------------------------------
@@ -354,60 +251,6 @@ void ShowEffectControls(apo::EffectType type, bool show)
     }
 }
 
-void UpdateViewVisibility()
-{
-    auto showAll = [](std::initializer_list<HWND> controls, bool show) {
-        for (HWND control : controls) {
-            if (control != nullptr) {
-                ShowWindow(control, show ? SW_SHOW : SW_HIDE);
-            }
-        }
-    };
-
-    const bool simple = g_view == View::Simple;
-    const bool install = g_view == View::Install;
-    const bool devices = g_view == View::Devices;
-    const bool effects = IsEffectView();
-
-    // The tab control is the only chrome the Simple view removes. The title and
-    // status bar stay where they are.
-    if (g_tabs != nullptr) {
-        ShowWindow(g_tabs, simple ? SW_HIDE : SW_SHOW);
-    }
-
-    showAll({g_groupFiles, g_dllLabel, g_dllValue, g_dllStatus, g_comLabel,
-             g_comValue, g_comStatus, g_apoLabel, g_apoValue, g_apoStatus,
-             g_overall, g_filesNote, g_install, g_uninstall},
-            install);
-
-    showAll({g_groupDevices, g_list, g_isolate, g_hint, g_devicesUnsaved,
-             g_devicesApply, g_devicesReset},
-            devices);
-
-    showAll({g_effectDeviceLabel, g_effectDeviceCombo, g_effectPresetLabel,
-             g_effectPresetCombo, g_effectListGroup, g_effectList,
-             g_effectAdd, g_effectGroup, g_effectHeading, g_listen,
-             g_listenNote, g_meter, g_effectsUnsaved, g_effectsApply,
-             g_effectsReset},
-            effects);
-
-    showAll({g_simpleEnable, g_simpleHint}, simple);
-
-    ShowWindow(g_effectGraph,
-               (effects && HasEffectSelection() &&
-                ui::GraphSupported(g_effectType))
-                   ? SW_SHOW
-                   : SW_HIDE);
-
-    for (int i = 0; i < static_cast<int>(apo::EffectType::Count); ++i) {
-        ShowEffectControls(static_cast<apo::EffectType>(i), false);
-    }
-    if (effects && HasEffectSelection()) {
-        ShowEffectControls(g_effectType, true);
-    }
-    RefreshEffectGraph();
-}
-
 void EnableEffectControls(bool enabled)
 {
     const HWND controls[] = {
@@ -462,6 +305,8 @@ void ClearEffectEditor()
     ShowWindow(g_effectGraph, SW_HIDE);
     g_effectLoading = false;
     RefreshEffectGraph();
+    Relayout();
+    UpdateParamResetButtons();
 }
 
 // Rebuilds the list rows from the selected endpoint's effect array. Called when
@@ -649,20 +494,15 @@ void ShowEffectForSelected()
                  effect.dynamics.expand ? BST_CHECKED : BST_UNCHECKED, 0);
 
     SetWindowTextW(g_effectHeading, apo::EffectTypeName(effect.type));
-    if (IsEffectView()) {
-        // The parameter panel is shared: hide every type first so switching to
-        // an effect of another type does not leave the previous controls on
-        // screen.
-        for (int i = 0; i < static_cast<int>(apo::EffectType::Count); ++i) {
-            ShowEffectControls(static_cast<apo::EffectType>(i), false);
-        }
-        ShowEffectControls(effect.type, true);
+    // The parameter panel is shared: hide every type first so switching to an
+    // effect of another type does not leave the previous controls on screen.
+    for (int i = 0; i < static_cast<int>(apo::EffectType::Count); ++i) {
+        ShowEffectControls(static_cast<apo::EffectType>(i), false);
     }
+    ShowEffectControls(effect.type, true);
 
     ShowWindow(g_effectGraph,
-               (IsEffectView() && ui::GraphSupported(effect.type))
-                   ? SW_SHOW
-                   : SW_HIDE);
+               ui::GraphSupported(effect.type) ? SW_SHOW : SW_HIDE);
 
     const bool hasProfile = apo::FileExists(
         apo::NoiseProfilePath(g_endpoints[g_effectIndex].id));
@@ -675,6 +515,8 @@ void ShowEffectForSelected()
               L"Audio stops briefly.");
     g_effectLoading = false;
     RefreshEffectGraph();
+    Relayout();
+    UpdateParamResetButtons();
 }
 
 bool CommitEffectEditor(bool showValues = true)
@@ -757,6 +599,215 @@ bool CommitEffectEditor(bool showValues = true)
     return true;
 }
 
+namespace {
+
+bool SameValue(double left, double right)
+{
+    return std::abs(left - right) < 1e-6;
+}
+
+bool ParameterAtDefault(const apo::EffectInstance& effect,
+                        const apo::EffectInstance& defaults, int param)
+{
+    switch (param) {
+    case ParamResetNoiseReduction:
+        return SameValue(effect.noise.reductionDb, defaults.noise.reductionDb);
+    case ParamResetGateThreshold:
+        return SameValue(effect.gate.thresholdDb, defaults.gate.thresholdDb);
+    case ParamResetGateRange:
+        return SameValue(effect.gate.rangeDb, defaults.gate.rangeDb);
+    case ParamResetGateAttack:
+        return SameValue(effect.gate.attackMs, defaults.gate.attackMs);
+    case ParamResetGateHold:
+        return SameValue(effect.gate.holdMs, defaults.gate.holdMs);
+    case ParamResetGateRelease:
+        return SameValue(effect.gate.releaseMs, defaults.gate.releaseMs);
+    case ParamResetGateLookahead:
+        return SameValue(effect.gate.lookaheadMs, defaults.gate.lookaheadMs);
+    case ParamResetCompThreshold:
+        return SameValue(effect.compressor.thresholdDb,
+                         defaults.compressor.thresholdDb);
+    case ParamResetCompRatio:
+        return SameValue(effect.compressor.ratio, defaults.compressor.ratio);
+    case ParamResetCompAttack:
+        return SameValue(effect.compressor.attackMs,
+                         defaults.compressor.attackMs);
+    case ParamResetCompRelease:
+        return SameValue(effect.compressor.releaseMs,
+                         defaults.compressor.releaseMs);
+    case ParamResetMakeup:
+        return SameValue(effect.gain.gainDb, defaults.gain.gainDb);
+    case ParamResetDynExpand:
+        return effect.dynamics.expand == defaults.dynamics.expand;
+    case ParamResetDynFrequency:
+        return SameValue(effect.dynamics.frequencyHz,
+                         defaults.dynamics.frequencyHz);
+    case ParamResetDynQ:
+        return SameValue(effect.dynamics.q, defaults.dynamics.q);
+    case ParamResetDynThreshold:
+        return SameValue(effect.dynamics.thresholdDb,
+                         defaults.dynamics.thresholdDb);
+    case ParamResetDynRatio:
+        return SameValue(effect.dynamics.ratio, defaults.dynamics.ratio);
+    case ParamResetDynRange:
+        return SameValue(effect.dynamics.rangeDb, defaults.dynamics.rangeDb);
+    case ParamResetDynAttack:
+        return SameValue(effect.dynamics.attackMs, defaults.dynamics.attackMs);
+    case ParamResetDynRelease:
+        return SameValue(effect.dynamics.releaseMs, defaults.dynamics.releaseMs);
+    case ParamResetReverbMix:
+        return SameValue(effect.reverb.mix, defaults.reverb.mix);
+    case ParamResetReverbSize:
+        return SameValue(effect.reverb.size, defaults.reverb.size);
+    case ParamResetReverbDamping:
+        return SameValue(effect.reverb.damping, defaults.reverb.damping);
+    case ParamResetReverbPredelay:
+        return SameValue(effect.reverb.predelayMs, defaults.reverb.predelayMs);
+    case ParamResetDistFunction:
+        return effect.distortion.function == defaults.distortion.function;
+    case ParamResetDistDrive:
+        return SameValue(effect.distortion.driveDb, defaults.distortion.driveDb);
+    case ParamResetDistCurvature:
+        return SameValue(effect.distortion.curvature,
+                         defaults.distortion.curvature);
+    case ParamResetDistOutput:
+        return SameValue(effect.distortion.outputDb, defaults.distortion.outputDb);
+    default:
+        return true;
+    }
+}
+
+} // namespace
+
+void UpdateParamResetButtons()
+{
+    if (g_busy || g_effectLoading || !HasEffectSelection() ||
+        !CommitEffectEditor(false)) {
+        for (HWND button : g_paramResetButtons) {
+            EnableWindow(button, FALSE);
+        }
+        return;
+    }
+
+    const apo::EffectInstance effect =
+        apo::ActivePreset(g_endpoints[g_effectIndex].settings)
+            .effects[g_effectSelection];
+    const apo::EffectInstance defaults =
+        apo::MakeEffect(effect.type, effect.id);
+    for (int param = 0; param < ParamResetCount; ++param) {
+        EnableWindow(g_paramResetButtons[param],
+                     !ParameterAtDefault(effect, defaults, param));
+    }
+}
+
+void ResetParameter(int param)
+{
+    if (g_busy || !HasEffectSelection() || !CommitEffectEditor(false)) {
+        return;
+    }
+
+    apo::Endpoint& endpoint = g_endpoints[g_effectIndex];
+    apo::ApoSettings settings = endpoint.settings;
+    apo::EffectInstance& effect =
+        apo::ActivePreset(settings).effects[g_effectSelection];
+    const apo::EffectInstance defaults =
+        apo::MakeEffect(effect.type, effect.id);
+
+    switch (param) {
+    case ParamResetNoiseReduction:
+        effect.noise.reductionDb = defaults.noise.reductionDb;
+        break;
+    case ParamResetGateThreshold:
+        effect.gate.thresholdDb = defaults.gate.thresholdDb;
+        break;
+    case ParamResetGateRange:
+        effect.gate.rangeDb = defaults.gate.rangeDb;
+        break;
+    case ParamResetGateAttack:
+        effect.gate.attackMs = defaults.gate.attackMs;
+        break;
+    case ParamResetGateHold:
+        effect.gate.holdMs = defaults.gate.holdMs;
+        break;
+    case ParamResetGateRelease:
+        effect.gate.releaseMs = defaults.gate.releaseMs;
+        break;
+    case ParamResetGateLookahead:
+        effect.gate.lookaheadMs = defaults.gate.lookaheadMs;
+        break;
+    case ParamResetCompThreshold:
+        effect.compressor.thresholdDb = defaults.compressor.thresholdDb;
+        break;
+    case ParamResetCompRatio:
+        effect.compressor.ratio = defaults.compressor.ratio;
+        break;
+    case ParamResetCompAttack:
+        effect.compressor.attackMs = defaults.compressor.attackMs;
+        break;
+    case ParamResetCompRelease:
+        effect.compressor.releaseMs = defaults.compressor.releaseMs;
+        break;
+    case ParamResetMakeup:
+        effect.gain.gainDb = defaults.gain.gainDb;
+        break;
+    case ParamResetDynExpand:
+        effect.dynamics.expand = defaults.dynamics.expand;
+        break;
+    case ParamResetDynFrequency:
+        effect.dynamics.frequencyHz = defaults.dynamics.frequencyHz;
+        break;
+    case ParamResetDynQ:
+        effect.dynamics.q = defaults.dynamics.q;
+        break;
+    case ParamResetDynThreshold:
+        effect.dynamics.thresholdDb = defaults.dynamics.thresholdDb;
+        break;
+    case ParamResetDynRatio:
+        effect.dynamics.ratio = defaults.dynamics.ratio;
+        break;
+    case ParamResetDynRange:
+        effect.dynamics.rangeDb = defaults.dynamics.rangeDb;
+        break;
+    case ParamResetDynAttack:
+        effect.dynamics.attackMs = defaults.dynamics.attackMs;
+        break;
+    case ParamResetDynRelease:
+        effect.dynamics.releaseMs = defaults.dynamics.releaseMs;
+        break;
+    case ParamResetReverbMix:
+        effect.reverb.mix = defaults.reverb.mix;
+        break;
+    case ParamResetReverbSize:
+        effect.reverb.size = defaults.reverb.size;
+        break;
+    case ParamResetReverbDamping:
+        effect.reverb.damping = defaults.reverb.damping;
+        break;
+    case ParamResetReverbPredelay:
+        effect.reverb.predelayMs = defaults.reverb.predelayMs;
+        break;
+    case ParamResetDistFunction:
+        effect.distortion.function = defaults.distortion.function;
+        break;
+    case ParamResetDistDrive:
+        effect.distortion.driveDb = defaults.distortion.driveDb;
+        break;
+    case ParamResetDistCurvature:
+        effect.distortion.curvature = defaults.distortion.curvature;
+        break;
+    case ParamResetDistOutput:
+        effect.distortion.outputDb = defaults.distortion.outputDb;
+        break;
+    default:
+        return;
+    }
+
+    apo::ClampSettings(settings);
+    endpoint.settings = settings;
+    ShowEffectForSelected();
+    MarkSettingsDirty();
+}
+
 void MarkSettingsDirty()
 {
     if (g_effectLoading || !ValidEffectIndex()) {
@@ -793,14 +844,21 @@ void AddEffect(apo::EffectType type)
         return;
     }
 
-    preset.effects[preset.effectCount] =
-        apo::MakeEffect(type, preset.nextEffectId++);
-    g_effectSelection = preset.effectCount;
-    ++preset.effectCount;
+    // The list order is the processing order. Insert after the highlighted
+    // effect, or append when nothing is selected.
+    const int insertAt =
+        g_effectSelection >= 0 && g_effectSelection < preset.effectCount
+            ? g_effectSelection + 1
+            : preset.effectCount;
+    for (int i = preset.effectCount; i > insertAt; --i) {
+        preset.effects[i] = preset.effects[i - 1];
+    }
 
-    // The list order is the processing order, so the new effect is appended at
-    // the end. Deleting it later discards its values; adding the same type
-    // again starts from the type defaults.
+    preset.effects[insertAt] =
+        apo::MakeEffect(type, preset.nextEffectId++);
+    ++preset.effectCount;
+    g_effectSelection = insertAt;
+
     RebuildEffectList();
     ShowEffectForSelected();
     MarkSettingsDirty();
@@ -831,10 +889,26 @@ void DeleteEffect(int row)
         g_effectSelection = (row < preset.effectCount) ? row : row - 1;
     }
 
-    RebuildEffectList();
+    // Remove only the clicked row. Rebuilding the whole list and relaying out
+    // the window for every cross click makes rapid deletions feel throttled.
+    g_effectLoading = true;
+    ListView_DeleteItem(g_effectList, row);
+    for (int i = 0; i < preset.effectCount; ++i) {
+        ListView_SetCheckState(g_effectList, i,
+                               apo::EffectEnabled(preset.effects[i])
+                                   ? TRUE
+                                   : FALSE);
+    }
+    if (g_effectSelection >= 0) {
+        ListView_SetItemState(g_effectList, g_effectSelection,
+                              LVIS_SELECTED | LVIS_FOCUSED,
+                              LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_EnsureVisible(g_effectList, g_effectSelection, FALSE);
+    }
+    g_effectLoading = false;
+
     ShowEffectForSelected();
     MarkSettingsDirty();
-    Relayout();
 }
 
 void DoAddEffect()
@@ -850,6 +924,8 @@ void DoAddEffect()
     }
     AddEffect(type);
 }
+
+void DoApplyEffects();
 
 void DoLiveApply()
 {
@@ -868,23 +944,16 @@ void DoLiveApply()
         return;
     }
 
-    // A pending Devices isolation edit must not be persisted by an effect
-    // save. The Devices view applies it together with the binding change.
-    apo::ApoSettings toSave = endpoint.settings;
-    if (endpoint.isolationDirty) {
-        apo::ApoSettings persisted;
-        apo::LoadSettings(endpoint.id, persisted);
-        toSave.isolateEffects = persisted.isolateEffects;
-    }
-
+    const apo::ApoSettings& toSave = endpoint.settings;
     const bool bound = endpoint.Enabled();
 
-    // A bound APO needs a live channel. If it is missing, leave the edit
-    // pending so the normal Apply path can perform the one restart that
-    // installs it. An unbound Simple-view device has no channel yet; its
-    // settings are only saved so the next Enable starts from them.
+    // A bound APO needs a live channel. If it is missing, use the normal apply
+    // path, which performs the one restart that installs it. An unbound device
+    // has no channel yet; its settings are only saved so the next Enable starts
+    // from them.
     if (bound && (!g_files.dllUpToDate ||
                   !apo::RuntimeSettingsFileReady(endpoint.id))) {
+        DoApplyEffects();
         return;
     }
 
@@ -1023,393 +1092,88 @@ bool StartListening()
 // UI state updates
 // ---------------------------------------------------------------------------
 
-void SetApplyHighlight(HWND button, bool dirty)
+void UpdateChromeUi()
 {
-    LONG style = GetWindowLongW(button, GWL_STYLE);
-    style &= ~(BS_PUSHBUTTON | BS_DEFPUSHBUTTON);
-    style |= dirty ? BS_DEFPUSHBUTTON : BS_PUSHBUTTON;
-    SetWindowLongW(button, GWL_STYLE, style);
-    SetWindowTextW(button, dirty ? L"Apply changes" : L"Apply");
-    SendMessageW(button, WM_SETFONT,
-                 reinterpret_cast<WPARAM>(dirty ? g_boldFont : g_font), TRUE);
-    InvalidateRect(button, nullptr, TRUE);
-}
-
-
-void UpdateFilesUi()
-{
-    const bool stale = g_files.DllStale();
-    SetWindowTextW(g_dllStatus,
-                   !g_files.dllPresent
-                       ? L"missing"
-                       : (stale ? L"outdated" : L"present"));
-    SetWindowTextW(g_comStatus,
-                   g_files.comRegistered
-                       ? L"registered"
-                       : (g_files.registeredPath.empty() ? L"not registered"
-                                                        : L"wrong path"));
-    SetWindowTextW(g_apoStatus,
-                   g_files.apoKeyPresent ? L"present" : L"missing");
-
-    SetWindowTextW(
-        g_overall,
-        g_files.FullyInstalled()
-            ? (stale ? L"Installed (DLL outdated)" : L"Installed")
-            : (g_files.AnyPresent() ? L"Partial" : L"Not installed"));
-
-    SetWindowTextW(g_install, stale ? L"Update" : L"Install");
-    SetWindowTextW(
-        g_filesNote,
-        stale ? L"The installed DLL is older than this app. Click Update to "
-                L"replace it; audio stops briefly."
-              : L"Install and Uninstall stop audio for about a second.");
-
-    EnableWindow(g_install, !g_busy && (!g_files.FullyInstalled() || stale));
-    EnableWindow(g_uninstall, !g_busy && g_files.AnyPresent());
     EnableWindow(g_refresh, !g_busy);
-    EnableWindow(g_logButton, !g_busy);
-
-    if (g_tabs != nullptr) {
-        InvalidateRect(g_tabs, nullptr, TRUE);
-    }
-}
-
-void UpdateDevicesUi()
-{
-    const bool available = DevicesAvailable();
-    const bool hasDevice =
-        g_deviceIndex >= 0 &&
-        g_deviceIndex < static_cast<int>(g_endpoints.size());
-    const bool dirty = DevicesDirty();
-    const bool pending = DevicesPending();
-
-    EnableWindow(g_list, available);
-    EnableWindow(g_isolate,
-                 !g_busy && available && hasDevice &&
-                     (g_endpoints[g_deviceIndex].compositePresent ||
-                      g_endpoints[g_deviceIndex].settings.isolateEffects));
-    EnableWindow(g_devicesApply, !g_busy && available && pending);
-    EnableWindow(g_devicesReset, !g_busy && available && dirty);
-    SetApplyHighlight(g_devicesApply, pending);
-    SetWindowTextW(g_devicesUnsaved,
-                   dirty ? L"Unsaved changes"
-                         : (pending ? L"Apply to finish the update" : L""));
-
-    if (!available) {
-        SetWindowTextW(g_hint, L"Install the APO files first.");
-    } else if (g_endpoints.empty()) {
-        SetWindowTextW(g_hint, L"No capture devices found.");
-    } else if (pending && !dirty) {
-        SetWindowTextW(g_hint,
-                       L"Apply moves the effect to the endpoint slot so apps "
-                       L"that use raw capture are processed too. Audio stops "
-                       L"briefly.");
-    } else {
-        SetWindowTextW(g_hint,
-                       L"Check the devices to apply the effect. Apply stops "
-                       L"audio briefly.");
-    }
+    ui::UpdateMenuCommands(g_window, g_busy,
+                           !g_files.FullyInstalled() || g_files.DllStale(),
+                           g_files.AnyPresent());
 }
 
 void UpdateEffectsUi()
 {
-    const bool available = EffectEditorAvailable();
     const bool hasDevice = ValidEffectIndex();
     const bool dirty = EffectsDirty();
+    const bool active =
+        hasDevice && apo::IsDeviceActive(g_endpoints[g_effectIndex].state);
     const bool bound = hasDevice && g_endpoints[g_effectIndex].Enabled();
 
-    // Lock the device selector while edits are pending so a half-edited
-    // device cannot be left behind. Apply or Reset unlocks it.
-    EnableWindow(g_effectDeviceCombo, !g_busy && available && !dirty);
+    // Lock the device selector while edits are pending so a half-edited device
+    // cannot be left behind. The automatic apply unlocks it.
+    EnableWindow(g_effectDeviceCombo, !g_busy && !dirty);
     // The preset selector only changes which list is edited, so it stays usable
     // while edits are pending; the switch commits the editor and applies live.
-    EnableWindow(g_effectPresetCombo, !g_busy && available && hasDevice);
+    EnableWindow(g_effectPresetCombo, !g_busy && hasDevice);
     // Keep the list enabled while busy: the native disabled state repaints the
-    // whole control light. Interaction is rejected in the notification
-    // handler instead.
-    EnableWindow(g_effectList, available && hasDevice);
-    EnableEffectControls(!g_busy && available && hasDevice);
+    // whole control light. Interaction is rejected in the notification handler
+    // instead.
+    EnableWindow(g_effectList, hasDevice);
+    EnableEffectControls(!g_busy && hasDevice);
     const int effectCount =
         hasDevice ? apo::ActivePreset(g_endpoints[g_effectIndex].settings)
                         .effectCount
                   : 0;
     EnableWindow(g_effectAdd,
-                 !g_busy && available && hasDevice &&
-                     effectCount < apo::kMaxEffects);
-    EnableWindow(g_listen, !g_busy && hasDevice && bound);
-    EnableWindow(g_effectsApply, !g_busy && available && dirty);
-    EnableWindow(g_effectsReset, !g_busy && available && dirty);
-    SetApplyHighlight(g_effectsApply, dirty);
-    SetWindowTextW(g_effectsUnsaved, dirty ? L"Unsaved changes" : L"");
+                 !g_busy && hasDevice && effectCount < apo::kMaxEffects);
+    EnableWindow(g_listen, !g_busy && hasDevice && active && bound);
+    UpdateParamResetButtons();
 
-    UpdateSimpleUi();
+    UpdateMainUi();
 }
 
-void UpdateSimpleUi()
+void UpdateMainUi()
 {
-    if (g_simpleEnable == nullptr || g_simpleHint == nullptr) {
+    if (g_mainEnable == nullptr || g_mainHint == nullptr) {
         return;
     }
 
     const bool hasDevice = ValidEffectIndex();
+    const bool active =
+        hasDevice && apo::IsDeviceActive(g_endpoints[g_effectIndex].state);
     const bool bound = hasDevice && g_endpoints[g_effectIndex].Enabled();
 
-    EnableWindow(g_simpleEnable, !g_busy && hasDevice);
+    EnableWindow(g_mainEnable, !g_busy && active);
     // Keep the user's just-clicked state visible while the worker runs. The
     // refresh after the operation sets the real state.
     if (!g_busy) {
-        SendMessageW(g_simpleEnable, BM_SETCHECK,
+        SendMessageW(g_mainEnable, BM_SETCHECK,
                      bound ? BST_CHECKED : BST_UNCHECKED, 0);
     }
 
     std::wstring hint;
     if (!hasDevice) {
-        hint = L"Select a capture device.";
+        hint = g_endpoints.empty()
+                   ? L"No capture devices found."
+                   : L"No active capture devices. Turn on View / Show all "
+                     L"devices to edit an inactive endpoint.";
+    } else if (!active) {
+        hint = L"This device is inactive. Its settings can be edited, but "
+               L"Enable needs an active device.";
     } else if (bound) {
-        hint = L"Enabled on this device. Effects apply live.";
+        hint = L"Enabled on this device. Effects apply live and other effects "
+               L"are ignored.";
     } else if (!g_files.FullyInstalled() || g_files.DllStale()) {
         hint = L"Not enabled. Checking Enable installs or updates the APO, "
                L"then applies it to this device.";
     } else {
         hint = L"Not enabled. Checking Enable applies the APO to this device.";
     }
-    SetWindowTextW(g_simpleHint, hint.c_str());
-}
-
-void ShowDeviceForSelected()
-{
-    g_loading = true;
-    const bool checked =
-        g_deviceIndex >= 0 &&
-        g_deviceIndex < static_cast<int>(g_endpoints.size()) &&
-        g_endpoints[g_deviceIndex].settings.isolateEffects;
-    SendMessageW(g_isolate, BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED,
-                 0);
-    g_loading = false;
-}
-
-// Store each tab's availability in its item parameter. The custom dark-mode
-// tab painter reads it to gray out unreachable tabs, and the notification
-// handler uses it to refuse selection changes.
-void UpdateTabAvailability()
-{
-    if (g_tabs == nullptr) {
-        return;
-    }
-    const int count = TabCtrl_GetItemCount(g_tabs);
-    for (int i = 0; i < count; ++i) {
-        TCITEMW item{};
-        item.mask = TCIF_PARAM;
-        item.lParam = TabAvailable(i) ? 1 : 0;
-        TabCtrl_SetItem(g_tabs, i, &item);
-    }
-    InvalidateRect(g_tabs, nullptr, TRUE);
-}
-
-void UpdateViewAvailability()
-{
-    if (SimpleMode()) {
-        // The Simple view has no tabs and stays available even before the APO
-        // is installed. Refresh the controls that depend on the binding.
-        UpdateEffectsUi();
-        return;
-    }
-
-    if (g_view == View::Effects && !EffectsAvailable()) {
-        SetActiveView(DevicesAvailable() ? View::Devices : View::Install);
-    } else if (g_view == View::Devices && !DevicesAvailable()) {
-        SetActiveView(View::Install);
-    }
-    UpdateTabAvailability();
-}
-
-void SetActiveView(View view)
-{
-    // The interface mode owns the view: Simple never shows a tab, and Advanced
-    // never shows the Simple layout.
-    if (SimpleMode()) {
-        view = View::Simple;
-    } else if (view == View::Simple) {
-        view = DefaultView();
-    }
-
-    if (view == View::Effects && !EffectsAvailable()) {
-        view = DevicesAvailable() ? View::Devices : View::Install;
-    }
-    if (view == View::Devices && !DevicesAvailable()) {
-        view = View::Install;
-    }
-
-    g_view = view;
-    if (view != View::Simple) {
-        g_tabLoading = true;
-        TabCtrl_SetCurSel(g_tabs, ViewToTab(view));
-        g_tabLoading = false;
-    }
-
-    UpdateViewVisibility();
-    Relayout();
-    UpdateFilesUi();
-    UpdateDevicesUi();
-    UpdateEffectsUi();
-}
-
-void OnIsolateClicked()
-{
-    if (g_deviceIndex < 0 ||
-        g_deviceIndex >= static_cast<int>(g_endpoints.size())) {
-        return;
-    }
-
-    const bool checked =
-        SendMessageW(g_isolate, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    apo::Endpoint& endpoint = g_endpoints[g_deviceIndex];
-    endpoint.settings.isolateEffects = checked;
-    endpoint.isolationDirty = checked != endpoint.isolateSaved;
-    UpdateDevicesUi();
-}
-
-void ResetDevices()
-{
-    if (g_busy) {
-        return;
-    }
-
-    // Revert the checkboxes to the bindings that are currently persisted.
-    g_loading = true;
-    for (size_t i = 0; i < g_endpoints.size(); ++i) {
-        ListView_SetCheckState(g_list, static_cast<int>(i),
-                               g_endpoints[i].Enabled() ? TRUE : FALSE);
-    }
-    g_loading = false;
-
-    // Restore only the isolation option; effect edits made in the Effects
-    // view must survive a Devices reset.
-    for (apo::Endpoint& endpoint : g_endpoints) {
-        if (!endpoint.isolationDirty) {
-            continue;
-        }
-        apo::ApoSettings persisted;
-        apo::LoadSettings(endpoint.id, persisted);
-        endpoint.settings.isolateEffects = persisted.isolateEffects;
-        endpoint.isolationDirty = false;
-    }
-
-    ShowDeviceForSelected();
-    UpdateDevicesUi();
-}
-
-void ResetEffects()
-{
-    if (g_busy) {
-        return;
-    }
-
-    // Discard unsaved effect edits by reloading the persisted settings. Keep
-    // the Devices view's isolation edit, which lives in the same file.
-    for (apo::Endpoint& endpoint : g_endpoints) {
-        if (!endpoint.settingsDirty) {
-            continue;
-        }
-        apo::ApoSettings persisted;
-        apo::LoadSettings(endpoint.id, persisted);
-        const bool isolateEdit = endpoint.settings.isolateEffects;
-        endpoint.settings = persisted;
-        endpoint.settings.isolateEffects = isolateEdit;
-        endpoint.settingsDirty = false;
-    }
-
-    RebuildEffectList();
-    ShowEffectForSelected();
-    UpdateEffectsUi();
-    Relayout();
+    SetWindowTextW(g_mainHint, hint.c_str());
 }
 
 // ---------------------------------------------------------------------------
 // Refresh
 // ---------------------------------------------------------------------------
-
-void RebuildDeviceList(const std::wstring& selectedId)
-{
-    g_loading = true;
-    SendMessageW(g_list, WM_SETREDRAW, FALSE, 0);
-    ListView_DeleteAllItems(g_list);
-    for (size_t i = 0; i < g_endpoints.size(); ++i) {
-        const apo::Endpoint& endpoint = g_endpoints[i];
-
-        LVITEMW item{};
-        item.mask = LVIF_TEXT | LVIF_PARAM;
-        item.iItem = static_cast<int>(i);
-        item.pszText = const_cast<wchar_t*>(endpoint.name.c_str());
-        item.lParam = static_cast<LPARAM>(i);
-        const int row = ListView_InsertItem(g_list, &item);
-
-        std::wstring state = apo::DeviceStateText(endpoint.state);
-        ListView_SetItemText(g_list, row, 1, state.data());
-
-        std::wstring apoText = endpoint.Enabled() ? L"Installed" : L"-";
-        ListView_SetItemText(g_list, row, 2, apoText.data());
-
-        std::wstring notes;
-        if (endpoint.disableSysFx) {
-            notes = L"System effects disabled";
-        }
-        if (endpoint.compositePresent) {
-            if (!notes.empty()) {
-                notes += L"; ";
-            }
-            notes += L"effect pack";
-            if (endpoint.settings.isolateEffects && endpoint.Enabled()) {
-                notes += endpoint.isolatePendingCleanup
-                             ? L"; other effects pending Apply"
-                             : L"; other effects ignored";
-            }
-        }
-        if (endpoint.streamOurs) {
-            if (!notes.empty()) {
-                notes += L"; ";
-            }
-            notes += L"also in Stream";
-        }
-        if (endpoint.BoundAtEndpoint()) {
-            if (!notes.empty()) {
-                notes += L"; ";
-            }
-            notes += L"endpoint effect";
-        } else if (endpoint.Enabled()) {
-            if (!notes.empty()) {
-                notes += L"; ";
-            }
-            notes += L"Apply to use the endpoint effect";
-        }
-        ListView_SetItemText(g_list, row, 3, notes.data());
-
-        ListView_SetCheckState(g_list, row, endpoint.Enabled());
-    }
-
-    int selectedRow = -1;
-    if (!selectedId.empty()) {
-        for (size_t i = 0; i < g_endpoints.size(); ++i) {
-            if (_wcsicmp(g_endpoints[i].id.c_str(), selectedId.c_str()) == 0) {
-                selectedRow = static_cast<int>(i);
-                break;
-            }
-        }
-    }
-    if (selectedRow < 0 && !g_endpoints.empty()) {
-        selectedRow = 0;
-    }
-    if (selectedRow >= 0) {
-        ListView_SetItemState(g_list, selectedRow,
-                              LVIS_SELECTED | LVIS_FOCUSED,
-                              LVIS_SELECTED | LVIS_FOCUSED);
-        ListView_EnsureVisible(g_list, selectedRow, FALSE);
-    }
-    g_deviceIndex = selectedRow;
-    SendMessageW(g_list, WM_SETREDRAW, TRUE, 0);
-    InvalidateRect(g_list, nullptr, TRUE);
-    g_loading = false;
-}
 
 void RebuildEffectCombo(const std::wstring& selectedId)
 {
@@ -1417,23 +1181,17 @@ void RebuildEffectCombo(const std::wstring& selectedId)
     SendMessageW(g_effectDeviceCombo, WM_SETREDRAW, FALSE, 0);
     SendMessageW(g_effectDeviceCombo, CB_RESETCONTENT, 0, 0);
 
-    const bool allActive = SimpleMode();
     int selectedItem = -1;
     for (size_t i = 0; i < g_endpoints.size(); ++i) {
         const apo::Endpoint& endpoint = g_endpoints[i];
-        if (allActive) {
-            // The Simple view offers every capture device Windows can use, not
-            // only the ones that are already bound.
-            if (!apo::IsDeviceActive(endpoint.state)) {
-                continue;
-            }
-        } else if (!endpoint.Enabled()) {
+        if (!EndpointVisible(endpoint)) {
             continue;
         }
 
+        const std::wstring label = SelectorLabel(endpoint);
         const int item = static_cast<int>(SendMessageW(
             g_effectDeviceCombo, CB_ADDSTRING, 0,
-            reinterpret_cast<LPARAM>(endpoint.name.c_str())));
+            reinterpret_cast<LPARAM>(label.c_str())));
         SendMessageW(g_effectDeviceCombo, CB_SETITEMDATA, item,
                      static_cast<LPARAM>(i));
         if (selectedItem < 0 && selectedId.empty()) {
@@ -1468,29 +1226,22 @@ void RebuildEffectCombo(const std::wstring& selectedId)
 
 void Refresh()
 {
-    // Refresh is also called after an apply. Preserve the audition stream when
-    // the same endpoint is still selected; only stop it if that endpoint is
-    // gone or the selection changed.
+    // Refresh also runs after Apply. Keep the audition stream when the same
+    // endpoint is still selected; StopListening handles the cases where audio
+    // actually restarted.
     const bool wasListening = IsListening();
     std::wstring listenId;
     if (wasListening && ValidEffectIndex()) {
         listenId = g_endpoints[g_effectIndex].id;
     }
 
-    std::wstring deviceId;
-    if (g_deviceIndex >= 0 &&
-        g_deviceIndex < static_cast<int>(g_endpoints.size())) {
-        deviceId = g_endpoints[g_deviceIndex].id;
-    }
-
     std::wstring effectId;
-    if (g_effectIndex >= 0 &&
-        g_effectIndex < static_cast<int>(g_endpoints.size())) {
+    if (ValidEffectIndex()) {
         effectId = g_endpoints[g_effectIndex].id;
     }
 
-    // Devices Apply only persists bindings and isolation. Carry unsaved
-    // effect edits across the refresh so they are not silently discarded.
+    // An install or an apply refreshes the endpoint list. Carry unsaved effect
+    // edits across it so they are not silently discarded.
     std::vector<std::pair<std::wstring, apo::ApoSettings>> pendingEffects;
     if (g_preserveDirtyEffects) {
         for (const apo::Endpoint& endpoint : g_endpoints) {
@@ -1501,20 +1252,13 @@ void Refresh()
     }
     g_preserveDirtyEffects = false;
 
-    g_deviceIndex = -1;
     g_effectIndex = -1;
     g_files = apo::GetFilesStatus();
     g_endpoints = apo::EnumEndpoints();
     for (apo::Endpoint& endpoint : g_endpoints) {
         endpoint.settingsDirty = false;
-        endpoint.isolateSaved = endpoint.settings.isolateEffects;
-        endpoint.isolationDirty = false;
     }
     for (apo::Endpoint& endpoint : g_endpoints) {
-        // The Simple view can have pending edits on an unbound device too.
-        if (!endpoint.Enabled() && !SimpleMode()) {
-            continue;
-        }
         for (const auto& pending : pendingEffects) {
             if (_wcsicmp(endpoint.id.c_str(), pending.first.c_str()) == 0) {
                 endpoint.settings = pending.second;
@@ -1524,16 +1268,12 @@ void Refresh()
         }
     }
 
-    RebuildDeviceList(deviceId);
     RebuildEffectCombo(effectId);
     RebuildEffectList();
-    ShowDeviceForSelected();
     ShowEffectForSelected();
-    UpdateFilesUi();
-    UpdateDevicesUi();
+    UpdateChromeUi();
     UpdateEffectsUi();
     ResizeColumns();
-    UpdateTabAvailability();
     RepaintAll();
 
     if (wasListening) {
@@ -1546,7 +1286,6 @@ void Refresh()
         }
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Operations
@@ -1562,8 +1301,7 @@ void StartWork(std::function<apo::Result()> work, const wchar_t* status)
     g_liveApplyPending = false;
     g_busy = true;
     SetWindowTextW(g_status, status);
-    UpdateFilesUi();
-    UpdateDevicesUi();
+    UpdateChromeUi();
     UpdateEffectsUi();
 
     g_worker = std::thread([work = std::move(work)] {
@@ -1579,6 +1317,8 @@ void DoInstall()
     }
 
     StopListening();
+    g_resumeListen = false;
+    g_resumeListenId.clear();
     g_preserveDirtyEffects = true;
     const bool update = g_files.DllStale();
     StartWork([] { return apo::InstallFiles(); },
@@ -1592,7 +1332,9 @@ void DoUninstall()
     }
 
     StopListening();
-    g_preserveDirtyEffects = false;
+    g_resumeListen = false;
+    g_resumeListenId.clear();
+    g_preserveDirtyEffects = true;
     StartWork([] { return apo::UninstallFiles(); }, L"Uninstalling...");
 }
 
@@ -1616,59 +1358,6 @@ void StartApply(std::vector<apo::Change> changes, const wchar_t* status)
     StartWork([changes = std::move(changes)] {
         return apo::ApplyChanges(changes);
     }, status);
-}
-
-void DoApplyDevices()
-{
-    if (g_busy) {
-        return;
-    }
-    if (!CommitEffectEditor()) {
-        return;
-    }
-
-    std::vector<apo::Change> changes;
-    for (size_t i = 0; i < g_endpoints.size(); ++i) {
-        const bool checked =
-            ListView_GetCheckState(g_list, static_cast<int>(i)) != FALSE;
-        const bool bindingChanged = checked != g_endpoints[i].Enabled();
-
-        // The Devices view owns binding and isolation. Effect edits are left
-        // for the Effects Apply button, so only write settings when the
-        // isolation option actually changed.
-        const bool isolateChanged =
-            g_endpoints[i].isolationDirty ||
-            g_endpoints[i].isolatePendingCleanup;
-        const bool bindingUpgrade = NeedsBindingUpgrade(g_endpoints[i]);
-        if (!bindingChanged && !isolateChanged && !bindingUpgrade) {
-            continue;
-        }
-
-        apo::Change change;
-        change.id = g_endpoints[i].id;
-        change.enable = checked;
-        change.settingsChanged = isolateChanged;
-        if (isolateChanged) {
-            if (g_endpoints[i].settingsDirty) {
-                // Persist the isolation edit on top of the saved effect
-                // settings, not on top of the unsaved edits in memory.
-                apo::ApoSettings persisted;
-                apo::LoadSettings(g_endpoints[i].id, persisted);
-                persisted.isolateEffects =
-                    g_endpoints[i].settings.isolateEffects;
-                change.settings = persisted;
-            } else {
-                change.settings = g_endpoints[i].settings;
-            }
-        }
-        changes.push_back(std::move(change));
-    }
-    if (changes.empty()) {
-        return;
-    }
-
-    g_preserveDirtyEffects = true;
-    StartApply(std::move(changes), L"Applying...");
 }
 
 void DoApplyEffects()
@@ -1702,50 +1391,45 @@ void DoApplyEffects()
     StartApply(std::move(changes), L"Applying...");
 }
 
-// Writes any pending effect edits before an enable/disable operation refreshes
-// the endpoint list. A pending Devices isolation edit is not persisted here;
-// the Devices view owns it.
+// Writes pending effect edits before an enable/disable operation refreshes the
+// endpoint list.
 void FlushDirtySettings()
 {
     for (apo::Endpoint& endpoint : g_endpoints) {
         if (!endpoint.settingsDirty) {
             continue;
         }
-
-        apo::ApoSettings toSave = endpoint.settings;
-        if (endpoint.isolationDirty) {
-            apo::ApoSettings persisted;
-            apo::LoadSettings(endpoint.id, persisted);
-            toSave.isolateEffects = persisted.isolateEffects;
-        }
-
-        if (apo::SaveSettings(endpoint.id, toSave)) {
+        if (apo::SaveSettings(endpoint.id, endpoint.settings)) {
             endpoint.settingsDirty = false;
         }
     }
 }
 
-// The Simple view's Enable checkbox. Enabling installs or updates the APO when
-// needed, then binds the selected device. Disabling unbinds it; when it was the
-// last bound device the files and registration are removed as well.
-void DoSimpleEnable(bool enable)
+// The main Enable checkbox. Enabling installs or updates the APO when needed,
+// then binds the selected device. Disabling unbinds it; when it was the last
+// bound device the files and registration are removed as well.
+void DoEnable(bool enable)
 {
     if (g_busy || !ValidEffectIndex()) {
         return;
     }
 
-    const int index = g_effectIndex;
-    const std::wstring id = g_endpoints[index].id;
-    const apo::ApoSettings settings = g_endpoints[index].settings;
-    const bool bound = g_endpoints[index].Enabled();
+    apo::Endpoint& endpoint = g_endpoints[g_effectIndex];
+    if (!apo::IsDeviceActive(endpoint.state)) {
+        return;
+    }
+
+    const std::wstring id = endpoint.id;
+    const apo::ApoSettings settings = endpoint.settings;
+    const bool bound = endpoint.Enabled();
     if (enable == bound) {
-        UpdateSimpleUi();
+        UpdateMainUi();
         return;
     }
 
     int enabledCount = 0;
-    for (const apo::Endpoint& endpoint : g_endpoints) {
-        if (endpoint.Enabled()) {
+    for (const apo::Endpoint& item : g_endpoints) {
+        if (item.Enabled()) {
             ++enabledCount;
         }
     }
@@ -1807,26 +1491,26 @@ void DoSimpleEnable(bool enable)
     }
 }
 
-void OnSimpleEnableClicked()
+void OnMainEnableClicked()
 {
     if (g_busy || !ValidEffectIndex()) {
-        UpdateSimpleUi();
+        UpdateMainUi();
         return;
     }
 
     const bool want =
-        SendMessageW(g_simpleEnable, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        SendMessageW(g_mainEnable, BM_GETCHECK, 0, 0) == BST_CHECKED;
     const bool bound = g_endpoints[g_effectIndex].Enabled();
     if (want == bound) {
         return;
     }
 
     if (!CommitEffectEditor()) {
-        UpdateSimpleUi();
+        UpdateMainUi();
         return;
     }
 
-    DoSimpleEnable(want);
+    DoEnable(want);
 }
 
 void DoCaptureNoiseProfile()
@@ -1852,18 +1536,7 @@ void DoCaptureNoiseProfile()
     const int index = g_effectIndex;
     const std::wstring id = g_endpoints[index].id;
     const bool bound = g_endpoints[index].Enabled();
-    const apo::ApoSettings original = g_endpoints[index].settings;
-    const bool isolateDirty = g_endpoints[index].isolationDirty;
-    const bool isolatePending = original.isolateEffects;
-
-    // Capture restarts audio and rewrites the settings file. Do not persist a
-    // pending isolation edit as part of that write; the Devices view owns it.
-    apo::ApoSettings captureBase = original;
-    if (isolateDirty) {
-        apo::ApoSettings persisted;
-        apo::LoadSettings(id, persisted);
-        captureBase.isolateEffects = persisted.isolateEffects;
-    }
+    const apo::ApoSettings captureBase = g_endpoints[index].settings;
 
     // The profile must be raw room noise: disable every effect so the APO is a
     // plain passthrough for the duration of the capture.
@@ -1879,13 +1552,9 @@ void DoCaptureNoiseProfile()
     g_captureIndex = index;
     g_captureSettings = captureBase;
     g_captureSucceeded = false;
-    g_captureIsolationDirty = isolateDirty;
-    g_captureIsolatePending = isolatePending;
-    g_captureIsolateSaved = captureBase.isolateEffects;
     g_busy = true;
     SetWindowTextW(g_status, L"Capturing noise profile...");
-    UpdateFilesUi();
-    UpdateDevicesUi();
+    UpdateChromeUi();
     UpdateEffectsUi();
 
     g_worker = std::thread([id, bound, captureBase, snapshot] {
@@ -2037,26 +1706,9 @@ void OnEffectListChanged(const NMLISTVIEW& item)
         }
         g_effectSelection = item.iItem;
         g_effectType = preset.effects[g_effectSelection].type;
-        UpdateViewVisibility();
         ShowEffectForSelected();
         Relayout();
     }
-}
-
-void OnDeviceListChanged(const NMLISTVIEW& item)
-{
-    if (g_loading) {
-        return;
-    }
-
-    const bool stateChanged = (item.uChanged & LVIF_STATE) != 0;
-    const bool selectionChanged =
-        stateChanged && ((item.uOldState ^ item.uNewState) & LVIS_SELECTED) != 0;
-    if (selectionChanged && (item.uNewState & LVIS_SELECTED) != 0) {
-        g_deviceIndex = item.iItem;
-        ShowDeviceForSelected();
-    }
-    UpdateDevicesUi();
 }
 
 void OnEffectComboChanged()
@@ -2088,7 +1740,7 @@ void OnEffectComboChanged()
     RebuildEffectList();
     ShowEffectForSelected();
     UpdateEffectsUi();
-    RepaintAll();
+    Relayout();
 }
 
 void OnEffectPresetChanged()
@@ -2119,58 +1771,12 @@ void OnEffectPresetChanged()
     RebuildEffectList();
     ShowEffectForSelected();
     MarkSettingsDirty();
-    RepaintAll();
+    Relayout();
 }
 
 LRESULT HandleNotify(LPARAM lParam)
 {
     auto* header = reinterpret_cast<NMHDR*>(lParam);
-
-    if (header->hwndFrom == g_tabs) {
-        switch (header->code) {
-        case TCN_SELCHANGING: {
-            if (g_tabLoading) {
-                break;
-            }
-            const int target = TabCtrl_GetCurFocus(g_tabs);
-            if (!TabAvailable(target)) {
-                return TRUE;
-            }
-            break;
-        }
-        case TCN_SELCHANGE: {
-            if (g_tabLoading) {
-                break;
-            }
-            const int selected = TabCtrl_GetCurSel(g_tabs);
-            if (!TabAvailable(selected)) {
-                g_tabLoading = true;
-                TabCtrl_SetCurSel(g_tabs, ViewToTab(g_view));
-                g_tabLoading = false;
-                return 0;
-            }
-            SetActiveView(TabToView(selected));
-            break;
-        }
-        case NM_CUSTOMDRAW: {
-            auto* draw = reinterpret_cast<NMTBCUSTOMDRAW*>(lParam);
-            if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) {
-                return CDRF_NOTIFYITEMDRAW;
-            }
-            if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
-                if (!TabAvailable(static_cast<int>(draw->nmcd.dwItemSpec))) {
-                    draw->clrText = ui::GetTheme().color.disabledText;
-                    return CDRF_NEWFONT;
-                }
-                return CDRF_DODEFAULT;
-            }
-            break;
-        }
-        default:
-            break;
-        }
-        return 0;
-    }
 
     if (header->hwndFrom == g_effectList) {
         switch (header->code) {
@@ -2201,99 +1807,14 @@ LRESULT HandleNotify(LPARAM lParam)
         return 0;
     }
 
-    if (header->hwndFrom == g_list) {
-        switch (header->code) {
-        case LVN_ITEMCHANGING: {
-            auto* item = reinterpret_cast<NMLISTVIEW*>(lParam);
-            if (g_busy && (item->uChanged & LVIF_STATE) != 0) {
-                return TRUE;
-            }
-            if ((item->uChanged & LVIF_STATE) != 0) {
-                const bool wasChecked =
-                    ((item->uOldState & LVIS_STATEIMAGEMASK) >> 12) == 2;
-                const bool nowChecked =
-                    ((item->uNewState & LVIS_STATEIMAGEMASK) >> 12) == 2;
-                if (nowChecked && !wasChecked) {
-                    const size_t index =
-                        static_cast<size_t>(item->lParam);
-                    if (index < g_endpoints.size() &&
-                        !apo::IsDeviceActive(g_endpoints[index].state)) {
-                        MessageBeep(MB_ICONWARNING);
-                        return TRUE;
-                    }
-                }
-            }
-            break;
-        }
-
-        case LVN_ITEMCHANGED:
-            OnDeviceListChanged(*reinterpret_cast<NMLISTVIEW*>(lParam));
-            break;
-
-        case LVN_GETINFOTIP: {
-            auto* tip = reinterpret_cast<NMLVGETINFOTIPW*>(lParam);
-            const size_t index = static_cast<size_t>(tip->iItem);
-            if (index < g_endpoints.size()) {
-                std::wstring text = g_endpoints[index].id;
-                if (g_endpoints[index].compositePresent) {
-                    text += L"\r\nUses an effect pack (composite FX)";
-                }
-                if (g_endpoints[index].compositePresent &&
-                    g_endpoints[index].settings.isolateEffects) {
-                    text += g_endpoints[index].isolatePendingCleanup
-                                ? L"\r\nApply to finish ignoring the other effects"
-                                : L"\r\nOther effects are ignored on this device";
-                }
-                if (g_endpoints[index].compositeOurs) {
-                    text += L"\r\nAlso bound in the composite stream chain";
-                }
-                if (g_endpoints[index].streamOurs) {
-                    text += L"\r\nAlso bound in the Stream slot";
-                }
-                if (g_endpoints[index].BoundAtEndpoint()) {
-                    text += L"\r\nBound as an endpoint effect (works for raw "
-                            L"streams)";
-                } else if (g_endpoints[index].Enabled()) {
-                    text += L"\r\nApply to move the binding to the endpoint "
-                            L"effect";
-                }
-                wcsncpy_s(tip->pszText, tip->cchTextMax, text.c_str(),
-                          _TRUNCATE);
-            }
-            break;
-        }
-
-        case NM_CUSTOMDRAW: {
-            auto* draw = reinterpret_cast<NMLVCUSTOMDRAW*>(lParam);
-            switch (draw->nmcd.dwDrawStage) {
-            case CDDS_PREPAINT:
-                return CDRF_NOTIFYITEMDRAW;
-            case CDDS_ITEMPREPAINT: {
-                const size_t index =
-                    static_cast<size_t>(draw->nmcd.lItemlParam);
-                if (index < g_endpoints.size() &&
-                    !apo::IsDeviceActive(g_endpoints[index].state)) {
-                    draw->clrText = ui::GetTheme().color.disabledText;
-                }
-                return CDRF_DODEFAULT;
-            }
-            }
-            break;
-        }
-        }
-        return 0;
-    }
 
     return 0;
 }
 
 
-LRESULT HandleStaticColorMessage(WPARAM wParam, LPARAM lParam)
+LRESULT HandleStaticColorMessage(WPARAM wParam, LPARAM)
 {
-    const int id = GetDlgCtrlID(reinterpret_cast<HWND>(lParam));
-    const bool error =
-        id == IDC_EFFECTS_UNSAVED || id == IDC_DEVICES_UNSAVED;
-    return ui::HandleStaticColor(reinterpret_cast<HDC>(wParam), error);
+    return ui::HandleStaticColor(reinterpret_cast<HDC>(wParam), false);
 }
 
 // The page panel is the parent of every view control, so it receives their
@@ -2347,6 +1868,25 @@ LRESULT CALLBACK PageProc(HWND window, UINT message, WPARAM wParam,
     return DefWindowProcW(window, message, wParam, lParam);
 }
 
+void ToggleShowAllDevices()
+{
+    if (g_busy) {
+        return;
+    }
+
+    std::wstring selectedId;
+    if (ValidEffectIndex()) {
+        selectedId = g_endpoints[g_effectIndex].id;
+    }
+
+    g_showAllDevices = !g_showAllDevices;
+    gui::SaveShowAllDevices(g_showAllDevices);
+    ui::UpdateMenuShowAllDevices(g_window, g_showAllDevices);
+
+    g_preserveDirtyEffects = true;
+    Refresh();
+}
+
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
                             LPARAM lParam)
 {
@@ -2354,16 +1894,12 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
     case WM_CREATE: {
         g_window = window;
         ui::CreateFonts();
-        g_interfaceMode = gui::LoadInterfaceMode();
-        ui::CreateMenuBar(window, g_interfaceMode);
+        g_showAllDevices = gui::LoadShowAllDevices();
+        ui::CreateMenuBar(window, g_showAllDevices);
         CreateControls(window);
         ui::ApplyNativeThemeToChildren(window);
-        ui::ApplyListStateImages(g_list);
         ui::ApplyListStateImages(g_effectList);
-        g_view = SimpleMode() ? View::Simple : View::Install;
-        UpdateViewVisibility();
         Refresh();
-        SetActiveView(SimpleMode() ? View::Simple : DefaultView());
         RepaintAll();
         return 0;
     }
@@ -2387,7 +1923,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
     }
 
     case WM_SIZE:
-        if (g_list) {
+        if (g_pageBackground != nullptr) {
             Layout(LOWORD(lParam), HIWORD(lParam));
             RepaintAll();
         }
@@ -2401,7 +1937,6 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             ui::RefreshMenuBar(window);
             ui::ApplyTitleBarTheme(window);
             ui::ApplyNativeThemeToChildren(window);
-            ui::ApplyListStateImages(g_list);
             ui::ApplyListStateImages(g_effectList);
             RepaintAll();
         }
@@ -2412,7 +1947,6 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         ui::RefreshMenuBar(window);
         ui::ApplyTitleBarTheme(window);
         ui::ApplyNativeThemeToChildren(window);
-        ui::ApplyListStateImages(g_list);
         ui::ApplyListStateImages(g_effectList);
         RepaintAll();
         break;
@@ -2444,6 +1978,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         break;
 
     case WM_DRAWITEM:
+        if (ui::DrawIconButton(
+                reinterpret_cast<DRAWITEMSTRUCT*>(lParam))) {
+            return TRUE;
+        }
         if (ui::DrawMenuItem(window,
                              reinterpret_cast<DRAWITEMSTRUCT*>(lParam))) {
             return TRUE;
@@ -2452,53 +1990,47 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
+        case IDM_FILE_INSTALL:
+            DoInstall();
+            break;
+        case IDM_FILE_UNINSTALL:
+            DoUninstall();
+            break;
         case IDM_FILE_EXIT:
             PostMessageW(window, WM_CLOSE, 0, 0);
             break;
-        case IDM_VIEW_SIMPLE:
-            if (!SimpleMode()) {
-                g_interfaceMode = gui::InterfaceMode::Simple;
-                SetActiveView(View::Simple);
-            }
-            ui::UpdateMenuMode(window, g_interfaceMode);
+        case IDM_VIEW_SHOW_ALL_DEVICES:
+            ToggleShowAllDevices();
             break;
-        case IDM_VIEW_ADVANCED:
-            if (SimpleMode()) {
-                g_interfaceMode = gui::InterfaceMode::Advanced;
-                SetActiveView(DefaultView());
-            }
-            ui::UpdateMenuMode(window, g_interfaceMode);
+        case IDM_ABOUT_INFO:
+            ui::ShowInfoDialog(window, g_files, BoundDeviceCount());
+            break;
+        case IDM_ABOUT_OPEN_LOG:
+            DoOpenLog();
             break;
         case IDC_REFRESH:
-            g_preserveDirtyEffects = false;
+            g_preserveDirtyEffects = true;
             Refresh();
-            UpdateViewAvailability();
             break;
-        case IDC_INSTALL:
-            DoInstall();
-            break;
-        case IDC_UNINSTALL:
-            DoUninstall();
-            break;
-        case IDC_DEVICES_APPLY:
-            DoApplyDevices();
-            break;
-        case IDC_DEVICES_RESET:
-            ResetDevices();
-            break;
-        case IDC_EFFECTS_APPLY:
-            DoApplyEffects();
-            break;
-        case IDC_EFFECTS_RESET:
-            ResetEffects();
+        case IDC_MAIN_ENABLE:
+            if (HIWORD(wParam) == BN_CLICKED) {
+                OnMainEnableClicked();
+            }
             break;
         case IDC_EFFECT_ADD:
             if (HIWORD(wParam) == BN_CLICKED) {
                 DoAddEffect();
             }
             break;
-        case IDC_LOG:
-            DoOpenLog();
+        case IDC_PARAM_RESET:
+            if (HIWORD(wParam) == BN_CLICKED) {
+                HWND button = reinterpret_cast<HWND>(lParam);
+                if (button != nullptr) {
+                    int param = static_cast<int>(
+                        GetWindowLongPtrW(button, GWLP_USERDATA));
+                    ResetParameter(param);
+                }
+            }
             break;
         case IDC_EFFECT_DEVICE_COMBO:
             if (HIWORD(wParam) == CBN_SELCHANGE) {
@@ -2556,16 +2088,6 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
                 MarkSettingsDirty();
             }
             break;
-        case IDC_ISOLATE:
-            if (HIWORD(wParam) == BN_CLICKED) {
-                OnIsolateClicked();
-            }
-            break;
-        case IDC_SIMPLE_ENABLE:
-            if (HIWORD(wParam) == BN_CLICKED) {
-                OnSimpleEnableClicked();
-            }
-            break;
         case IDC_NOISE_CAPTURE:
             if (HIWORD(wParam) == BN_CLICKED) {
                 DoCaptureNoiseProfile();
@@ -2603,28 +2125,16 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         if (kind == WorkKind::CaptureNoise && captureOk &&
             captureIndex >= 0 &&
             captureIndex < static_cast<int>(g_endpoints.size())) {
-            // Keep unsaved edits on the other devices. The captured device was
-            // saved by the worker, so its effect edits are no longer dirty.
+            // The captured device was saved by the worker, so its effect edits
+            // are no longer dirty.
             apo::Endpoint& endpoint = g_endpoints[captureIndex];
             endpoint.settings = g_captureSettings;
             endpoint.settingsDirty = false;
-            if (g_captureIsolationDirty) {
-                // The capture deliberately did not persist the pending
-                // isolation edit, so keep it pending for the Devices view.
-                endpoint.settings.isolateEffects = g_captureIsolatePending;
-                endpoint.isolationDirty = true;
-                endpoint.isolateSaved = g_captureIsolateSaved;
-            } else {
-                endpoint.isolateSaved = endpoint.settings.isolateEffects;
-                endpoint.isolationDirty = false;
-            }
-            g_captureIsolationDirty = false;
             RebuildEffectList();
             ShowEffectForSelected();
-            UpdateFilesUi();
-            UpdateDevicesUi();
+            UpdateChromeUi();
             UpdateEffectsUi();
-            UpdateViewAvailability();
+            Relayout();
         } else {
             // A failed operation may have changed nothing, so keep unsaved
             // effect edits instead of reloading over them.
@@ -2632,18 +2142,12 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
                 g_preserveDirtyEffects = true;
             }
             Refresh();
-            UpdateViewAvailability();
 
-            // A Devices Apply can finish before the debounced live apply
-            // fires. Resume the pending effect save now that the worker is
-            // done; if live delivery is unavailable it stays pending for
-            // Apply. An unbound Simple-view device only needs the settings
-            // file, so it can resume even when the live channel is missing.
+            // A settings edit can arrive while an apply is running. Resume the
+            // live save now that the worker is done; if the live channel is
+            // missing, the edit stays pending for the normal Apply path.
             if (kind == WorkKind::Generic && ValidEffectIndex() &&
-                g_endpoints[g_effectIndex].settingsDirty &&
-                (g_files.dllUpToDate ||
-                 (SimpleMode() &&
-                  !g_endpoints[g_effectIndex].Enabled()))) {
+                g_endpoints[g_effectIndex].settingsDirty) {
                 g_liveApplyPending =
                     SetTimer(g_window, kLiveApplyTimer, kLiveApplyDelayMs,
                              nullptr) != 0;
@@ -2702,7 +2206,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         break;
 
     case WM_DESTROY:
-        gui::SaveInterfaceMode(g_interfaceMode);
+        gui::SaveShowAllDevices(g_showAllDevices);
         ui::DestroyMenuBar(window);
         KillTimer(window, kMonitorTimer);
         KillTimer(window, kLiveApplyTimer);
@@ -2787,10 +2291,6 @@ int DumpStatus(const std::wstring& path)
                 L" | noise_profile=" +
                 (apo::FileExists(apo::NoiseProfilePath(endpoint.id)) ? L"yes"
                                                                    : L"no") +
-                L" | isolate=" +
-                (endpoint.settings.isolateEffects ? L"on" : L"off") +
-                L" | isolate_pending=" +
-                (endpoint.isolatePendingCleanup ? L"yes" : L"no") +
                 L"\r\n";
     }
 
@@ -2865,8 +2365,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show)
 
     INITCOMMONCONTROLSEX controls{};
     controls.dwSize = sizeof(controls);
-    controls.dwICC = ICC_LISTVIEW_CLASSES | ICC_TAB_CLASSES |
-                     ICC_STANDARD_CLASSES;
+    controls.dwICC = ICC_LISTVIEW_CLASSES | ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&controls);
 
     // Read the system app theme before any window is created so the first

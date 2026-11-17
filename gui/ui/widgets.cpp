@@ -989,6 +989,60 @@ HWND Button(HWND parent, int id, const wchar_t* text)
     return control;
 }
 
+HWND IconButton(HWND parent, int id, const wchar_t* glyph)
+{
+    // BS_OWNERDRAW keeps the native button behavior (including BN_CLICKED)
+    // while leaving the paint entirely to DrawIconButton, so there is no
+    // border or background in either theme.
+    HWND control = CreateWindowExW(
+        0, WC_BUTTONW, glyph,
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_OWNERDRAW,
+        0, 0, 0, 0, parent,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
+    SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
+    return control;
+}
+
+bool DrawIconButton(DRAWITEMSTRUCT* item)
+{
+    if (item == nullptr || item->CtlType != ODT_BUTTON ||
+        item->hwndItem == nullptr) {
+        return false;
+    }
+
+    wchar_t glyph[8]{};
+    GetWindowTextW(item->hwndItem, glyph, static_cast<int>(std::size(glyph)));
+    if (glyph[0] == L'\0') {
+        return true;
+    }
+
+    const Theme& theme = GetTheme();
+    const bool disabled =
+        (item->itemState & ODS_DISABLED) != 0 || !IsWindowEnabled(item->hwndItem);
+    const bool active =
+        (item->itemState & (ODS_SELECTED | ODS_HOTLIGHT)) != 0;
+    const COLORREF color = disabled ? theme.color.disabledText
+                                    : (active ? theme.color.accent
+                                              : theme.color.text);
+
+    HGDIOBJ oldFont = nullptr;
+    HFONT font = reinterpret_cast<HFONT>(
+        SendMessageW(item->hwndItem, WM_GETFONT, 0, 0));
+    if (font != nullptr) {
+        oldFont = SelectObject(item->hDC, font);
+    }
+    const int oldBkMode = SetBkMode(item->hDC, TRANSPARENT);
+    const COLORREF oldColor = SetTextColor(item->hDC, color);
+    DrawTextW(item->hDC, glyph, -1, &item->rcItem,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SetTextColor(item->hDC, oldColor);
+    SetBkMode(item->hDC, oldBkMode);
+    if (oldFont != nullptr) {
+        SelectObject(item->hDC, oldFont);
+    }
+    return true;
+}
+
 HWND CheckBox(HWND parent, int id, const wchar_t* text)
 {
     HWND control = CreateWindowExW(

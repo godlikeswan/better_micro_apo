@@ -91,27 +91,6 @@ bool HasCompositeFx(const std::wstring& fx)
     return false;
 }
 
-bool HasCompositeExtraFx(const std::wstring& fx)
-{
-    // Everything except the endpoint chain is an effect that is not this APO.
-    // The endpoint slot holds this APO, so it must not count as a leftover.
-    for (int index = kCompositeFirstProp; index <= kCompositeLastProp;
-         ++index) {
-        if (index == kCompositeEndpointIndex) {
-            continue;
-        }
-        const std::wstring name =
-            std::wstring(kFxPropBase) + L"," + std::to_wstring(index);
-        std::vector<std::wstring> values;
-        if (detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx, name.c_str(),
-                                       values) &&
-            !values.empty()) {
-            return true;
-        }
-    }
-    return false;
-}
-
 bool ContainsClsid(const std::vector<std::wstring>& values,
                    const wchar_t* clsid)
 {
@@ -266,9 +245,6 @@ std::vector<Endpoint> EnumEndpoints()
                 ContainsClsid(compositeEndpoint, kClsid);
         }
         endpoint.compositePresent = HasCompositeFx(fx);
-        endpoint.isolatePendingCleanup =
-            endpoint.Enabled() && endpoint.compositePresent &&
-            endpoint.settings.isolateEffects && HasCompositeExtraFx(fx);
 
         DWORD disable = 0;
         if (detail::RegReadDword(HKEY_LOCAL_MACHINE, fx, kDisableSysFxProp,
@@ -294,14 +270,19 @@ FilesStatus GetFilesStatus()
     FilesStatus status;
     status.dllPresent = FileExists(kInstalledDll);
 
+    unsigned long long embeddedHash = 0;
+    unsigned long long embeddedSize = 0;
+    const bool haveEmbedded = HashEmbeddedDll(embeddedHash, embeddedSize);
+    if (haveEmbedded) {
+        status.embeddedHash = embeddedHash;
+    }
+
     if (status.dllPresent) {
-        unsigned long long embeddedHash = 0;
-        unsigned long long embeddedSize = 0;
         unsigned long long installedHash = 0;
         unsigned long long installedSize = 0;
-        if (HashEmbeddedDll(embeddedHash, embeddedSize) &&
-            HashFileContents(kInstalledDll, installedHash, installedSize)) {
-            status.dllUpToDate = embeddedSize == installedSize &&
+        if (HashFileContents(kInstalledDll, installedHash, installedSize)) {
+            status.installedHash = installedHash;
+            status.dllUpToDate = haveEmbedded && embeddedSize == installedSize &&
                                  embeddedHash == installedHash;
         }
     }

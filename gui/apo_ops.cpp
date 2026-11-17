@@ -645,18 +645,6 @@ void ArchiveBackup(const std::filesystem::path& path, std::wstring& log)
     }
 }
 
-// Reads the best backup for an endpoint. Returns false when there is no backup
-// file.
-bool ReadNewestBackupText(const Endpoint& endpoint, std::wstring& text)
-{
-    const auto path = FindRestoreBackup(endpoint.id);
-    if (path.empty()) {
-        return false;
-    }
-    text = detail::ReadTextFile(path.wstring());
-    return !text.empty();
-}
-
 // True when a composite chain other than the endpoint chain is present. The
 // endpoint chain holds this APO, so it must not count as a leftover.
 bool HasOtherCompositeValues(const std::wstring& fx)
@@ -1078,7 +1066,6 @@ struct ApplyPlan {
     bool wasEnabled = false;
     bool bindingTransition = false;
     bool bindingUpgrade = false;
-    bool isolateChanged = false;
     bool isolateRebind = false;
     bool needsRestart = false;
     ApoSettings targetSettings;
@@ -1109,22 +1096,13 @@ std::vector<ApplyPlan> BuildPlans(const std::vector<Change>& changes,
         plan.fx = detail::FxSub(it->id);
         plan.wasEnabled = it->Enabled();
         plan.bindingTransition = change.enable != plan.wasEnabled;
-        plan.isolateChanged =
-            change.settingsChanged &&
-            it->settings.isolateEffects != change.settings.isolateEffects;
         plan.targetSettings =
             change.settingsChanged ? change.settings : it->settings;
 
-        // Isolation is already saved for this device but some other composite
-        // chain is still present. Apply should finish the cleanup without
-        // making the user toggle the checkbox off and on again.
-        const bool isolateCleanup =
-            change.enable && plan.wasEnabled &&
-            plan.targetSettings.isolateEffects &&
-            HasOtherCompositeValues(plan.fx);
-        plan.isolateRebind =
-            change.enable && plan.wasEnabled &&
-            (plan.isolateChanged || isolateCleanup);
+        // Isolation is always on. If a driver republished other composite
+        // chains on an already-bound device, Apply clears them again.
+        plan.isolateRebind = change.enable && plan.wasEnabled &&
+                             HasOtherCompositeValues(plan.fx);
 
         // A device bound by an older version still sits in a stream slot,
         // which raw streams bypass. Move it to the endpoint slot.
@@ -1406,7 +1384,6 @@ Result ApplyChanges(const std::vector<Change>& changes)
         const std::wstring& fx = plan.fx;
         const bool bindingTransition = plan.bindingTransition;
         const bool bindingUpgrade = plan.bindingUpgrade;
-        const bool isolateChanged = plan.isolateChanged;
         const bool isolateRebind = plan.isolateRebind;
         const ApoSettings& targetSettings = plan.targetSettings;
 
@@ -1437,12 +1414,10 @@ Result ApplyChanges(const std::vector<Change>& changes)
         }
 
         if (change.enable) {
-            // Capture the driver's chains before the first bind and before
-            // isolating them, so turning isolation off or disabling the device
-            // can always put the driver's effects back. Never back up an
-            // already-isolated device: its stream chain may be ours alone.
-            if (bindingTransition ||
-                (isolateChanged && targetSettings.isolateEffects)) {
+            // Capture the driver's chains before the first bind, so disabling
+            // the device or uninstalling can always put them back. Never back
+            // up an already-isolated device: its chains may be ours alone.
+            if (bindingTransition) {
                 std::wstring backup;
                 if (!CreateBackup(endpoint, backup, log)) {
                     result.ok = false;
@@ -1450,55 +1425,21 @@ Result ApplyChanges(const std::vector<Change>& changes)
                 }
             }
 
-            std::wstring backupText;
-            const bool haveBackup =
-                ReadNewestBackupText(endpoint, backupText);
-            const bool unisolate =
-                isolateChanged && !targetSettings.isolateEffects;
-
             // Bind as an endpoint effect: Windows applies endpoint effects
             // even to raw streams, while stream effects are skipped for them.
             // Discord and WhatsApp open the microphone raw, so this is what
             // makes their audio processed.
             if (endpoint.compositePresent) {
-                if (unisolate) {
-                    // Put back the effect-pack chains that isolation cleared.
-                    if (haveBackup &&
-                        (!RestoreCompositeValues(
-                             fx, backupText, kCompositeFirstProp,
-                             kCompositeEndpointIndex - 1, endpoint.name,
-                             log) ||
-                         !RestoreCompositeValues(
-                             fx, backupText, kCompositeEndpointIndex + 1,
-                             kCompositeLastProp, endpoint.name, log))) {
-                        result.ok = false;
-                    }
-                } else if (targetSettings.isolateEffects) {
-                    // Isolation is a desired state, not just a transition:
-                    // re-apply it if the driver's chains reappeared (for
-                    // example after a driver update).
-                    if (!ClearOtherCompositeValues(fx, endpoint.name, log)) {
-                        result.ok = false;
-                    }
+                // Isolation is always on: clear the driver's other effect-pack
+                // chains so only this APO processes the device. Re-clear them
+                // on Apply in case a driver update brought them back.
+                if (!ClearOtherCompositeValues(fx, endpoint.name, log)) {
+                    result.ok = false;
                 }
 
+                // Keep the endpoint chain with only our CLSID. Clearing it
+                // completely would unbind the APO.
                 std::vector<std::wstring> chain;
-                if (unisolate && haveBackup) {
-                    if (!detail::ExtractRegMultiString(
-                            backupText, kCompositeEndpointProp, chain)) {
-                        chain.clear();
-                    }
-                } else {
-                    detail::RegReadMultiString(HKEY_LOCAL_MACHINE, fx,
-                                               kCompositeEndpointProp, chain);
-                }
-                if (targetSettings.isolateEffects && !unisolate) {
-                    // Isolation leaves only this APO, so the driver's endpoint
-                    // chain is dropped as well. The backup above holds it and
-                    // turning isolation off puts it back.
-                    chain.clear();
-                }
-                RemoveClsid(chain, kClsid);
                 chain.push_back(kClsid);
                 if (!detail::RegWriteMultiString(HKEY_LOCAL_MACHINE, fx,
                                                  kCompositeEndpointProp,

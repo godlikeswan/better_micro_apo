@@ -34,7 +34,7 @@ std::wstring Trim(const std::wstring& text)
 
 } // namespace
 
-InterfaceMode LoadInterfaceMode()
+bool LoadShowAllDevices()
 {
     const std::wstring text = apo::detail::ReadTextFile(kPreferencesFile);
 
@@ -43,8 +43,8 @@ InterfaceMode LoadInterfaceMode()
         const size_t newline = text.find(L'\n', position);
         const std::wstring line =
             Trim(text.substr(position, newline == std::wstring::npos
-                                          ? std::wstring::npos
-                                          : newline - position));
+                                           ? std::wstring::npos
+                                           : newline - position));
         position = (newline == std::wstring::npos) ? text.size() + 1
                                                    : newline + 1;
 
@@ -53,26 +53,26 @@ InterfaceMode LoadInterfaceMode()
             continue;
         }
         if (_wcsicmp(Trim(line.substr(0, equals)).c_str(),
-                     L"interface_mode") != 0) {
+                     L"show_all_devices") != 0) {
             continue;
         }
 
-        return _wcsicmp(Trim(line.substr(equals + 1)).c_str(), L"advanced") == 0
-                   ? InterfaceMode::Advanced
-                   : InterfaceMode::Simple;
+        const std::wstring value = Trim(line.substr(equals + 1));
+        return value == L"1" || _wcsicmp(value.c_str(), L"true") == 0 ||
+               _wcsicmp(value.c_str(), L"yes") == 0;
     }
 
-    return InterfaceMode::Simple;
+    return false;
 }
 
-void SaveInterfaceMode(InterfaceMode mode)
+void SaveShowAllDevices(bool showAll)
 {
     CreateDirectoryW(apo::kDataDir, nullptr);
 
     std::wstring text;
     text += L"[gui]\n";
-    text += L"interface_mode=";
-    text += mode == InterfaceMode::Advanced ? L"advanced" : L"simple";
+    text += L"show_all_devices=";
+    text += showAll ? L"1" : L"0";
     text += L"\n";
     apo::detail::WriteTextFile(kPreferencesFile, text);
 }

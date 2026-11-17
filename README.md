@@ -20,103 +20,93 @@ build\bin\Release\better_micro_apo_gui.exe
 The GUI is self-contained: the APO DLL is embedded in it, so it is the only
 file you need to distribute.
 
-The menu bar has **File → Exit** and **View → Simple / Advanced**. The selected
-mode defaults to **Simple** and is saved on exit in
-`C:\ProgramData\better_micro_apo\gui.ini`.
+The menu bar has:
 
-### Simple
+- **File → Install / Update** extracts the embedded APO DLL to
+  `C:\Program Files\better_micro_apo`, registers its COM class, and restarts
+  audio. Audio stops for about a second. If the installed DLL does not match
+  this build, the command updates it. **Enable** installs or updates the APO
+  automatically, so this command is mainly for manual maintenance.
+- **File → Uninstall** unbinds every device, unregisters the APO, and removes the
+  installed DLL directory. Backups, settings, and logs stay in
+  `C:\ProgramData\better_micro_apo`. Unchecking **Enable** on the last enabled
+  device performs the same uninstall automatically.
+- **File → Exit** closes the GUI.
+- **View → Show all devices** adds inactive registry endpoints to the device
+  selector, marked `[unplugged]`, `[not present]`, or `[disabled]`. The toggle is
+  off by default and is saved in `C:\ProgramData\better_micro_apo\gui.ini`.
+- **About → Info** opens a modal summary with the embedded and installed DLL
+  hashes, install path and DLL file name, COM CLSID, registry key status, overall
+  install state, and the number of devices the APO is applied to.
+- **About → Open log** opens
+  `C:\ProgramData\better_micro_apo\better_micro_apo.log`.
 
-**Simple** is the default view. It looks like the **Effects** page with one
-extra switch. Pick any connected capture device that Windows has not disabled,
-then check **Enable**:
+### Main screen
 
-- If the APO is missing, or the installed DLL does not match this build, the
-  GUI installs or updates it first.
-- The APO is then bound to the selected device as an endpoint effect.
-- The rest of the page edits that device's effects exactly like the Effects
-  tab. Effects apply live while enabled and are saved for the next enable while
-  disabled.
+There is one screen with no tabs and no Simple/Advanced mode. It has a device
+selector, the **Enable** checkbox, a **Preset** selector (1–4) next to the device
+selector, the effects editor, **Listen to this device**, and a status line. The
+device selector normally lists active capture devices only; use **View → Show
+all devices** to edit settings on an inactive endpoint.
 
-Unchecking **Enable** unbinds the device. When it was the last enabled device,
-the GUI also uninstalls the APO files and registration; device settings and logs
-are kept. **Listen to this device** needs an enabled device.
+Pick a capture device and check **Enable**:
 
-### Advanced
+- If the APO is missing, or the installed DLL does not match this build, the GUI
+  installs or updates it first.
+- The APO is then bound to the selected device as an endpoint effect, which also
+  works for apps that capture raw audio, such as Discord and WhatsApp.
+- While the APO is enabled on a device, other effects on that device are ignored
+  unconditionally. The GUI leaves only its own endpoint effect and clears the
+  driver's other composite chains; it re-clears them if a driver republishes
+  them. There is no per-device option to turn this off.
+- Effects on that device apply live. While it is disabled, edits are still saved
+  so the next **Enable** starts from them.
 
-**Advanced** shows the three tabs: **Install**, **Devices**, and **Effects**.
-Later tabs stay disabled until their prerequisite is met, and the app opens on
-the most advanced tab that is available.
+Unchecking **Enable** unbinds the selected device. When it was the last enabled
+device, the GUI also uninstalls the APO files and registration; device settings,
+backups, and logs are kept. **Listen to this device** needs an active, enabled
+device.
 
-### Install
+Each device keeps its own four effect presets. The **Preset** selector switches
+which list is edited; there is no migration from the older single-list format.
 
-1. Click **Install** to extract the embedded APO DLL to
-   `C:\Program Files\better_micro_apo`, register its COM class, and restart
-   audio. Audio stops for about a second. If the installed DLL is older than
-   the GUI, the DLL row shows **outdated** and the button becomes **Update**;
-   click it to replace the DLL with the embedded copy.
-2. Click **Uninstall** to unbind the devices, unregister the APO, and remove the
-   installed DLL directory. Backups, settings, and logs stay in
-   `C:\ProgramData\better_micro_apo`.
+The list on the left shows the selected preset's effects in processing order.
+Use the checkboxes to enable or disable an effect, click a row to edit its
+parameters on the right, and click the `×` in a row to delete it. **Add effect**
+opens a picker and appends the chosen type to the end of the list. The same type
+may appear more than once, and the list order is the DSP order. Adding or
+deleting an effect applies live without stopping audio. A deleted effect loses
+its values: adding that type again starts from its defaults. A device can hold
+up to 16 effects; noise reduction, gate, and reverb are limited to 4 each because
+they allocate large buffers. For distortion, compressor, and gate effects, the
+top of the parameter panel draws a live transfer curve from the same math as the
+DSP, so it follows the sliders and shows what the stage actually applies. The
+dynamic effect shows the shape of its selected frequency band instead.
 
-### Devices
+To reduce steady room noise, select **Noise reduction**, keep the room quiet, and
+click **Capture noise profile**. The GUI records about three seconds, analyzes
+the noise spectrum, and saves it for that device. Capturing stops audio briefly,
+temporarily disables every stage so the profile is raw, and turns **Noise
+reduction** on when it finishes. **Reduction** caps how much any frequency is
+attenuated.
 
-1. Check the capture devices to enable the effect on. Inactive devices are
-   shown grayed out.
-2. On a device that uses an effect pack, **Ignore other effects** leaves only
-   this APO: it drops the driver's endpoint chain and its other composite
-   chains (stream, mode, keyword detector, offload), so none of the pack's
-   processing runs. This is per device and is applied with **Apply**; unchecking
-   it restores the driver chains from the backup.
-3. Click **Apply** to save the bindings and isolation options. Audio stops for
-   about a second. Every device is bound as an **endpoint effect**, which is
-   also what makes the processing apply to apps that capture raw audio, such as
-   Discord and WhatsApp; stream-slot bindings are skipped for those streams. If
-   a device is still bound by an older build, the view shows **Apply to finish
-   the update** until the migration runs. **Reset** discards pending device
-   changes.
+Check **Listen to this device** to hear the selected device through the default
+output. This is the quickest way to audition the applied settings. Use
+headphones to avoid feedback from speakers. Listening stops on its own when the
+selection changes, during install/uninstall, and when an operation restarts
+audio; it starts again afterwards for the same endpoint. Settings-only applies
+leave the monitor running. While listening, **Peak** is the maximum level over
+the last 500 ms and **RMS** is the average level over the same window, both
+measured after the APO. **CLIP** latches when the peak reaches full scale, and
+**drops** counts gaps in the monitor stream.
 
-### Effects
-
-1. Choose a bound device from the list at the top. Each capture device keeps its
-   own settings. If a mono source is plugged into the left input of a stereo
-   device, enable **Mono** so both sides carry it. This affects every app that
-   uses the device.
-2. The list on the left shows the effects for this device in processing order.
-   Use the checkboxes to enable or disable an effect, click a row to edit its
-   parameters on the right, and click the `×` in a row to delete it. **Add
-   effect** opens a picker and appends the chosen type to the end of the list.
-   The same type may appear more than once, and the list order is the DSP order.
-   Adding or deleting an effect applies live without stopping audio. A deleted
-   effect loses its values: adding that type again starts from its defaults.
-   A device can hold up to 16 effects; noise reduction, gate, and reverb are
-   limited to 4 each because they allocate large buffers.
-   For distortion, compressor, and gate effects, the top of the parameter panel
-   draws a live transfer curve from the same math as the DSP, so it follows the
-   sliders and shows what the stage actually applies. The dynamic effect shows
-   the shape of its selected frequency band instead.
-3. To reduce steady room noise, select **Noise reduction**, keep the room quiet,
-   and click **Capture noise profile**. The GUI records about three seconds,
-   analyzes the noise spectrum, and saves it for that device. Capturing stops
-   audio briefly, temporarily disables every stage so the profile is raw, and
-   turns **Noise reduction** on when it finishes. **Reduction** caps how much
-   any frequency is attenuated.
-4. Check **Listen to this device** to hear the selected device through the
-   default output. This is the quickest way to audition the applied settings.
-   Use headphones to avoid feedback from speakers. Listening stops on its own
-   when you change the selection, install, or uninstall, and it restarts after
-   an operation that has to restart audio. Settings-only applies leave it
-   running. While listening, **Peak** is the
-   maximum level over the last 500 ms and **RMS** is the average level over the
-   same window, both measured after the APO. **CLIP** latches when the peak
-   reaches full scale, and **drops** counts gaps in the monitor stream.
-5. Effect settings apply automatically while you drag and shortly after you
-   stop editing; no **Apply** click is needed. The running APO picks them up
-   without stopping audio. The first change on a device that has not published
-   live settings yet, or after the APO DLL was updated, may restart audio once.
-   **Reset** discards pending effect edits. While an effect edit is pending, the
-   device selector is locked and **Apply** is highlighted.
-
-**Open log** opens `C:\ProgramData\better_micro_apo\better_micro_apo.log`.
+Effect settings apply automatically while you drag and shortly after you stop
+editing. The running APO picks them up without stopping audio. The first change
+on a device that has not published live settings yet, or after the APO DLL was
+updated, may restart audio once. Each editable parameter has a small borderless
+↺ icon that restores just that parameter to its default and disables itself when
+the value is already default. While an effect edit is pending, the device
+selector is locked until the automatic apply finishes.
 
 ## Build
 
@@ -228,12 +218,12 @@ Default settings (a newly added effect):
 Each capture device stores its own settings in
 `C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.ini`. The file has a
 `[dsp]` section with `version=4`, `preset_count`, `preset_index`,
-`isolate_effects`, and one `preset_<p>_effect_<n>_*` block per preset entry, so
+`isolate_effects=1`, and one `preset_<p>_effect_<n>_*` block per preset entry, so
 duplicates, their order, and the selected preset survive a restart. Files
 written by earlier versions are not migrated: every device loads with four
-empty presets, and only `isolate_effects` is carried over. The APO reads the
-file when a stream starts, so one DLL serves every device.
-**Listen to this device** (Effects tab) opens a new stream and plays the saved
+empty presets. `isolate_effects` is always forced on and is written as `1`; it is
+not a user option. The APO reads the file when a stream starts, so one DLL serves
+every device. **Listen to this device** opens a new stream and plays the saved
 settings; edits are saved live, so the audition follows them.
 
 The GUI clamps values to a safe range:
@@ -273,8 +263,9 @@ The GUI clamps values to a safe range:
 - PCM 24-bit valid samples stored in a 32-bit container (24-in-32) are not
   supported yet.
 - Effect settings apply live a moment after an edit, without stopping audio.
-  Binding, isolation, install, uninstall, and noise-profile capture still
-  restart the audio service briefly. The first settings change on a device that
+  Binding, install, uninstall, and noise-profile capture still restart the audio
+  service briefly. Clearing other effects as part of a binding uses the same
+  restart. The first settings change on a device that
   has no runtime file, or after the APO DLL is updated, also restarts audio
   once.
 - Gate lookahead delays the stream by the configured lookahead time while the

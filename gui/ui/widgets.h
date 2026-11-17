@@ -27,6 +27,10 @@ void DestroyFonts();
 
 HWND Label(HWND parent, int id, const wchar_t* text, DWORD style = SS_LEFT);
 HWND Button(HWND parent, int id, const wchar_t* text);
+// Borderless, backgroundless clickable glyph. The parent handles WM_DRAWITEM
+// through DrawIconButton.
+HWND IconButton(HWND parent, int id, const wchar_t* glyph);
+bool DrawIconButton(DRAWITEMSTRUCT* item);
 HWND CheckBox(HWND parent, int id, const wchar_t* text);
 HWND Slider(HWND parent, int id, const SliderSpec& spec);
 HWND GroupFrame(HWND parent, int id, const wchar_t* text);

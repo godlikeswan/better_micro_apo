@@ -201,11 +201,11 @@ struct ApoSettings
     int presetIndex = 0;
     EffectPreset presets[kPresetCount];
 
-    // GUI binding option for devices that publish composite FX entries: replace
-    // the driver's composite stream chain with only this APO instead of
-    // appending to it. The APO does not use this value while processing; it is
-    // read by the GUI from the same INI file.
-    bool isolateEffects = false;
+    // Isolation is always on when this APO is enabled: devices that publish
+    // composite FX entries have the driver's other chains cleared and restored
+    // from the backup when the APO is disabled. The field stays in the file and
+    // runtime layouts for compatibility, but ClampSettings forces it on.
+    bool isolateEffects = true;
 };
 
 EffectPreset& ActivePreset(ApoSettings& settings);

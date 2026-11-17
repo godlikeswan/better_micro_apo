@@ -51,11 +51,6 @@ struct Endpoint {
     bool compositeOurs = false;
     bool compositeEndpointOurs = false;
 
-    // The saved isolate option is on, the device is bound, and some other
-    // composite effect chain is still present. Apply can clean this up without
-    // requiring the user to toggle the checkbox.
-    bool isolatePendingCleanup = false;
-
     // The APO is bound as an endpoint effect (EFX), because Windows applies
     // endpoint effects even to raw streams while stream effects are skipped.
     // Effect-pack devices keep the endpoint chain in a composite slot; older
@@ -75,15 +70,8 @@ struct Endpoint {
     // Per-device settings, loaded from ProgramData and edited by the GUI.
     ApoSettings settings;
 
-    // Effect edits pending Apply. Kept separate from the binding/isolation
-    // edits so the Devices and Effects views can track their own dirty state.
+    // Effect edits pending Apply.
     bool settingsDirty = false;
-
-    // Persisted isolation value, plus the GUI-only pending edit. The APO
-    // itself only reads isolateEffects; the GUI uses these to decide whether
-    // the Devices Apply button has work to do.
-    bool isolateSaved = false;
-    bool isolationDirty = false;
 };
 
 struct FilesStatus {
@@ -92,6 +80,10 @@ struct FilesStatus {
     bool comRegistered = false;
     bool apoKeyPresent = false;
     std::wstring registeredPath;
+
+    // FNV-1a 64-bit hashes used by the hash comparison and shown in About.
+    unsigned long long embeddedHash = 0;
+    unsigned long long installedHash = 0;
 
     // The installed DLL differs from the copy embedded in this executable, so
     // the user should run Install again to update it.

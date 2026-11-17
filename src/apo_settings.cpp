@@ -454,6 +454,10 @@ void ClampSettings(ApoSettings& settings)
         }
         preset.nextEffectId = next;
     }
+
+    // Isolation is not a user option any more. Forcing it here covers every
+    // path that loads, saves, commits, or publishes settings.
+    settings.isolateEffects = true;
 }
 
 std::wstring SettingsDirectory()
@@ -622,11 +626,8 @@ bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
     }
 
     // Files older than version 4 kept a single effect list. They load as four
-    // empty presets; only the isolation binding option is carried over.
-    if (const std::wstring* isolateText =
-            FindValue(entries, L"isolate_effects")) {
-        ParseBool(*isolateText, settings.isolateEffects);
-    }
+    // empty presets. The old isolate_effects value is ignored: isolation is now
+    // always on for enabled devices.
 
     if (const std::wstring* indexText =
             FindValue(entries, L"preset_index")) {
@@ -691,8 +692,7 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
     text += "version=4\n";
     text += "preset_count=" + std::to_string(kPresetCount) + "\n";
     text += "preset_index=" + std::to_string(settings.presetIndex) + "\n";
-    text += std::string("isolate_effects=") +
-            (settings.isolateEffects ? "1" : "0") + "\n";
+    text += "isolate_effects=1\n";
 
     for (int p = 0; p < kPresetCount; ++p) {
         const EffectPreset& preset = settings.presets[p];

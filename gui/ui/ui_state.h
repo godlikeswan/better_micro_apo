@@ -13,34 +13,8 @@
 enum : int {
     IDC_TITLE = 100,
     IDC_REFRESH,
-    IDC_TABS,
 
-    // Install view.
-    IDC_GROUP_FILES,
-    IDC_DLL_LABEL,
-    IDC_DLL_VALUE,
-    IDC_DLL_STATUS,
-    IDC_COM_LABEL,
-    IDC_COM_VALUE,
-    IDC_COM_STATUS,
-    IDC_APO_LABEL,
-    IDC_APO_VALUE,
-    IDC_APO_STATUS,
-    IDC_OVERALL,
-    IDC_FILES_NOTE,
-    IDC_INSTALL,
-    IDC_UNINSTALL,
-
-    // Devices view.
-    IDC_GROUP_DEVICES,
-    IDC_LIST,
-    IDC_ISOLATE,
-    IDC_HINT,
-    IDC_DEVICES_UNSAVED,
-    IDC_DEVICES_APPLY,
-    IDC_DEVICES_RESET,
-
-    // Effects view.
+    // Main view.
     IDC_EFFECT_DEVICE_LABEL,
     IDC_EFFECT_DEVICE_COMBO,
     IDC_EFFECT_PRESET_LABEL,
@@ -51,14 +25,9 @@ enum : int {
     IDC_EFFECT_GROUP,
     IDC_EFFECT_HEADING,
     IDC_EFFECT_GRAPH,
-    IDC_EFFECTS_UNSAVED,
-    IDC_EFFECTS_APPLY,
-    IDC_EFFECTS_RESET,
+    IDC_MAIN_ENABLE,
+    IDC_MAIN_HINT,
     IDC_MONO_NOTE,
-
-    // Simple view.
-    IDC_SIMPLE_ENABLE,
-    IDC_SIMPLE_HINT,
 
     // Effect parameters.
     IDC_GATE_THRESHOLD_LABEL,
@@ -120,28 +89,54 @@ enum : int {
     IDC_NOISE_CAPTURE,
     IDC_NOISE_NOTE,
     IDC_LISTEN,
-    IDC_LISTEN_NOTE,
     IDC_METER,
+    IDC_PARAM_RESET,
 
     // Shared status bar.
     IDC_STATUS,
-    IDC_LOG,
+};
+
+// Small ↺ button beside each editable effect parameter.
+enum ParamReset : int {
+    ParamResetNoiseReduction,
+    ParamResetGateThreshold,
+    ParamResetGateRange,
+    ParamResetGateAttack,
+    ParamResetGateHold,
+    ParamResetGateRelease,
+    ParamResetGateLookahead,
+    ParamResetCompThreshold,
+    ParamResetCompRatio,
+    ParamResetCompAttack,
+    ParamResetCompRelease,
+    ParamResetMakeup,
+    ParamResetDynExpand,
+    ParamResetDynFrequency,
+    ParamResetDynQ,
+    ParamResetDynThreshold,
+    ParamResetDynRatio,
+    ParamResetDynRange,
+    ParamResetDynAttack,
+    ParamResetDynRelease,
+    ParamResetReverbMix,
+    ParamResetReverbSize,
+    ParamResetReverbDamping,
+    ParamResetReverbPredelay,
+    ParamResetDistFunction,
+    ParamResetDistDrive,
+    ParamResetDistCurvature,
+    ParamResetDistOutput,
+    ParamResetCount,
 };
 
 // Main menu commands. Kept above the control range so they never collide.
 enum : int {
-    IDM_FILE_EXIT = 40000,
-    IDM_VIEW_SIMPLE,
-    IDM_VIEW_ADVANCED,
-};
-
-enum class View : int {
-    Install = 0,
-    Devices,
-    Effects,
-    // The Simple interface mode is not a tab. It reuses the Effects editor but
-    // hides the tab control and adds the Enable checkbox.
-    Simple,
+    IDM_FILE_INSTALL = 40000,
+    IDM_FILE_UNINSTALL,
+    IDM_FILE_EXIT,
+    IDM_VIEW_SHOW_ALL_DEVICES,
+    IDM_ABOUT_INFO,
+    IDM_ABOUT_OPEN_LOG,
 };
 
 constexpr wchar_t kPageClass[] = L"BetterMicroApoPage";
@@ -152,37 +147,10 @@ extern HWND g_window;
 // Always-visible chrome.
 extern HWND g_title;
 extern HWND g_refresh;
-extern HWND g_tabs;
 extern HWND g_pageBackground;
 extern HWND g_status;
-extern HWND g_logButton;
 
-// Install view.
-extern HWND g_groupFiles;
-extern HWND g_dllLabel;
-extern HWND g_dllValue;
-extern HWND g_dllStatus;
-extern HWND g_comLabel;
-extern HWND g_comValue;
-extern HWND g_comStatus;
-extern HWND g_apoLabel;
-extern HWND g_apoValue;
-extern HWND g_apoStatus;
-extern HWND g_overall;
-extern HWND g_filesNote;
-extern HWND g_install;
-extern HWND g_uninstall;
-
-// Devices view.
-extern HWND g_groupDevices;
-extern HWND g_list;
-extern HWND g_isolate;
-extern HWND g_hint;
-extern HWND g_devicesUnsaved;
-extern HWND g_devicesApply;
-extern HWND g_devicesReset;
-
-// Effects view.
+// Main view.
 extern HWND g_effectDeviceLabel;
 extern HWND g_effectDeviceCombo;
 extern HWND g_effectPresetLabel;
@@ -193,14 +161,10 @@ extern HWND g_effectAdd;
 extern HWND g_effectGroup;
 extern HWND g_effectHeading;
 extern HWND g_effectGraph;
-extern HWND g_effectsUnsaved;
-extern HWND g_effectsApply;
-extern HWND g_effectsReset;
+extern HWND g_mainEnable;
+extern HWND g_mainHint;
 extern HWND g_monoNote;
-
-// Simple view.
-extern HWND g_simpleEnable;
-extern HWND g_simpleHint;
+extern HWND g_paramResetButtons[ParamResetCount];
 
 extern HWND g_gateThresholdLabel;
 extern HWND g_gateThresholdSlider;
@@ -261,7 +225,6 @@ extern HWND g_noiseReductionSlider;
 extern HWND g_noiseCapture;
 extern HWND g_noiseNote;
 extern HWND g_listen;
-extern HWND g_listenNote;
 extern HWND g_meter;
 
 extern HFONT g_font;
@@ -269,7 +232,6 @@ extern HFONT g_boldFont;
 extern HFONT g_titleFont;
 extern int g_dpi;
 
-extern View g_view;
 // Selected row in the effect list and the type of that row. The list mirrors
 // the selected endpoint's effect array, so the row index is also the effect
 // index. g_effectSelection is -1 when the list is empty.

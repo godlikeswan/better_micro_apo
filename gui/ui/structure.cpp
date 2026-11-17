@@ -28,28 +28,18 @@ void AddColumn(HWND list, int index, const wchar_t* text, int width,
     ListView_InsertColumn(list, index, &column);
 }
 
-void ResizeDeviceColumns()
+void CreateParamResetButtons(HWND parent)
 {
-    if (!g_list) {
-        return;
+    for (int param = 0; param < ParamResetCount; ++param) {
+        HWND button = ui::IconButton(parent, IDC_PARAM_RESET, L"\u21BA");
+        LONG style = GetWindowLongW(button, GWL_STYLE);
+        style &= ~WS_TABSTOP;
+        SetWindowLongW(button, GWL_STYLE, style);
+        SetWindowLongPtrW(button, GWLP_USERDATA,
+                          static_cast<LONG_PTR>(param));
+        ShowWindow(button, SW_HIDE);
+        g_paramResetButtons[param] = button;
     }
-
-    RECT rect{};
-    GetClientRect(g_list, &rect);
-    int total = rect.right - rect.left - GetSystemMetrics(SM_CXVSCROLL) -
-                Scale(2);
-    const int stateWidth = Scale(90);
-    const int apoWidth = Scale(130);
-    const int notesWidth = Scale(170);
-    int deviceWidth = total - stateWidth - apoWidth - notesWidth;
-    if (deviceWidth < Scale(140)) {
-        deviceWidth = Scale(140);
-    }
-
-    ListView_SetColumnWidth(g_list, 0, deviceWidth);
-    ListView_SetColumnWidth(g_list, 1, stateWidth);
-    ListView_SetColumnWidth(g_list, 2, apoWidth);
-    ListView_SetColumnWidth(g_list, 3, notesWidth);
 }
 
 void ResizeEffectColumns()
@@ -60,104 +50,60 @@ void ResizeEffectColumns()
 
     RECT rect{};
     GetClientRect(g_effectList, &rect);
-    int width = rect.right - rect.left - GetSystemMetrics(SM_CXVSCROLL) -
-                Scale(2);
-    const int deleteWidth = Scale(28);
-    int nameWidth = width - deleteWidth;
+    const int width = rect.right - rect.left;
+
+    // Make the delete column absorb any remainder so it ends exactly at the
+    // right edge. The glyph stays centered inside that column.
+    int nameWidth = width - Scale(28);
     if (nameWidth < Scale(60)) {
         nameWidth = Scale(60);
     }
+    const int deleteWidth = width - nameWidth;
     ListView_SetColumnWidth(g_effectList, 0, nameWidth);
     ListView_SetColumnWidth(g_effectList, 1, deleteWidth);
 }
 
-void LayoutInstall(int x, int y, int width, int height)
-{
-    const int gap = Scale(8);
-    int filesHeight = Scale(176);
-    if (filesHeight > height) {
-        filesHeight = height;
-    }
-    MoveWindow(g_groupFiles, x, y, width, filesHeight, TRUE);
-
-    const int innerX = x + Scale(16);
-    const int labelWidth = Scale(110);
-    const int statusWidth = Scale(110);
-    const int statusX = x + width - Scale(16) - statusWidth;
-    const int valueWidth = statusX - (innerX + labelWidth) - Scale(12);
-    int rowY = y + Scale(24);
-
-    auto placeRow = [&](HWND label, HWND value, HWND status) {
-        MoveWindow(label, innerX, rowY, labelWidth, Scale(20), TRUE);
-        MoveWindow(value, innerX + labelWidth, rowY, valueWidth, Scale(20),
-                   TRUE);
-        MoveWindow(status, statusX, rowY, statusWidth, Scale(20), TRUE);
-        rowY += Scale(26);
-    };
-    placeRow(g_dllLabel, g_dllValue, g_dllStatus);
-    placeRow(g_comLabel, g_comValue, g_comStatus);
-    placeRow(g_apoLabel, g_apoValue, g_apoStatus);
-    MoveWindow(g_filesNote, innerX, rowY, statusX + statusWidth - innerX,
-               Scale(20), TRUE);
-
-    const int buttonWidth = Scale(110);
-    const int buttonY = y + filesHeight - Scale(46);
-    MoveWindow(g_overall, innerX, buttonY + Scale(6), Scale(280), Scale(22),
-               TRUE);
-    MoveWindow(g_install,
-               x + width - Scale(16) - 2 * buttonWidth - gap, buttonY,
-               buttonWidth, Scale(30), TRUE);
-    MoveWindow(g_uninstall, x + width - Scale(16) - buttonWidth, buttonY,
-               buttonWidth, Scale(30), TRUE);
-}
-
-void LayoutDevices(int x, int y, int width, int height)
-{
-    const int gap = Scale(8);
-    MoveWindow(g_groupDevices, x, y, width, height, TRUE);
-
-    const int innerX = x + Scale(16);
-    const int innerWidth = width - Scale(32);
-    const int buttonWidth = Scale(120);
-    const int buttonY = y + height - Scale(46);
-    const int listHeight = height - Scale(24) - Scale(88);
-
-    MoveWindow(g_list, innerX, y + Scale(24), innerWidth, listHeight, TRUE);
-    MoveWindow(g_isolate, innerX, y + height - Scale(78),
-               innerWidth - Scale(260), Scale(22), TRUE);
-    MoveWindow(g_devicesUnsaved, x + width - Scale(16) - Scale(240),
-               y + height - Scale(78), Scale(240), Scale(22), TRUE);
-    MoveWindow(g_hint, innerX, y + height - Scale(42),
-               innerWidth - 2 * buttonWidth - gap - Scale(16), Scale(20),
-               TRUE);
-    MoveWindow(g_devicesReset,
-               x + width - Scale(16) - 2 * buttonWidth - gap, buttonY,
-               buttonWidth, Scale(30), TRUE);
-    MoveWindow(g_devicesApply, x + width - Scale(16) - buttonWidth, buttonY,
-               buttonWidth, Scale(30), TRUE);
-
-    ResizeDeviceColumns();
-}
-
 void LayoutEffectParams(int x, int y, int width)
 {
+    for (HWND button : g_paramResetButtons) {
+        ShowWindow(button, SW_HIDE);
+    }
+    if (g_effectSelection < 0) {
+        return;
+    }
+
     const int columnGap = Scale(16);
     const int columnWidth = (width - columnGap) / 2;
     const int labelWidth = Scale(110);
-    const int sliderWidth = std::max(Scale(50), columnWidth - labelWidth);
+    const int resetWidth = Scale(24);
+    const int resetGap = Scale(4);
+    const int sliderWidth =
+        std::max(Scale(50), columnWidth - labelWidth - resetWidth - resetGap);
     const int controlHeight = Scale(26);
     const int rowStep = Scale(32);
 
-    auto placePair = [&](HWND leftLabel, HWND leftSlider, HWND rightLabel,
-                         HWND rightSlider) {
+    auto placeReset = [&](int param, int columnX, int rowY) {
+        if (param < 0 || param >= ParamResetCount) {
+            return;
+        }
+        HWND button = g_paramResetButtons[param];
+        MoveWindow(button, columnX + columnWidth - resetWidth, rowY,
+                   resetWidth, controlHeight, TRUE);
+        ShowWindow(button, SW_SHOW);
+    };
+
+    auto placePair = [&](HWND leftLabel, HWND leftSlider, int leftReset,
+                         HWND rightLabel, HWND rightSlider, int rightReset) {
         MoveWindow(leftLabel, x, y, labelWidth, Scale(20), TRUE);
         MoveWindow(leftSlider, x + labelWidth, y, sliderWidth, controlHeight,
                    TRUE);
+        placeReset(leftReset, x, y);
         if (rightLabel != nullptr) {
             const int rightX = x + columnWidth + columnGap;
             MoveWindow(rightLabel, rightX, y, labelWidth, Scale(20), TRUE);
             MoveWindow(rightSlider, rightX + labelWidth, y, sliderWidth,
                        controlHeight, TRUE);
+            placeReset(rightReset, rightX, y);
         }
         y += rowStep;
     };
@@ -167,6 +113,7 @@ void LayoutEffectParams(int x, int y, int width)
         MoveWindow(g_noiseReductionLabel, x, y, labelWidth, Scale(20), TRUE);
         MoveWindow(g_noiseReductionSlider, x + labelWidth, y, sliderWidth,
                    controlHeight, TRUE);
+        placeReset(ParamResetNoiseReduction, x, y);
         MoveWindow(g_noiseCapture, x + columnWidth + columnGap, y,
                    columnWidth, Scale(28), TRUE);
         y += Scale(36);
@@ -174,89 +121,101 @@ void LayoutEffectParams(int x, int y, int width)
         break;
     case apo::EffectType::Gate:
         placePair(g_gateThresholdLabel, g_gateThresholdSlider,
-                  g_gateRangeLabel, g_gateRangeSlider);
-        placePair(g_gateAttackLabel, g_gateAttackSlider, g_gateHoldLabel,
-                  g_gateHoldSlider);
+                  ParamResetGateThreshold, g_gateRangeLabel, g_gateRangeSlider,
+                  ParamResetGateRange);
+        placePair(g_gateAttackLabel, g_gateAttackSlider, ParamResetGateAttack,
+                  g_gateHoldLabel, g_gateHoldSlider, ParamResetGateHold);
         placePair(g_gateReleaseLabel, g_gateReleaseSlider,
-                  g_gateLookaheadLabel, g_gateLookaheadSlider);
+                  ParamResetGateRelease, g_gateLookaheadLabel,
+                  g_gateLookaheadSlider, ParamResetGateLookahead);
         break;
     case apo::EffectType::Dynamic:
-        MoveWindow(g_dynamicExtend, x, y, columnWidth, Scale(22), TRUE);
+        MoveWindow(g_dynamicExtend, x, y,
+                   columnWidth - resetWidth - resetGap, Scale(22), TRUE);
+        placeReset(ParamResetDynExpand, x, y);
         y += Scale(30);
-        placePair(g_dynFrequencyLabel, g_dynFrequencySlider, g_dynQLabel,
-                  g_dynQSlider);
-        placePair(g_dynThresholdLabel, g_dynThresholdSlider, g_dynRatioLabel,
-                  g_dynRatioSlider);
-        placePair(g_dynRangeLabel, g_dynRangeSlider, g_dynAttackLabel,
-                  g_dynAttackSlider);
-        placePair(g_dynReleaseLabel, g_dynReleaseSlider, nullptr, nullptr);
+        placePair(g_dynFrequencyLabel, g_dynFrequencySlider,
+                  ParamResetDynFrequency, g_dynQLabel, g_dynQSlider,
+                  ParamResetDynQ);
+        placePair(g_dynThresholdLabel, g_dynThresholdSlider,
+                  ParamResetDynThreshold, g_dynRatioLabel, g_dynRatioSlider,
+                  ParamResetDynRatio);
+        placePair(g_dynRangeLabel, g_dynRangeSlider, ParamResetDynRange,
+                  g_dynAttackLabel, g_dynAttackSlider, ParamResetDynAttack);
+        placePair(g_dynReleaseLabel, g_dynReleaseSlider,
+                  ParamResetDynRelease, nullptr, nullptr, 0);
         break;
     case apo::EffectType::Compressor:
         placePair(g_compThresholdLabel, g_compThresholdSlider,
-                  g_compRatioLabel, g_compRatioSlider);
-        placePair(g_compAttackLabel, g_compAttackSlider, g_compReleaseLabel,
-                  g_compReleaseSlider);
+                  ParamResetCompThreshold, g_compRatioLabel, g_compRatioSlider,
+                  ParamResetCompRatio);
+        placePair(g_compAttackLabel, g_compAttackSlider, ParamResetCompAttack,
+                  g_compReleaseLabel, g_compReleaseSlider,
+                  ParamResetCompRelease);
         break;
     case apo::EffectType::Gain:
-        placePair(g_makeupLabel, g_makeupSlider, nullptr, nullptr);
+        placePair(g_makeupLabel, g_makeupSlider, ParamResetMakeup, nullptr,
+                  nullptr, 0);
         break;
     case apo::EffectType::Mono:
         MoveWindow(g_monoNote, x, y, width, Scale(40), TRUE);
         break;
     case apo::EffectType::Distortion:
         MoveWindow(g_distFunctionLabel, x, y, labelWidth, Scale(20), TRUE);
-        MoveWindow(g_distFunctionCombo, x + labelWidth, y,
-                   Scale(180), Scale(200), TRUE);
+        MoveWindow(g_distFunctionCombo, x + labelWidth, y, Scale(180),
+                   Scale(200), TRUE);
+        placeReset(ParamResetDistFunction, x, y);
         y += Scale(34);
-        placePair(g_distDriveLabel, g_distDriveSlider,
-                  g_distCurvatureLabel, g_distCurvatureSlider);
-        placePair(g_distOutputLabel, g_distOutputSlider, nullptr, nullptr);
+        placePair(g_distDriveLabel, g_distDriveSlider, ParamResetDistDrive,
+                  g_distCurvatureLabel, g_distCurvatureSlider,
+                  ParamResetDistCurvature);
+        placePair(g_distOutputLabel, g_distOutputSlider, ParamResetDistOutput,
+                  nullptr, nullptr, 0);
         MoveWindow(g_distortionNote, x, y, width, Scale(44), TRUE);
         break;
     case apo::EffectType::Reverb:
-        placePair(g_reverbMixLabel, g_reverbMixSlider, g_reverbSizeLabel,
-                  g_reverbSizeSlider);
+        placePair(g_reverbMixLabel, g_reverbMixSlider, ParamResetReverbMix,
+                  g_reverbSizeLabel, g_reverbSizeSlider,
+                  ParamResetReverbSize);
         placePair(g_reverbDampingLabel, g_reverbDampingSlider,
-                  g_reverbPredelayLabel, g_reverbPredelaySlider);
+                  ParamResetReverbDamping, g_reverbPredelayLabel,
+                  g_reverbPredelaySlider, ParamResetReverbPredelay);
         break;
     default:
         break;
     }
 }
 
-void LayoutEffects(int x, int y, int width, int height, bool simple)
+void LayoutEffects(int x, int y, int width, int height)
 {
     const int gap = Scale(8);
     const int labelWidth = Scale(60);
-    const int comboWidth = Scale(320);
+    const int comboWidth = Scale(300);
 
     MoveWindow(g_effectDeviceLabel, x, y + Scale(3), labelWidth, Scale(20),
                TRUE);
     MoveWindow(g_effectDeviceCombo, x + labelWidth, y, comboWidth,
                Scale(200), TRUE);
 
+    // Enable is the primary action, so it sits directly after the device
+    // selector. Listening is the next action, immediately after Enable.
+    int nextX = x + labelWidth + comboWidth + Scale(16);
+    MoveWindow(g_mainEnable, nextX, y + Scale(1), Scale(96), Scale(24), TRUE);
+    nextX += Scale(96) + Scale(16);
+    MoveWindow(g_listen, nextX, y + Scale(1), Scale(230), Scale(24), TRUE);
+    nextX += Scale(230) + Scale(16);
+
     const int presetLabelWidth = Scale(52);
     const int presetComboWidth = Scale(64);
-    int presetX = x + labelWidth + comboWidth + Scale(16);
-    if (simple) {
-        // The Enable checkbox sits between the device and preset selectors.
-        // It is the primary action in the Simple view.
-        MoveWindow(g_simpleEnable, presetX, y + Scale(1), Scale(90),
-                   Scale(24), TRUE);
-        presetX += Scale(90) + Scale(16);
-    }
-    MoveWindow(g_effectPresetLabel, presetX, y + Scale(3), presetLabelWidth,
+    MoveWindow(g_effectPresetLabel, nextX, y + Scale(3), presetLabelWidth,
                Scale(20), TRUE);
-    MoveWindow(g_effectPresetCombo, presetX + presetLabelWidth, y,
+    MoveWindow(g_effectPresetCombo, nextX + presetLabelWidth, y,
                presetComboWidth, Scale(200), TRUE);
 
-    int top = y + Scale(34);
-    if (simple) {
-        MoveWindow(g_simpleHint, x, y + Scale(30), width, Scale(20), TRUE);
-        top = y + Scale(56);
-    }
+    MoveWindow(g_mainHint, x, y + Scale(30), width, Scale(20), TRUE);
+    const int top = y + Scale(56);
 
-    const int bottomHeight = Scale(100);
+    const int bottomHeight = Scale(48);
     const int panelHeight = height - (top - y) - bottomHeight;
     const int listWidth = Scale(220);
 
@@ -296,21 +255,7 @@ void LayoutEffects(int x, int y, int width, int height, bool simple)
     LayoutEffectParams(innerX, paramsY, innerWidth);
 
     const int bottomY = top + panelHeight + gap;
-    MoveWindow(g_listen, x, bottomY, Scale(230), Scale(22), TRUE);
-    MoveWindow(g_meter, x + Scale(240), bottomY, Scale(320), Scale(22),
-               TRUE);
-    MoveWindow(g_effectsUnsaved, x + width - Scale(240), bottomY,
-               Scale(240), Scale(22), TRUE);
-    MoveWindow(g_listenNote, x, bottomY + Scale(24),
-               width - 2 * Scale(120) - Scale(24), Scale(36), TRUE);
-
-    const int buttonWidth = Scale(120);
-    const int buttonY = y + height - Scale(46);
-    MoveWindow(g_effectsReset,
-               x + width - Scale(16) - 2 * buttonWidth - gap, buttonY,
-               buttonWidth, Scale(30), TRUE);
-    MoveWindow(g_effectsApply, x + width - Scale(16) - buttonWidth, buttonY,
-               buttonWidth, Scale(30), TRUE);
+    MoveWindow(g_meter, x, bottomY, Scale(320), Scale(22), TRUE);
 
     ResizeEffectColumns();
 }
@@ -319,98 +264,31 @@ void LayoutEffects(int x, int y, int width, int height, bool simple)
 
 void ResizeColumns()
 {
-    ResizeDeviceColumns();
     ResizeEffectColumns();
 }
 
 void CreateControls(HWND root)
 {
-    // The tab and its header belong to the root window. Everything below the
-    // tab header is created as a child of the page panel, so the tab can never
-    // paint over the view controls.
-    HWND window = root;
-
-    g_title = ui::Label(window, IDC_TITLE, L"Better Micro APO");
+    g_title = ui::Label(root, IDC_TITLE, L"Better Micro APO");
     ui::ApplyFont(g_title, g_titleFont);
-    g_refresh = ui::Button(window, IDC_REFRESH, L"Refresh");
+    g_refresh = ui::Button(root, IDC_REFRESH, L"Refresh");
 
-    // The tab control must exist before the view controls so the view content
-    // is drawn on top of its body area.
-    g_tabs = ui::TabControl(window, IDC_TABS);
-    const wchar_t* tabNames[] = {L"Install", L"Devices", L"Effects"};
-    for (int i = 0; i < 3; ++i) {
-        TCITEMW item{};
-        item.mask = TCIF_TEXT | TCIF_PARAM;
-        item.pszText = const_cast<wchar_t*>(tabNames[i]);
-        // Availability lives in the item parameter so the custom tab painter
-        // can gray out tabs that are not reachable yet.
-        item.lParam = 1;
-        TabCtrl_InsertItem(g_tabs, i, &item);
-    }
-
-    // The tab control paints its body behind the view controls. This plain
-    // panel sits between the two: it gives the controls a stable background
-    // and stops the tab from repainting over its siblings.
+    // Every main-screen control is a child of this panel. Keeping them off the
+    // root window gives them a stable background and makes repaint handling a
+    // single pass.
     g_pageBackground = CreateWindowExW(
         0, kPageClass, L"",
         WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN, 0, 0, 0, 0,
-        window, nullptr, g_instance, nullptr);
+        root, nullptr, g_instance, nullptr);
+    HWND window = g_pageBackground;
 
-    // From here on the view controls are children of the page panel.
-    window = g_pageBackground;
-
-    // Keep the tab at the bottom of the sibling z-order so it can never paint
-    // its body over the panel or the view controls.
-    SetWindowPos(g_tabs, HWND_BOTTOM, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-
-    // Install view.
-    g_groupFiles = ui::GroupFrame(window, IDC_GROUP_FILES, L"Files");
-    g_dllLabel = ui::Label(window, IDC_DLL_LABEL, L"DLL");
-    g_dllValue = ui::Label(window, IDC_DLL_VALUE, apo::kInstalledDll,
-                           SS_LEFT | SS_PATHELLIPSIS);
-    g_dllStatus = ui::Label(window, IDC_DLL_STATUS, L"", SS_RIGHT);
-    g_comLabel = ui::Label(window, IDC_COM_LABEL, L"COM class");
-    g_comValue = ui::Label(window, IDC_COM_VALUE, apo::kClsid);
-    g_comStatus = ui::Label(window, IDC_COM_STATUS, L"", SS_RIGHT);
-    g_apoLabel = ui::Label(window, IDC_APO_LABEL, L"APO registration");
-    g_apoValue = ui::Label(window, IDC_APO_VALUE,
-                           L"AudioEngine\\AudioProcessingObjects",
-                           SS_LEFT | SS_PATHELLIPSIS);
-    g_apoStatus = ui::Label(window, IDC_APO_STATUS, L"", SS_RIGHT);
-    g_overall = ui::Label(window, IDC_OVERALL, L"");
-    ui::ApplyFont(g_overall, g_boldFont);
-    g_filesNote = ui::Label(
-        window, IDC_FILES_NOTE,
-        L"Install and Uninstall stop audio for about a second.");
-    g_install = ui::Button(window, IDC_INSTALL, L"Install");
-    g_uninstall = ui::Button(window, IDC_UNINSTALL, L"Uninstall");
-
-    // Devices view.
-    g_groupDevices =
-        ui::GroupFrame(window, IDC_GROUP_DEVICES, L"Devices (PreMix)");
-    g_list = ui::ReportList(window, IDC_LIST,
-                            LVS_SHOWSELALWAYS | LVS_SINGLESEL);
-    ListView_SetExtendedListViewStyle(
-        g_list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
-                    LVS_EX_INFOTIP);
-    ui::ApplyListStateImages(g_list);
-    AddColumn(g_list, 0, L"Device", 300);
-    AddColumn(g_list, 1, L"State", 90);
-    AddColumn(g_list, 2, L"APO", 130);
-    AddColumn(g_list, 3, L"Notes", 170);
-    g_isolate =
-        ui::CheckBox(window, IDC_ISOLATE, L"Ignore other effects");
-    g_hint = ui::Label(window, IDC_HINT, L"");
-    g_devicesUnsaved = ui::Label(window, IDC_DEVICES_UNSAVED, L"", SS_RIGHT);
-    g_devicesApply = ui::Button(window, IDC_DEVICES_APPLY, L"Apply");
-    g_devicesReset = ui::Button(window, IDC_DEVICES_RESET, L"Reset");
-
-    // Effects view.
     g_effectDeviceLabel =
         ui::Label(window, IDC_EFFECT_DEVICE_LABEL, L"Device:");
     g_effectDeviceCombo =
         ui::ComboBox(window, IDC_EFFECT_DEVICE_COMBO, CBS_DROPDOWNLIST);
+    g_mainEnable = ui::CheckBox(window, IDC_MAIN_ENABLE, L"Enable");
+    ui::ApplyFont(g_mainEnable, g_boldFont);
+    g_mainHint = ui::Label(window, IDC_MAIN_HINT, L"");
     g_effectPresetLabel =
         ui::Label(window, IDC_EFFECT_PRESET_LABEL, L"Preset:");
     g_effectPresetCombo =
@@ -433,6 +311,7 @@ void CreateControls(HWND root)
     AddColumn(g_effectList, 0, L"Effect", 180);
     AddColumn(g_effectList, 1, L"", 28, LVCFMT_CENTER);
     g_effectAdd = ui::Button(window, IDC_EFFECT_ADD, L"Add effect");
+    ui::ApplyFont(g_effectAdd, g_boldFont);
 
     g_effectGroup =
         ui::GroupFrame(window, IDC_EFFECT_GROUP, L"Effect parameters");
@@ -568,34 +447,21 @@ void CreateControls(HWND root)
     g_noiseNote = ui::Label(window, IDC_NOISE_NOTE, L"");
 
     g_listen = ui::CheckBox(window, IDC_LISTEN, L"Listen to this device");
-    g_listenNote = ui::Label(
-        window, IDC_LISTEN_NOTE,
-        L"Plays through the default output.\r\n"
-        L"Use headphones to avoid feedback.");
     g_meter = ui::Label(window, IDC_METER, L"Peak: --  RMS: --");
 
-    g_simpleEnable = ui::CheckBox(window, IDC_SIMPLE_ENABLE, L"Enable");
-    g_simpleHint = ui::Label(window, IDC_SIMPLE_HINT, L"");
-
-    g_effectsUnsaved = ui::Label(window, IDC_EFFECTS_UNSAVED, L"", SS_RIGHT);
-    g_effectsApply = ui::Button(window, IDC_EFFECTS_APPLY, L"Apply");
-    g_effectsReset = ui::Button(window, IDC_EFFECTS_RESET, L"Reset");
+    CreateParamResetButtons(window);
 
     // Child windows are inserted at the top of the sibling z-order as they are
     // created, so each group box ended up in front of the controls it frames.
     // WS_CLIPSIBLINGS then clipped those controls away. Push every frame to
     // the bottom so its contents always draw above it.
-    const HWND groupBoxes[] = {g_groupFiles, g_groupDevices, g_effectListGroup,
-                               g_effectGroup};
+    const HWND groupBoxes[] = {g_effectListGroup, g_effectGroup};
     for (HWND group : groupBoxes) {
         SetWindowPos(group, HWND_BOTTOM, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
-    // Shared status bar (outside the tab).
-    window = root;
-    g_status = ui::Label(window, IDC_STATUS, L"");
-    g_logButton = ui::Button(window, IDC_LOG, L"Open log");
+    g_status = ui::Label(root, IDC_STATUS, L"");
 }
 
 void Layout(int width, int height)
@@ -608,59 +474,19 @@ void Layout(int width, int height)
                Scale(28), TRUE);
     y += Scale(40);
 
-    const int statusHeight = Scale(38);
-    const bool simple = g_view == View::Simple;
-    int contentX = margin;
-    int contentY = y;
-    int contentWidth = width - 2 * margin;
-    int contentHeight = height - y - statusHeight;
+    const int statusHeight = Scale(28);
+    const int contentWidth = width - 2 * margin;
+    const int contentHeight = height - y - statusHeight;
+    MoveWindow(g_pageBackground, margin, y, contentWidth, contentHeight, TRUE);
 
-    if (!simple) {
-        const int tabsHeight = height - y - statusHeight;
-        MoveWindow(g_tabs, margin, y, width - 2 * margin, tabsHeight, TRUE);
-
-        RECT content{0, 0, width - 2 * margin, tabsHeight};
-        TabCtrl_AdjustRect(g_tabs, FALSE, &content);
-        contentX = margin + content.left;
-        contentY = y + content.top;
-        contentWidth = content.right - content.left;
-        contentHeight = content.bottom - content.top;
-    }
-
-    MoveWindow(g_pageBackground, contentX, contentY, contentWidth,
-               contentHeight, TRUE);
-
-    // The display rectangle ends at the tab frame, so a view that starts at 0,0
-    // puts its group frames and labels right against the border. Inset the view
-    // content to leave a margin inside the tab body.
     const int contentPadding = Scale(12);
     const int viewWidth = contentWidth - 2 * contentPadding;
     const int viewHeight = contentHeight - 2 * contentPadding;
-
-    // The view controls are children of the page panel, so their coordinates
-    // are relative to its client area.
-    switch (g_view) {
-    case View::Install:
-        LayoutInstall(contentPadding, contentPadding, viewWidth, viewHeight);
-        break;
-    case View::Devices:
-        LayoutDevices(contentPadding, contentPadding, viewWidth, viewHeight);
-        break;
-    case View::Effects:
-        LayoutEffects(contentPadding, contentPadding, viewWidth, viewHeight,
-                      false);
-        break;
-    case View::Simple:
-        LayoutEffects(contentPadding, contentPadding, viewWidth, viewHeight,
-                      true);
-        break;
-    }
+    LayoutEffects(contentPadding, contentPadding, viewWidth, viewHeight);
 
     const int statusY = height - statusHeight;
-    MoveWindow(g_status, margin, statusY + Scale(7),
-               width - 2 * margin - Scale(120), Scale(20), TRUE);
-    MoveWindow(g_logButton, width - margin - Scale(104), statusY, Scale(104),
-               Scale(28), TRUE);
+    MoveWindow(g_status, margin, statusY + (statusHeight - Scale(20)) / 2,
+               width - 2 * margin, Scale(20), TRUE);
 }
 
 void Relayout()
@@ -674,8 +500,8 @@ void Relayout()
     RepaintAll();
 }
 
-// Sibling controls do not always repaint when the tab body or a dropdown
-// closes over them. Redraw the window and every child after layout changes.
+// Sibling controls do not always repaint when a dropdown closes over them.
+// Redraw the window and every child after layout changes.
 void RepaintAll()
 {
     if (g_window == nullptr) {
