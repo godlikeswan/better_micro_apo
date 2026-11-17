@@ -158,11 +158,12 @@ without also owning their construction or geometry. `gui/ui/ui_state.*` holds
 the control identifiers, handles, fonts, DPI, and the selected view/effect;
 `gui/ui/widgets.*` provides the reusable control factories, font helpers, and
 the owner-drawn effect sliders; `gui/ui/structure.*` builds the control tree and
-lays it out; and `gui/ui/theme.*` owns the palette, system-theme detection,
-native control theming, and the `WM_CTLCOLOR` handlers. `gui/main.cpp` keeps the
-app logic, background work, monitor, and message routing. Changing how a slider
-looks or behaves, or adding a control to a view, is therefore local to the
-widget factory, the view construction, and its layout function.
+lays it out; `gui/ui/menu.*` owns the themed menu bar; and `gui/ui/theme.*` owns
+the palette, system-theme detection, native control theming, and the
+`WM_CTLCOLOR` handlers. `gui/main.cpp` keeps the app logic, background work,
+monitor, and message routing. Changing how a slider looks or behaves, or adding
+a control to a view, is therefore local to the widget factory, the view
+construction, and its layout function.
 
 The theme follows the Windows app mode (`AppsUseLightTheme`). The app reads it
 before creating any window and reacts to `WM_SETTINGCHANGE`/`WM_THEMECHANGED`
@@ -171,6 +172,12 @@ applies the DWM dark title bar, themes the native combo, list, and header
 controls, and owner-draws the tab strip, push buttons, checkboxes, and sliders
 through subclasses in `gui/ui/widgets.cpp`. The tab item parameter stores
 whether a tab is reachable, so the custom painter can gray out unavailable tabs.
+
+The native menu bar is owner-drawn by `gui/ui/menu.cpp` and uses the theme
+background brush through `SetMenuInfo(MIM_BACKGROUND)`, so it follows the same
+light/dark palette and is refreshed on theme changes. `gui/preferences.*`
+persists the **View** mode in `C:\ProgramData\better_micro_apo\gui.ini`; the
+default is **Simple**.
 
 List checkboxes are drawn from the control's state image list. In dark mode the
 app replaces the two native glyphs inside that list (`ImageList_Replace`) instead

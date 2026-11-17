@@ -2,10 +2,12 @@
 
 #include "apo_internal.h"
 #include "apo_monitor.h"
+#include "preferences.h"
 #include "runtime_settings.h"
 
 #include "ui/effect_dialog.h"
 #include "ui/graph.h"
+#include "ui/menu.h"
 #include "ui/structure.h"
 #include "ui/theme.h"
 #include "ui/ui_state.h"
@@ -106,6 +108,10 @@ std::wstring g_resumeListenId;
 // unsaved so switching views and applying device bindings does not discard
 // them.
 bool g_preserveDirtyEffects = false;
+
+// Persisted View menu choice. It does not change the layout yet, so only the
+// checked menu item and the saved value depend on it.
+gui::InterfaceMode g_interfaceMode = gui::InterfaceMode::Simple;
 
 // Forward declarations for helpers that are used before their definitions.
 void UpdateViewAvailability();
@@ -2112,6 +2118,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
     case WM_CREATE: {
         g_window = window;
         ui::CreateFonts();
+        g_interfaceMode = gui::LoadInterfaceMode();
+        ui::CreateMenuBar(window, g_interfaceMode);
         CreateControls(window);
         ui::ApplyNativeThemeToChildren(window);
         ui::ApplyListStateImages(g_list);
@@ -2153,6 +2161,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             wcscmp(reinterpret_cast<const wchar_t*>(lParam),
                    L"ImmersiveColorSet") == 0) {
             ui::RefreshTheme();
+            ui::RefreshMenuBar(window);
             ui::ApplyTitleBarTheme(window);
             ui::ApplyNativeThemeToChildren(window);
             ui::ApplyListStateImages(g_list);
@@ -2163,6 +2172,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
 
     case WM_THEMECHANGED:
         ui::RefreshTheme();
+        ui::RefreshMenuBar(window);
         ui::ApplyTitleBarTheme(window);
         ui::ApplyNativeThemeToChildren(window);
         ui::ApplyListStateImages(g_list);
@@ -2189,8 +2199,33 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
     case WM_CTLCOLORLISTBOX:
         return ui::HandleListBoxColor(reinterpret_cast<HDC>(wParam));
 
+    case WM_MEASUREITEM:
+        if (ui::MeasureMenuItem(
+                window, reinterpret_cast<MEASUREITEMSTRUCT*>(lParam))) {
+            return TRUE;
+        }
+        break;
+
+    case WM_DRAWITEM:
+        if (ui::DrawMenuItem(window,
+                             reinterpret_cast<DRAWITEMSTRUCT*>(lParam))) {
+            return TRUE;
+        }
+        break;
+
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
+        case IDM_FILE_EXIT:
+            PostMessageW(window, WM_CLOSE, 0, 0);
+            break;
+        case IDM_VIEW_SIMPLE:
+            g_interfaceMode = gui::InterfaceMode::Simple;
+            ui::UpdateMenuMode(window, g_interfaceMode);
+            break;
+        case IDM_VIEW_ADVANCED:
+            g_interfaceMode = gui::InterfaceMode::Advanced;
+            ui::UpdateMenuMode(window, g_interfaceMode);
+            break;
         case IDC_REFRESH:
             g_preserveDirtyEffects = false;
             Refresh();
@@ -2416,6 +2451,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         break;
 
     case WM_DESTROY:
+        gui::SaveInterfaceMode(g_interfaceMode);
+        ui::DestroyMenuBar(window);
         KillTimer(window, kMonitorTimer);
         KillTimer(window, kLiveApplyTimer);
         g_liveApplyPending = false;

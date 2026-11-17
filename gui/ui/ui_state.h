@@ -124,6 +124,13 @@ enum : int {
     IDC_LOG,
 };
 
+// Main menu commands. Kept above the control range so they never collide.
+enum : int {
+    IDM_FILE_EXIT = 40000,
+    IDM_VIEW_SIMPLE,
+    IDM_VIEW_ADVANCED,
+};
+
 enum class View : int {
     Install = 0,
     Devices,

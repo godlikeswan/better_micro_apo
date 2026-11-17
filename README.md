@@ -24,6 +24,10 @@ The window has three tabs: **Install**, **Devices**, and **Effects**. Later
 tabs stay disabled until their prerequisite is met, and the app opens on the
 most advanced tab that is available.
 
+The menu bar has **File → Exit** and **View → Simple / Advanced**. The selected
+mode defaults to **Simple** and is saved on exit in
+`C:\ProgramData\better_micro_apo\gui.ini`; it does not change the layout yet.
+
 ### Install
 
 1. Click **Install** to extract the embedded APO DLL to
