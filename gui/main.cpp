@@ -1906,8 +1906,15 @@ void PaintMenuDivider(HWND window)
     if (dc == nullptr) {
         return;
     }
-    RECT line{0, lineY, windowRect.right - windowRect.left, lineY + 1};
-    HBRUSH brush = CreateSolidBrush(ui::GetTheme().color.menuDivider);
+
+    const int width = windowRect.right - windowRect.left;
+    const ui::Theme& theme = ui::GetTheme();
+    // Cover the native focus-sensitive menu border first, then draw one
+    // subtle divider on top so focused and unfocused windows look the same.
+    RECT band{0, std::max(0, lineY - 2), width, lineY + 1};
+    FillRect(dc, &band, theme.menuBrush);
+    RECT line{0, lineY, width, lineY + 1};
+    HBRUSH brush = CreateSolidBrush(theme.color.menuDivider);
     FillRect(dc, &line, brush);
     DeleteObject(brush);
     ReleaseDC(window, dc);
@@ -1928,6 +1935,14 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         Refresh();
         RepaintAll();
         return 0;
+    }
+
+    case WM_NCACTIVATE: {
+        LRESULT result = DefWindowProcW(window, message, wParam, lParam);
+        // Windows repaints the menu bar border with a bright inactive color.
+        // Force another non-client paint so our divider always wins.
+        RedrawWindow(window, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE);
+        return result;
     }
 
     case WM_NCPAINT: {

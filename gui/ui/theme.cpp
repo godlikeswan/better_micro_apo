@@ -66,7 +66,7 @@ void BuildTheme(bool dark)
     if (dark) {
         theme.color.background = RGB(32, 32, 32);
         theme.color.menuBackground = RGB(38, 38, 38);
-        theme.color.menuDivider = RGB(20, 20, 20);
+        theme.color.menuDivider = RGB(30, 30, 30);
         theme.color.text = RGB(240, 240, 240);
         theme.color.disabledText = RGB(132, 132, 132);
         theme.color.frame = RGB(92, 92, 92);
@@ -93,7 +93,7 @@ void BuildTheme(bool dark)
     } else {
         theme.color.background = RGB(240, 240, 240);
         theme.color.menuBackground = RGB(234, 234, 234);
-        theme.color.menuDivider = RGB(205, 205, 205);
+        theme.color.menuDivider = RGB(218, 218, 218);
         theme.color.text = RGB(0, 0, 0);
         theme.color.disabledText = RGB(109, 109, 109);
         theme.color.frame = RGB(160, 160, 160);
