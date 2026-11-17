@@ -172,16 +172,46 @@ void LayoutEffectParams(int x, int y, int width)
         ShowWindow(button, SW_SHOW);
     };
 
-    const int iconSize = Scale(20);
-    auto placeIcon = [&](HWND icon, int columnX, int rowY) {
+    const int iconSize = Scale(16);
+    auto placeIcon = [&](HWND icon, HWND label, int columnX, int rowY) {
         if (icon == nullptr) {
             return;
         }
-        MoveWindow(icon, columnX + labelWidth - iconSize, rowY, iconSize,
-                   iconSize, TRUE);
+
+        // Put the marker just past the label's text, not at the slider edge.
+        int textWidth = 0;
+        if (label != nullptr) {
+            const int length = GetWindowTextLengthW(label);
+            std::wstring text(static_cast<size_t>(length) + 1, L'\0');
+            if (length > 0) {
+                GetWindowTextW(label, text.data(), length + 1);
+                text.resize(static_cast<size_t>(length));
+            } else {
+                text.clear();
+            }
+            HDC dc = GetDC(label);
+            if (dc != nullptr) {
+                HFONT font = reinterpret_cast<HFONT>(
+                    SendMessageW(label, WM_GETFONT, 0, 0));
+                HGDIOBJ oldFont = font != nullptr ? SelectObject(dc, font)
+                                                  : nullptr;
+                SIZE extent{};
+                GetTextExtentPoint32W(dc, text.c_str(),
+                                      static_cast<int>(text.size()), &extent);
+                textWidth = extent.cx;
+                if (oldFont != nullptr) {
+                    SelectObject(dc, oldFont);
+                }
+                ReleaseDC(label, dc);
+            }
+        }
+
+        const int iconX = std::min(columnX + textWidth + Scale(4),
+                                   columnX + labelWidth - iconSize);
+        const int iconY = rowY + (Scale(20) - iconSize) / 2;
+        MoveWindow(icon, iconX, iconY, iconSize, iconSize, TRUE);
         ShowWindow(icon, SW_SHOW);
-        // The icon overlays the right end of the parameter label. Showing a
-        // child can reorder siblings, so keep it above the label explicitly.
+        // The icon overlays the label, so keep it above that sibling.
         SetWindowPos(icon, HWND_TOP, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     };
@@ -222,8 +252,8 @@ void LayoutEffectParams(int x, int y, int width)
         placePair(g_gateReleaseLabel, g_gateReleaseSlider,
                   ParamResetGateRelease, g_gateLookaheadLabel,
                   g_gateLookaheadSlider, ParamResetGateLookahead);
-        placeIcon(g_gateLookaheadIcon, x + columnWidth + columnGap,
-                  y - rowStep);
+        placeIcon(g_gateLookaheadIcon, g_gateLookaheadLabel,
+                  x + columnWidth + columnGap, y - rowStep);
         break;
     case apo::EffectType::Dynamic:
         MoveWindow(g_dynamicExtend, x, y,
@@ -276,8 +306,8 @@ void LayoutEffectParams(int x, int y, int width)
         placePair(g_reverbDampingLabel, g_reverbDampingSlider,
                   ParamResetReverbDamping, g_reverbPredelayLabel,
                   g_reverbPredelaySlider, ParamResetReverbPredelay);
-        placeIcon(g_reverbPredelayIcon, x + columnWidth + columnGap,
-                  y - rowStep);
+        placeIcon(g_reverbPredelayIcon, g_reverbPredelayLabel,
+                  x + columnWidth + columnGap, y - rowStep);
         break;
     default:
         break;
