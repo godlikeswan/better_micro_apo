@@ -90,7 +90,6 @@ HWND g_meter = nullptr;
 HFONT g_font = nullptr;
 HFONT g_boldFont = nullptr;
 HFONT g_titleFont = nullptr;
-HFONT g_latencyIconFont = nullptr;
 int g_dpi = 96;
 
 int g_effectSelection = -1;

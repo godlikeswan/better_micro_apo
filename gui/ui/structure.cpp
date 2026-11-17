@@ -417,9 +417,7 @@ void CreateControls(HWND root)
         ui::Label(window, IDC_GATE_LOOKAHEAD_LABEL, L"Lookahead (ms)");
     g_gateLookaheadSlider = ui::Slider(window, IDC_GATE_LOOKAHEAD_SLIDER,
                                        {0.0, 300.0, 1.0, false, 0});
-    g_gateLookaheadIcon = ui::Label(
-        window, IDC_GATE_LOOKAHEAD_ICON, L"\u23F1", SS_CENTER | SS_NOTIFY);
-    ui::ApplyFont(g_gateLookaheadIcon, g_latencyIconFont);
+    g_gateLookaheadIcon = ui::OwnerDrawIcon(window, IDC_GATE_LOOKAHEAD_ICON);
     AddTooltip(g_gateLookaheadIcon,
                L"This parameter delays the audio stream by the set amount.");
 
@@ -486,9 +484,7 @@ void CreateControls(HWND root)
         ui::Label(window, IDC_REVERB_PREDELAY_LABEL, L"Predelay (ms)");
     g_reverbPredelaySlider = ui::Slider(window, IDC_REVERB_PREDELAY_SLIDER,
                                         {0.0, 200.0, 1.0, false, 0});
-    g_reverbPredelayIcon = ui::Label(
-        window, IDC_REVERB_PREDELAY_ICON, L"\u23F1", SS_CENTER | SS_NOTIFY);
-    ui::ApplyFont(g_reverbPredelayIcon, g_latencyIconFont);
+    g_reverbPredelayIcon = ui::OwnerDrawIcon(window, IDC_REVERB_PREDELAY_ICON);
     AddTooltip(g_reverbPredelayIcon,
                L"This parameter delays the audio stream by the set amount.");
 

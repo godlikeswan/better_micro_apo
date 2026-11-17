@@ -2029,6 +2029,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         break;
 
     case WM_DRAWITEM:
+        if (ui::DrawLatencyIcon(
+                reinterpret_cast<DRAWITEMSTRUCT*>(lParam))) {
+            return TRUE;
+        }
         if (ui::DrawIconButton(
                 reinterpret_cast<DRAWITEMSTRUCT*>(lParam))) {
             return TRUE;

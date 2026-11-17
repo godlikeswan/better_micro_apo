@@ -235,7 +235,6 @@ extern HWND g_meter;
 extern HFONT g_font;
 extern HFONT g_boldFont;
 extern HFONT g_titleFont;
-extern HFONT g_latencyIconFont;
 extern int g_dpi;
 
 // Selected row in the effect list and the type of that row. The list mirrors
