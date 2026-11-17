@@ -224,7 +224,7 @@ void LayoutEffectParams(int x, int y, int width)
     }
 }
 
-void LayoutEffects(int x, int y, int width, int height)
+void LayoutEffects(int x, int y, int width, int height, bool simple)
 {
     const int gap = Scale(8);
     const int labelWidth = Scale(60);
@@ -237,15 +237,27 @@ void LayoutEffects(int x, int y, int width, int height)
 
     const int presetLabelWidth = Scale(52);
     const int presetComboWidth = Scale(64);
-    const int presetX = x + labelWidth + comboWidth + Scale(16);
+    int presetX = x + labelWidth + comboWidth + Scale(16);
+    if (simple) {
+        // The Enable checkbox sits between the device and preset selectors.
+        // It is the primary action in the Simple view.
+        MoveWindow(g_simpleEnable, presetX, y + Scale(1), Scale(90),
+                   Scale(24), TRUE);
+        presetX += Scale(90) + Scale(16);
+    }
     MoveWindow(g_effectPresetLabel, presetX, y + Scale(3), presetLabelWidth,
                Scale(20), TRUE);
     MoveWindow(g_effectPresetCombo, presetX + presetLabelWidth, y,
                presetComboWidth, Scale(200), TRUE);
 
-    const int top = y + Scale(34);
+    int top = y + Scale(34);
+    if (simple) {
+        MoveWindow(g_simpleHint, x, y + Scale(30), width, Scale(20), TRUE);
+        top = y + Scale(56);
+    }
+
     const int bottomHeight = Scale(100);
-    const int panelHeight = height - Scale(34) - bottomHeight;
+    const int panelHeight = height - (top - y) - bottomHeight;
     const int listWidth = Scale(220);
 
     MoveWindow(g_effectListGroup, x, top, listWidth, panelHeight, TRUE);
@@ -562,6 +574,9 @@ void CreateControls(HWND root)
         L"Use headphones to avoid feedback.");
     g_meter = ui::Label(window, IDC_METER, L"Peak: --  RMS: --");
 
+    g_simpleEnable = ui::CheckBox(window, IDC_SIMPLE_ENABLE, L"Enable");
+    g_simpleHint = ui::Label(window, IDC_SIMPLE_HINT, L"");
+
     g_effectsUnsaved = ui::Label(window, IDC_EFFECTS_UNSAVED, L"", SS_RIGHT);
     g_effectsApply = ui::Button(window, IDC_EFFECTS_APPLY, L"Apply");
     g_effectsReset = ui::Button(window, IDC_EFFECTS_RESET, L"Reset");
@@ -594,15 +609,23 @@ void Layout(int width, int height)
     y += Scale(40);
 
     const int statusHeight = Scale(38);
-    const int tabsHeight = height - y - statusHeight;
-    MoveWindow(g_tabs, margin, y, width - 2 * margin, tabsHeight, TRUE);
+    const bool simple = g_view == View::Simple;
+    int contentX = margin;
+    int contentY = y;
+    int contentWidth = width - 2 * margin;
+    int contentHeight = height - y - statusHeight;
 
-    RECT content{0, 0, width - 2 * margin, tabsHeight};
-    TabCtrl_AdjustRect(g_tabs, FALSE, &content);
-    const int contentX = margin + content.left;
-    const int contentY = y + content.top;
-    const int contentWidth = content.right - content.left;
-    const int contentHeight = content.bottom - content.top;
+    if (!simple) {
+        const int tabsHeight = height - y - statusHeight;
+        MoveWindow(g_tabs, margin, y, width - 2 * margin, tabsHeight, TRUE);
+
+        RECT content{0, 0, width - 2 * margin, tabsHeight};
+        TabCtrl_AdjustRect(g_tabs, FALSE, &content);
+        contentX = margin + content.left;
+        contentY = y + content.top;
+        contentWidth = content.right - content.left;
+        contentHeight = content.bottom - content.top;
+    }
 
     MoveWindow(g_pageBackground, contentX, contentY, contentWidth,
                contentHeight, TRUE);
@@ -624,7 +647,12 @@ void Layout(int width, int height)
         LayoutDevices(contentPadding, contentPadding, viewWidth, viewHeight);
         break;
     case View::Effects:
-        LayoutEffects(contentPadding, contentPadding, viewWidth, viewHeight);
+        LayoutEffects(contentPadding, contentPadding, viewWidth, viewHeight,
+                      false);
+        break;
+    case View::Simple:
+        LayoutEffects(contentPadding, contentPadding, viewWidth, viewHeight,
+                      true);
         break;
     }
 

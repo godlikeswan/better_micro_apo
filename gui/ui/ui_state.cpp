@@ -48,6 +48,9 @@ HWND g_effectsApply = nullptr;
 HWND g_effectsReset = nullptr;
 HWND g_monoNote = nullptr;
 
+HWND g_simpleEnable = nullptr;
+HWND g_simpleHint = nullptr;
+
 HWND g_gateThresholdLabel = nullptr;
 HWND g_gateThresholdSlider = nullptr;
 HWND g_gateRangeLabel = nullptr;

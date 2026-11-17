@@ -109,17 +109,30 @@ std::wstring g_resumeListenId;
 // them.
 bool g_preserveDirtyEffects = false;
 
-// Persisted View menu choice. It does not change the layout yet, so only the
-// checked menu item and the saved value depend on it.
+// Persisted View menu choice. Simple reuses the Effects editor without tabs;
+// Advanced keeps the Install / Devices / Effects tabs.
 gui::InterfaceMode g_interfaceMode = gui::InterfaceMode::Simple;
+
+bool SimpleMode()
+{
+    return g_interfaceMode == gui::InterfaceMode::Simple;
+}
+
+// The Effects controls are shared by the Effects tab and the Simple view.
+bool IsEffectView()
+{
+    return g_view == View::Effects || g_view == View::Simple;
+}
 
 // Forward declarations for helpers that are used before their definitions.
 void UpdateViewAvailability();
 void SetActiveView(View view);
 void UpdateDevicesUi();
 void UpdateEffectsUi();
+void UpdateSimpleUi();
 void RefreshEffectGraph();
 bool ValidEffectIndex();
+void DoSimpleEnable(bool enable);
 
 int CountEffectType(const apo::ApoSettings& settings, apo::EffectType type)
 {
@@ -158,9 +171,19 @@ bool DevicesAvailable()
     return g_files.FullyInstalled() || AnyBound();
 }
 
+// Advanced-mode prerequisite for the Effects tab. This stays independent of the
+// interface mode so the tab availability stored while Simple mode is active is
+// still correct when the user switches back.
 bool EffectsAvailable()
 {
     return g_files.FullyInstalled() && AnyBound();
+}
+
+// The Simple view can edit settings before anything is installed or bound; its
+// controls are gated by the selected device instead.
+bool EffectEditorAvailable()
+{
+    return SimpleMode() || EffectsAvailable();
 }
 
 bool EffectsDirty()
@@ -212,9 +235,17 @@ bool DevicesPending()
 
 bool ValidEffectIndex()
 {
-    return g_effectIndex >= 0 &&
-           g_effectIndex < static_cast<int>(g_endpoints.size()) &&
-           g_endpoints[g_effectIndex].Enabled();
+    if (g_effectIndex < 0 ||
+        g_effectIndex >= static_cast<int>(g_endpoints.size())) {
+        return false;
+    }
+
+    // The Simple view lists every active capture device, not only the ones that
+    // are already bound. Advanced keeps its bound-only behaviour.
+    if (SimpleMode()) {
+        return apo::IsDeviceActive(g_endpoints[g_effectIndex].state);
+    }
+    return g_endpoints[g_effectIndex].Enabled();
 }
 
 View DefaultView()
@@ -230,6 +261,11 @@ View DefaultView()
 
 int ViewToTab(View view)
 {
+    // The Simple view has no tab; callers that need a tab index only run in
+    // Advanced mode, but keep this safe for the shared helpers.
+    if (view == View::Simple) {
+        return 0;
+    }
     return static_cast<int>(view);
 }
 
@@ -328,9 +364,16 @@ void UpdateViewVisibility()
         }
     };
 
+    const bool simple = g_view == View::Simple;
     const bool install = g_view == View::Install;
     const bool devices = g_view == View::Devices;
-    const bool effects = g_view == View::Effects;
+    const bool effects = IsEffectView();
+
+    // The tab control is the only chrome the Simple view removes. The title and
+    // status bar stay where they are.
+    if (g_tabs != nullptr) {
+        ShowWindow(g_tabs, simple ? SW_HIDE : SW_SHOW);
+    }
 
     showAll({g_groupFiles, g_dllLabel, g_dllValue, g_dllStatus, g_comLabel,
              g_comValue, g_comStatus, g_apoLabel, g_apoValue, g_apoStatus,
@@ -347,6 +390,8 @@ void UpdateViewVisibility()
              g_listenNote, g_meter, g_effectsUnsaved, g_effectsApply,
              g_effectsReset},
             effects);
+
+    showAll({g_simpleEnable, g_simpleHint}, simple);
 
     ShowWindow(g_effectGraph,
                (effects && HasEffectSelection() &&
@@ -604,7 +649,7 @@ void ShowEffectForSelected()
                  effect.dynamics.expand ? BST_CHECKED : BST_UNCHECKED, 0);
 
     SetWindowTextW(g_effectHeading, apo::EffectTypeName(effect.type));
-    if (g_view == View::Effects) {
+    if (IsEffectView()) {
         // The parameter panel is shared: hide every type first so switching to
         // an effect of another type does not leave the previous controls on
         // screen.
@@ -615,7 +660,7 @@ void ShowEffectForSelected()
     }
 
     ShowWindow(g_effectGraph,
-               (g_view == View::Effects && ui::GraphSupported(effect.type))
+               (IsEffectView() && ui::GraphSupported(effect.type))
                    ? SW_SHOW
                    : SW_HIDE);
 
@@ -832,10 +877,14 @@ void DoLiveApply()
         toSave.isolateEffects = persisted.isolateEffects;
     }
 
-    // If the running APO has no live channel yet, leave the edit pending so
-    // the normal Apply path can perform the one restart that installs it.
-    if (!g_files.dllUpToDate ||
-        !apo::RuntimeSettingsFileReady(endpoint.id)) {
+    const bool bound = endpoint.Enabled();
+
+    // A bound APO needs a live channel. If it is missing, leave the edit
+    // pending so the normal Apply path can perform the one restart that
+    // installs it. An unbound Simple-view device has no channel yet; its
+    // settings are only saved so the next Enable starts from them.
+    if (bound && (!g_files.dllUpToDate ||
+                  !apo::RuntimeSettingsFileReady(endpoint.id))) {
         return;
     }
 
@@ -843,14 +892,15 @@ void DoLiveApply()
         SetWindowTextW(g_status, L"Could not save the settings file.");
         return;
     }
-    if (!apo::WriteRuntimeSettings(endpoint.id, toSave)) {
+    if (bound && !apo::WriteRuntimeSettings(endpoint.id, toSave)) {
         SetWindowTextW(g_status, L"Could not apply the settings live.");
         return;
     }
 
     endpoint.settingsDirty = false;
     UpdateEffectsUi();
-    SetWindowTextW(g_status, L"Settings applied live.");
+    SetWindowTextW(g_status, bound ? L"Settings applied live."
+                                   : L"Settings saved.");
 }
 
 // ---------------------------------------------------------------------------
@@ -1063,9 +1113,10 @@ void UpdateDevicesUi()
 
 void UpdateEffectsUi()
 {
-    const bool available = EffectsAvailable();
+    const bool available = EffectEditorAvailable();
     const bool hasDevice = ValidEffectIndex();
     const bool dirty = EffectsDirty();
+    const bool bound = hasDevice && g_endpoints[g_effectIndex].Enabled();
 
     // Lock the device selector while edits are pending so a half-edited
     // device cannot be left behind. Apply or Reset unlocks it.
@@ -1085,11 +1136,44 @@ void UpdateEffectsUi()
     EnableWindow(g_effectAdd,
                  !g_busy && available && hasDevice &&
                      effectCount < apo::kMaxEffects);
-    EnableWindow(g_listen, !g_busy && hasDevice);
+    EnableWindow(g_listen, !g_busy && hasDevice && bound);
     EnableWindow(g_effectsApply, !g_busy && available && dirty);
     EnableWindow(g_effectsReset, !g_busy && available && dirty);
     SetApplyHighlight(g_effectsApply, dirty);
     SetWindowTextW(g_effectsUnsaved, dirty ? L"Unsaved changes" : L"");
+
+    UpdateSimpleUi();
+}
+
+void UpdateSimpleUi()
+{
+    if (g_simpleEnable == nullptr || g_simpleHint == nullptr) {
+        return;
+    }
+
+    const bool hasDevice = ValidEffectIndex();
+    const bool bound = hasDevice && g_endpoints[g_effectIndex].Enabled();
+
+    EnableWindow(g_simpleEnable, !g_busy && hasDevice);
+    // Keep the user's just-clicked state visible while the worker runs. The
+    // refresh after the operation sets the real state.
+    if (!g_busy) {
+        SendMessageW(g_simpleEnable, BM_SETCHECK,
+                     bound ? BST_CHECKED : BST_UNCHECKED, 0);
+    }
+
+    std::wstring hint;
+    if (!hasDevice) {
+        hint = L"Select a capture device.";
+    } else if (bound) {
+        hint = L"Enabled on this device. Effects apply live.";
+    } else if (!g_files.FullyInstalled() || g_files.DllStale()) {
+        hint = L"Not enabled. Checking Enable installs or updates the APO, "
+               L"then applies it to this device.";
+    } else {
+        hint = L"Not enabled. Checking Enable applies the APO to this device.";
+    }
+    SetWindowTextW(g_simpleHint, hint.c_str());
 }
 
 void ShowDeviceForSelected()
@@ -1124,6 +1208,13 @@ void UpdateTabAvailability()
 
 void UpdateViewAvailability()
 {
+    if (SimpleMode()) {
+        // The Simple view has no tabs and stays available even before the APO
+        // is installed. Refresh the controls that depend on the binding.
+        UpdateEffectsUi();
+        return;
+    }
+
     if (g_view == View::Effects && !EffectsAvailable()) {
         SetActiveView(DevicesAvailable() ? View::Devices : View::Install);
     } else if (g_view == View::Devices && !DevicesAvailable()) {
@@ -1134,6 +1225,14 @@ void UpdateViewAvailability()
 
 void SetActiveView(View view)
 {
+    // The interface mode owns the view: Simple never shows a tab, and Advanced
+    // never shows the Simple layout.
+    if (SimpleMode()) {
+        view = View::Simple;
+    } else if (view == View::Simple) {
+        view = DefaultView();
+    }
+
     if (view == View::Effects && !EffectsAvailable()) {
         view = DevicesAvailable() ? View::Devices : View::Install;
     }
@@ -1142,9 +1241,11 @@ void SetActiveView(View view)
     }
 
     g_view = view;
-    g_tabLoading = true;
-    TabCtrl_SetCurSel(g_tabs, ViewToTab(view));
-    g_tabLoading = false;
+    if (view != View::Simple) {
+        g_tabLoading = true;
+        TabCtrl_SetCurSel(g_tabs, ViewToTab(view));
+        g_tabLoading = false;
+    }
 
     UpdateViewVisibility();
     Relayout();
@@ -1316,10 +1417,17 @@ void RebuildEffectCombo(const std::wstring& selectedId)
     SendMessageW(g_effectDeviceCombo, WM_SETREDRAW, FALSE, 0);
     SendMessageW(g_effectDeviceCombo, CB_RESETCONTENT, 0, 0);
 
+    const bool allActive = SimpleMode();
     int selectedItem = -1;
     for (size_t i = 0; i < g_endpoints.size(); ++i) {
         const apo::Endpoint& endpoint = g_endpoints[i];
-        if (!endpoint.Enabled()) {
+        if (allActive) {
+            // The Simple view offers every capture device Windows can use, not
+            // only the ones that are already bound.
+            if (!apo::IsDeviceActive(endpoint.state)) {
+                continue;
+            }
+        } else if (!endpoint.Enabled()) {
             continue;
         }
 
@@ -1403,7 +1511,8 @@ void Refresh()
         endpoint.isolationDirty = false;
     }
     for (apo::Endpoint& endpoint : g_endpoints) {
-        if (!endpoint.Enabled()) {
+        // The Simple view can have pending edits on an unbound device too.
+        if (!endpoint.Enabled() && !SimpleMode()) {
             continue;
         }
         for (const auto& pending : pendingEffects) {
@@ -1591,6 +1700,133 @@ void DoApplyEffects()
     }
 
     StartApply(std::move(changes), L"Applying...");
+}
+
+// Writes any pending effect edits before an enable/disable operation refreshes
+// the endpoint list. A pending Devices isolation edit is not persisted here;
+// the Devices view owns it.
+void FlushDirtySettings()
+{
+    for (apo::Endpoint& endpoint : g_endpoints) {
+        if (!endpoint.settingsDirty) {
+            continue;
+        }
+
+        apo::ApoSettings toSave = endpoint.settings;
+        if (endpoint.isolationDirty) {
+            apo::ApoSettings persisted;
+            apo::LoadSettings(endpoint.id, persisted);
+            toSave.isolateEffects = persisted.isolateEffects;
+        }
+
+        if (apo::SaveSettings(endpoint.id, toSave)) {
+            endpoint.settingsDirty = false;
+        }
+    }
+}
+
+// The Simple view's Enable checkbox. Enabling installs or updates the APO when
+// needed, then binds the selected device. Disabling unbinds it; when it was the
+// last bound device the files and registration are removed as well.
+void DoSimpleEnable(bool enable)
+{
+    if (g_busy || !ValidEffectIndex()) {
+        return;
+    }
+
+    const int index = g_effectIndex;
+    const std::wstring id = g_endpoints[index].id;
+    const apo::ApoSettings settings = g_endpoints[index].settings;
+    const bool bound = g_endpoints[index].Enabled();
+    if (enable == bound) {
+        UpdateSimpleUi();
+        return;
+    }
+
+    int enabledCount = 0;
+    for (const apo::Endpoint& endpoint : g_endpoints) {
+        if (endpoint.Enabled()) {
+            ++enabledCount;
+        }
+    }
+    const bool uninstall = !enable && enabledCount <= 1;
+
+    // Keep edits made on other devices across the refresh. The selected device
+    // is saved again by the worker as part of the change.
+    FlushDirtySettings();
+    g_preserveDirtyEffects = true;
+
+    // A binding change is not a settings-only apply, so do not bring the
+    // audition stream back afterwards.
+    StopListening();
+    g_resumeListen = false;
+    g_resumeListenId.clear();
+
+    if (enable) {
+        StartWork([id, settings] {
+            // Check the installed DLL and the APO registration every time. The
+            // hash check also catches an outdated DLL left by an older build.
+            const apo::FilesStatus status = apo::GetFilesStatus();
+            if (!status.FullyInstalled() || status.DllStale()) {
+                const apo::Result installed = apo::InstallFiles();
+                if (!installed.ok) {
+                    return installed;
+                }
+            }
+
+            apo::Change change;
+            change.id = id;
+            change.enable = true;
+            change.settingsChanged = true;
+            change.settings = settings;
+            return apo::ApplyChanges({change});
+        }, L"Enabling...");
+    } else if (uninstall) {
+        StartWork([id, settings] {
+            apo::Result result;
+            // UninstallFiles restores every binding and removes the files in a
+            // single audio stop. Keep the effect edits for the next enable.
+            if (!apo::SaveSettings(id, settings)) {
+                result.details += L"Could not save the settings file.\r\n";
+            }
+            const apo::Result uninstalled = apo::UninstallFiles();
+            result.ok = uninstalled.ok;
+            result.summary = uninstalled.summary;
+            result.details += uninstalled.details;
+            return result;
+        }, L"Disabling...");
+    } else {
+        StartWork([id, settings] {
+            apo::Change change;
+            change.id = id;
+            change.enable = false;
+            change.settingsChanged = true;
+            change.settings = settings;
+            return apo::ApplyChanges({change});
+        }, L"Disabling...");
+    }
+}
+
+void OnSimpleEnableClicked()
+{
+    if (g_busy || !ValidEffectIndex()) {
+        UpdateSimpleUi();
+        return;
+    }
+
+    const bool want =
+        SendMessageW(g_simpleEnable, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    const bool bound = g_endpoints[g_effectIndex].Enabled();
+    if (want == bound) {
+        return;
+    }
+
+    if (!CommitEffectEditor()) {
+        UpdateSimpleUi();
+        return;
+    }
+
+    DoSimpleEnable(want);
 }
 
 void DoCaptureNoiseProfile()
@@ -2124,9 +2360,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         ui::ApplyNativeThemeToChildren(window);
         ui::ApplyListStateImages(g_list);
         ui::ApplyListStateImages(g_effectList);
+        g_view = SimpleMode() ? View::Simple : View::Install;
         UpdateViewVisibility();
         Refresh();
-        SetActiveView(DefaultView());
+        SetActiveView(SimpleMode() ? View::Simple : DefaultView());
         RepaintAll();
         return 0;
     }
@@ -2219,11 +2456,17 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             PostMessageW(window, WM_CLOSE, 0, 0);
             break;
         case IDM_VIEW_SIMPLE:
-            g_interfaceMode = gui::InterfaceMode::Simple;
+            if (!SimpleMode()) {
+                g_interfaceMode = gui::InterfaceMode::Simple;
+                SetActiveView(View::Simple);
+            }
             ui::UpdateMenuMode(window, g_interfaceMode);
             break;
         case IDM_VIEW_ADVANCED:
-            g_interfaceMode = gui::InterfaceMode::Advanced;
+            if (SimpleMode()) {
+                g_interfaceMode = gui::InterfaceMode::Advanced;
+                SetActiveView(DefaultView());
+            }
             ui::UpdateMenuMode(window, g_interfaceMode);
             break;
         case IDC_REFRESH:
@@ -2318,6 +2561,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
                 OnIsolateClicked();
             }
             break;
+        case IDC_SIMPLE_ENABLE:
+            if (HIWORD(wParam) == BN_CLICKED) {
+                OnSimpleEnableClicked();
+            }
+            break;
         case IDC_NOISE_CAPTURE:
             if (HIWORD(wParam) == BN_CLICKED) {
                 DoCaptureNoiseProfile();
@@ -2389,10 +2637,13 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             // A Devices Apply can finish before the debounced live apply
             // fires. Resume the pending effect save now that the worker is
             // done; if live delivery is unavailable it stays pending for
-            // Apply.
+            // Apply. An unbound Simple-view device only needs the settings
+            // file, so it can resume even when the live channel is missing.
             if (kind == WorkKind::Generic && ValidEffectIndex() &&
                 g_endpoints[g_effectIndex].settingsDirty &&
-                g_files.dllUpToDate) {
+                (g_files.dllUpToDate ||
+                 (SimpleMode() &&
+                  !g_endpoints[g_effectIndex].Enabled()))) {
                 g_liveApplyPending =
                     SetTimer(g_window, kLiveApplyTimer, kLiveApplyDelayMs,
                              nullptr) != 0;

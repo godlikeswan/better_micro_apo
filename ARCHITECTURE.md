@@ -146,12 +146,22 @@ no mapping to poll).
 
 ## GUI structure
 
-`gui/main.cpp` is split into three tabbed views. The tab order also expresses
-the prerequisite chain, so a later tab stays disabled until the earlier step is
-done: **Install** is always available, **Devices** requires the APO files or at
-least one bound device, and **Effects** requires a full install and at least one
-bound device. The app opens on the most advanced available tab and falls back
-when an operation removes a prerequisite.
+`gui/main.cpp` has two interface modes. **Advanced** is split into three tabbed
+views; the tab order also expresses the prerequisite chain, so a later tab stays
+disabled until the earlier step is done: **Install** is always available,
+**Devices** requires the APO files or at least one bound device, and **Effects**
+requires a full install and at least one bound device. The app opens on the most
+advanced available tab and falls back when an operation removes a prerequisite.
+
+**Simple** is the default mode. It hides the tab control and lays the Effects
+editor over the full content area, adding an **Enable** checkbox between the
+device and preset selectors. Its device selector lists every active capture
+endpoint (`apo::IsDeviceActive`), not only bound ones. Checking **Enable**
+verifies the installed files and APO registration, installs or updates when
+needed, and binds the device. Unchecking it unbinds the device, or uninstalls
+the files and registration when no other device is bound. Effect edits on an
+unbound Simple device are saved without a runtime publish, so the next Enable
+starts from them.
 
 The UI is split into small modules so a view describes *what* controls it has
 without also owning their construction or geometry. `gui/ui/ui_state.*` holds
@@ -177,7 +187,8 @@ The native menu bar is owner-drawn by `gui/ui/menu.cpp` and uses the theme
 background brush through `SetMenuInfo(MIM_BACKGROUND)`, so it follows the same
 light/dark palette and is refreshed on theme changes. `gui/preferences.*`
 persists the **View** mode in `C:\ProgramData\better_micro_apo\gui.ini`; the
-default is **Simple**.
+default is **Simple**. Switching modes takes effect immediately, and the choice
+is written when the app exits.
 
 List checkboxes are drawn from the control's state image list. In dark mode the
 app replaces the two native glyphs inside that list (`ImageList_Replace`) instead

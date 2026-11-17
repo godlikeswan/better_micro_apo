@@ -20,13 +20,32 @@ build\bin\Release\better_micro_apo_gui.exe
 The GUI is self-contained: the APO DLL is embedded in it, so it is the only
 file you need to distribute.
 
-The window has three tabs: **Install**, **Devices**, and **Effects**. Later
-tabs stay disabled until their prerequisite is met, and the app opens on the
-most advanced tab that is available.
-
 The menu bar has **File → Exit** and **View → Simple / Advanced**. The selected
 mode defaults to **Simple** and is saved on exit in
-`C:\ProgramData\better_micro_apo\gui.ini`; it does not change the layout yet.
+`C:\ProgramData\better_micro_apo\gui.ini`.
+
+### Simple
+
+**Simple** is the default view. It looks like the **Effects** page with one
+extra switch. Pick any connected capture device that Windows has not disabled,
+then check **Enable**:
+
+- If the APO is missing, or the installed DLL does not match this build, the
+  GUI installs or updates it first.
+- The APO is then bound to the selected device as an endpoint effect.
+- The rest of the page edits that device's effects exactly like the Effects
+  tab. Effects apply live while enabled and are saved for the next enable while
+  disabled.
+
+Unchecking **Enable** unbinds the device. When it was the last enabled device,
+the GUI also uninstalls the APO files and registration; device settings and logs
+are kept. **Listen to this device** needs an enabled device.
+
+### Advanced
+
+**Advanced** shows the three tabs: **Install**, **Devices**, and **Effects**.
+Later tabs stay disabled until their prerequisite is met, and the app opens on
+the most advanced tab that is available.
 
 ### Install
 

@@ -56,6 +56,10 @@ enum : int {
     IDC_EFFECTS_RESET,
     IDC_MONO_NOTE,
 
+    // Simple view.
+    IDC_SIMPLE_ENABLE,
+    IDC_SIMPLE_HINT,
+
     // Effect parameters.
     IDC_GATE_THRESHOLD_LABEL,
     IDC_GATE_THRESHOLD_SLIDER,
@@ -135,6 +139,9 @@ enum class View : int {
     Install = 0,
     Devices,
     Effects,
+    // The Simple interface mode is not a tab. It reuses the Effects editor but
+    // hides the tab control and adds the Enable checkbox.
+    Simple,
 };
 
 constexpr wchar_t kPageClass[] = L"BetterMicroApoPage";
@@ -190,6 +197,10 @@ extern HWND g_effectsUnsaved;
 extern HWND g_effectsApply;
 extern HWND g_effectsReset;
 extern HWND g_monoNote;
+
+// Simple view.
+extern HWND g_simpleEnable;
+extern HWND g_simpleHint;
 
 extern HWND g_gateThresholdLabel;
 extern HWND g_gateThresholdSlider;
