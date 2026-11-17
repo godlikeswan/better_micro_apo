@@ -108,7 +108,7 @@ preserved.
    and its settings block/clamp in `src/apo_settings.cpp`.
 3. Create it in `StagePool::Configure` and add the GUI controls in
    `gui/ui/structure.cpp` / `gui/widgets.cpp`.
-4. Write its [effect documentation](../effects/index.md).
+4. Write its page in the [list of effects](../effects/index.md).
 
 No change to `APOProcess` is needed. Transfer curves shown in the GUI call the
 same inline functions from `src/dsp/transfer.h` as the DSP, so the graph cannot

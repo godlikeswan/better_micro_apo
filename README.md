@@ -49,7 +49,7 @@ To uninstall, uncheck **Enable** on every device, or use **File → Uninstall**.
 
 - [What the APO does](docs/apo/overview.md)
 - [How the GUI works](docs/gui/overview.md)
-- [Effect reference](docs/effects/index.md)
+- [List of effects](docs/effects/index.md)
 - [DLL ↔ GUI settings sharing](docs/runtime-sharing.md)
 - [Full documentation index](docs/index.md)
 

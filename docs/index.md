@@ -10,8 +10,8 @@ the channel they share at runtime.
   and where its files live.
 - [GUI overview](gui/overview.md) — window lifecycle, events, background work,
   and module responsibilities.
-- [Effect reference](effects/index.md) — the stage interface and every effect
-  with its parameters and implementation.
+- [List of effects](effects/index.md) — what each effect does, its controls,
+  and implementation notes.
 
 ## APO
 

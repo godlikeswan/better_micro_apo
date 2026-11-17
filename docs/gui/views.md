@@ -93,4 +93,4 @@ non-client paint so the inactive-color repaint cannot win).
 
 For an effect parameter, also add the default/clamp in `apo_settings.cpp`, the
 reset icon target in `main.cpp`, and its row in the
-[effect reference](../effects/index.md).
+[list of effects](../effects/index.md).

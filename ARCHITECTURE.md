@@ -12,4 +12,4 @@ at [docs/index.md](docs/index.md):
 - [Widgets and controls](docs/gui/widgets.md)
 - [Theming and repainting](docs/gui/theming.md)
 - [DLL ↔ GUI settings sharing](docs/runtime-sharing.md)
-- [Effect reference](docs/effects/index.md)
+- [List of effects](docs/effects/index.md)

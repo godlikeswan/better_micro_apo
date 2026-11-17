@@ -40,7 +40,7 @@ APO" and the APO flags used by the base class.
   Settings published by the GUI are picked up by polling a mapped file.
 
 See [APO operation](operation.md) for the call sequence and allocations, and
-the [effect reference](../effects/index.md) for each stage.
+the [list of effects](../effects/index.md) for each stage.
 
 ## Files
 
@@ -63,4 +63,4 @@ for the life of a stream. The sharing mechanics are described in
 - [Installation and registration](installation.md)
 - [Device binding](device-binding.md)
 - [APO operation](operation.md)
-- [Effect reference](../effects/index.md)
+- [List of effects](../effects/index.md)

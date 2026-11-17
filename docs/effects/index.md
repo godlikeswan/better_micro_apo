@@ -1,26 +1,32 @@
-# Effect reference
+# Effects
 
-The DSP is a list of effects in processing order. The same type may appear more
-than once, and the list order is the order in which the signal passes through
-the stages. Each device has four independent presets; only the selected preset
-is processed.
+There is a set of common audio effects present. Here is the list:
 
-Page order in this index follows the `EffectType` enum, which is also the order
-of a sensible default chain:
+| Effect | Type | What it does |
+| --- | --- | --- |
+| [Noise reduction](noise-reduction.md) | Cleanup | Hushes steady room noise such as hiss, fans, and air conditioning. |
+| [Gate](gate.md) | Dynamics | Quiets the input between phrases instead of leaving background noise running. |
+| [Dynamic (proximity)](dynamic.md) | Dynamics | Tames boomy close-mic lows or fills out thin, distant ones. |
+| [Compressor](compressor.md) | Dynamics | Keeps sudden loud sounds in check so the overall level can be raised safely. |
+| [Gain](gain.md) | Level | Turns the whole signal up or down — usually the makeup volume after compression. |
+| [Mono](mono.md) | Channels | Copies the left channel to all channels for a mono mic plugged into a stereo input. |
+| [Distortion](distortion.md) | Tone | Adds soft overdrive or saturation for warmth and edge. |
+| [Reverb](reverb.md) | Space | Adds a room or hall tail so the voice sounds less dry. |
 
-1. [Noise reduction](noise-reduction.md)
-2. [Gate](gate.md)
-3. [Dynamic (proximity)](dynamic.md)
-4. [Compressor](compressor.md)
-5. [Gain](gain.md)
-6. [Mono](mono.md)
-7. [Distortion](distortion.md)
-8. [Reverb](reverb.md)
+Add them in any order, use the checkboxes to switch individual effects on or
+off, and click a row to adjust its settings. The list is processed from top to
+bottom, and the same effect can be added more than once. Each device has four
+presets, so you can keep different effect sets for different situations. Every
+effect page starts with what it does and what its controls mean; the
+implementation notes come at the end.
 
-Each effect page follows the same structure: description, parameters with
-defaults and clamps, implementation details, and GUI notes.
+---
 
-## The abstract Stage interface
+## Implementation details
+
+This section is background for anyone changing the code.
+
+### The abstract Stage interface
 
 All effects implement `apo::dsp::Stage` (`src/dsp/dsp.h`):
 
@@ -44,7 +50,7 @@ a type to the n-th pool slot, resets a slot whose stable instance id changed,
 retunes it with `Update`, and refills the chain without allocating. That is why
 effect edits can be applied from the runtime polling path.
 
-## Limits and defaults
+### Limits and defaults
 
 - The list holds at most `kMaxEffects` (16) effects in total.
 - Noise reduction, gate, and reverb are heavy: at most 4 instances of each
@@ -52,11 +58,11 @@ effect edits can be applied from the runtime polling path.
 - `apo::MakeEffect(type, id)` builds an instance from the type's struct defaults
   and **enables it**. The struct's own `enabled = false` is the "not set yet"
   value; a newly added effect in the GUI is always on.
-- `ClampSettings` repairs non-finite values using the fallback defaults below,
-  clamps every number to the listed range, normalizes ids, and forces
-  `isolateEffects = true`.
+- `ClampSettings` repairs non-finite values using the fallback defaults in each
+  effect's page, clamps every number to its listed range, normalizes ids, and
+  forces `isolateEffects = true`.
 
-## Graph and transfer math
+### Graph and transfer math
 
 The GUI draws a live curve for distortion, compressor, and gate, and the
 frequency-band shape for dynamic. The distortion, gate, and compressor stages
@@ -64,7 +70,7 @@ and the graph call the same inline functions in `src/dsp/transfer.h`, so the
 displayed curve cannot drift from the audio path. The dynamic graph shows the
 analog band-pass prototype approximated by the stage's state-variable filter.
 
-## Adding a new effect type
+### Adding a new effect type
 
 Write a `Stage` subclass, add its `EffectType`, name, settings block and clamps
 in `src/apo_settings.*`, create it in `StagePool::Configure`, add GUI controls,
