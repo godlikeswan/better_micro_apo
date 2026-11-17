@@ -149,6 +149,7 @@ extern HWND g_title;
 extern HWND g_refresh;
 extern HWND g_pageBackground;
 extern HWND g_status;
+extern HWND g_latencyTooltip;
 
 // Main view.
 extern HWND g_effectDeviceLabel;

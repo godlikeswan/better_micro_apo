@@ -268,8 +268,9 @@ The GUI clamps values to a safe range:
   restart. The first settings change on a device that
   has no runtime file, or after the APO DLL is updated, also restarts audio
   once.
-- Gate lookahead delays the stream by the configured lookahead time while the
-  gate is enabled. Keep it at 0 ms if you need zero latency.
+- Parameters that add latency are marked with a ⏱ icon and have a tooltip.
+  Gate lookahead delays the stream by the configured time while the gate is
+  enabled. Keep it at 0 ms if you need zero latency.
 - Noise reduction delays the stream by about 512 samples while it is enabled.
   The captured profile describes the noise in the room at that moment; capture
   it again if the background noise changes noticeably.

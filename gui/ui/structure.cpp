@@ -28,6 +28,22 @@ void AddColumn(HWND list, int index, const wchar_t* text, int width,
     ListView_InsertColumn(list, index, &column);
 }
 
+void AddTooltip(HWND control, const wchar_t* text)
+{
+    if (g_latencyTooltip == nullptr || control == nullptr) {
+        return;
+    }
+
+    TOOLINFOW info{};
+    info.cbSize = sizeof(info);
+    info.uFlags = TTF_SUBCLASS | TTF_IDISHWND;
+    info.hwnd = GetParent(control);
+    info.uId = reinterpret_cast<UINT_PTR>(control);
+    info.lpszText = const_cast<wchar_t*>(text);
+    SendMessageW(g_latencyTooltip, TTM_ADDTOOLW, 0,
+                 reinterpret_cast<LPARAM>(&info));
+}
+
 void CreateParamResetButtons(HWND parent)
 {
     for (int param = 0; param < ParamResetCount; ++param) {
@@ -74,7 +90,7 @@ void LayoutEffectParams(int x, int y, int width)
 
     const int columnGap = Scale(16);
     const int columnWidth = (width - columnGap) / 2;
-    const int labelWidth = Scale(110);
+    const int labelWidth = Scale(128);
     const int resetWidth = Scale(24);
     const int resetGap = Scale(4);
     const int sliderWidth =
@@ -282,6 +298,16 @@ void CreateControls(HWND root)
         root, nullptr, g_instance, nullptr);
     HWND window = g_pageBackground;
 
+    g_latencyTooltip = CreateWindowExW(
+        0, TOOLTIPS_CLASSW, nullptr,
+        WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, CW_USEDEFAULT, CW_USEDEFAULT,
+        CW_USEDEFAULT, CW_USEDEFAULT, root, nullptr, g_instance, nullptr);
+    if (g_latencyTooltip != nullptr) {
+        ui::ApplyNativeTheme(g_latencyTooltip);
+        SendMessageW(g_latencyTooltip, TTM_SETMAXTIPWIDTH, 0, Scale(240));
+        SendMessageW(g_latencyTooltip, TTM_SETDELAYTIME, TTDT_INITIAL, 250);
+    }
+
     g_effectDeviceLabel =
         ui::Label(window, IDC_EFFECT_DEVICE_LABEL, L"Device:");
     g_effectDeviceCombo =
@@ -370,9 +396,11 @@ void CreateControls(HWND root)
     g_gateReleaseSlider = ui::Slider(window, IDC_GATE_RELEASE_SLIDER,
                                      {1.0, 5000.0, 0.0, true, 0});
     g_gateLookaheadLabel =
-        ui::Label(window, IDC_GATE_LOOKAHEAD_LABEL, L"Lookahead (ms)");
+        ui::Label(window, IDC_GATE_LOOKAHEAD_LABEL, L"Lookahead (ms)  \u23F1");
     g_gateLookaheadSlider = ui::Slider(window, IDC_GATE_LOOKAHEAD_SLIDER,
                                        {0.0, 300.0, 1.0, false, 0});
+    AddTooltip(g_gateLookaheadLabel,
+               L"This parameter delays the audio stream by the set amount.");
 
     g_compThresholdLabel =
         ui::Label(window, IDC_COMP_THRESHOLD_LABEL, L"Threshold (dBFS)");
@@ -434,9 +462,11 @@ void CreateControls(HWND root)
     g_reverbDampingSlider = ui::Slider(window, IDC_REVERB_DAMPING_SLIDER,
                                        {0.0, 100.0, 1.0, false, 0});
     g_reverbPredelayLabel =
-        ui::Label(window, IDC_REVERB_PREDELAY_LABEL, L"Predelay (ms)");
+        ui::Label(window, IDC_REVERB_PREDELAY_LABEL, L"Predelay (ms)  \u23F1");
     g_reverbPredelaySlider = ui::Slider(window, IDC_REVERB_PREDELAY_SLIDER,
                                         {0.0, 200.0, 1.0, false, 0});
+    AddTooltip(g_reverbPredelayLabel,
+               L"This parameter delays the audio stream by the set amount.");
 
     g_noiseReductionLabel =
         ui::Label(window, IDC_NOISE_REDUCTION_LABEL, L"Reduction (dB)");

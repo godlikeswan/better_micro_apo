@@ -218,7 +218,8 @@ void ApplyNativeTheme(HWND window)
         AllowDarkModeForWindow(window, g_theme.dark);
         SetWindowTheme(window, g_theme.dark ? L"DarkMode_ItemsView" : nullptr,
                        nullptr);
-    } else if (wcscmp(className, L"SysTabControl32") == 0) {
+    } else if (wcscmp(className, L"SysTabControl32") == 0 ||
+               wcscmp(className, TOOLTIPS_CLASSW) == 0) {
         AllowDarkModeForWindow(window, g_theme.dark);
         SetWindowTheme(window, g_theme.dark ? L"DarkMode_Explorer" : nullptr,
                        nullptr);

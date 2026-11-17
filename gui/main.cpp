@@ -1984,6 +1984,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             ui::RefreshMenuBar(window);
             ui::ApplyTitleBarTheme(window);
             ui::ApplyNativeThemeToChildren(window);
+            ui::ApplyNativeTheme(g_latencyTooltip);
             ui::ApplyListStateImages(g_effectList);
             RedrawWindow(window, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE);
             RepaintAll();
@@ -1995,6 +1996,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         ui::RefreshMenuBar(window);
         ui::ApplyTitleBarTheme(window);
         ui::ApplyNativeThemeToChildren(window);
+        ui::ApplyNativeTheme(g_latencyTooltip);
         ui::ApplyListStateImages(g_effectList);
         RedrawWindow(window, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE);
         RepaintAll();

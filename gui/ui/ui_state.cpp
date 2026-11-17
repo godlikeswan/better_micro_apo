@@ -7,6 +7,7 @@ HWND g_title = nullptr;
 HWND g_refresh = nullptr;
 HWND g_pageBackground = nullptr;
 HWND g_status = nullptr;
+HWND g_latencyTooltip = nullptr;
 
 HWND g_effectDeviceLabel = nullptr;
 HWND g_effectDeviceCombo = nullptr;
