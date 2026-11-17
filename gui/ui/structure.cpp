@@ -46,6 +46,96 @@ void AddTooltip(HWND control, const wchar_t* text)
                  reinterpret_cast<LPARAM>(&info));
 }
 
+HBITMAP g_latencyIconBitmaps[2]{};
+
+HWND BitmapIcon(HWND parent, int id)
+{
+    return CreateWindowExW(
+        0, WC_STATICW, nullptr,
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | SS_BITMAP | SS_NOTIFY |
+            SS_CENTERIMAGE,
+        0, 0, 0, 0, parent,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
+}
+
+HBITMAP CreateLatencyIconBitmap()
+{
+    const ui::Theme& theme = ui::GetTheme();
+    const int size = Scale(20);
+    if (size <= 0) {
+        return nullptr;
+    }
+
+    HDC screen = GetDC(nullptr);
+    if (screen == nullptr) {
+        return nullptr;
+    }
+    HBITMAP bitmap = CreateCompatibleBitmap(screen, size, size);
+    HDC dc = CreateCompatibleDC(screen);
+    ReleaseDC(nullptr, screen);
+    if (bitmap == nullptr || dc == nullptr) {
+        if (bitmap != nullptr) {
+            DeleteObject(bitmap);
+        }
+        if (dc != nullptr) {
+            DeleteDC(dc);
+        }
+        return nullptr;
+    }
+
+    HGDIOBJ oldBitmap = SelectObject(dc, bitmap);
+
+    const RECT area{0, 0, size, size};
+    HBRUSH background = CreateSolidBrush(theme.color.background);
+    FillRect(dc, &area, background);
+    DeleteObject(background);
+
+    const int center = size / 2;
+    const int shift = Scale(1);
+    const int radius = std::max(Scale(3), size / 2 - Scale(3));
+    const int stem = Scale(3);
+
+    HPEN pen = CreatePen(PS_SOLID, std::max(1, Scale(1)), theme.color.text);
+    HGDIOBJ oldPen = SelectObject(dc, pen);
+    HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+
+    Ellipse(dc, center - radius, center - radius + shift, center + radius,
+            center + radius + shift);
+    MoveToEx(dc, center, center - radius + shift, nullptr);
+    LineTo(dc, center, center - radius - stem + shift);
+    MoveToEx(dc, center - stem, center - radius - stem + shift, nullptr);
+    LineTo(dc, center + stem, center - radius - stem + shift);
+    MoveToEx(dc, center, center + shift, nullptr);
+    LineTo(dc, center + radius / 2, center - radius / 2 + shift);
+
+    SelectObject(dc, oldBrush);
+    SelectObject(dc, oldPen);
+    SelectObject(dc, oldBitmap);
+    DeleteObject(pen);
+    DeleteDC(dc);
+    return bitmap;
+}
+
+void SetLatencyIconBitmap(HWND control, int index)
+{
+    HBITMAP bitmap = CreateLatencyIconBitmap();
+    if (bitmap == nullptr) {
+        return;
+    }
+    if (control == nullptr) {
+        DeleteObject(bitmap);
+        return;
+    }
+
+    HBITMAP previous = reinterpret_cast<HBITMAP>(SendMessageW(
+        control, STM_SETIMAGE, IMAGE_BITMAP, reinterpret_cast<LPARAM>(bitmap)));
+    if (previous != nullptr && previous != bitmap) {
+        DeleteObject(previous);
+    }
+    g_latencyIconBitmaps[index] = bitmap;
+    InvalidateRect(control, nullptr, TRUE);
+}
+
 void CreateParamResetButtons(HWND parent)
 {
     for (int param = 0; param < ParamResetCount; ++param) {
@@ -417,7 +507,7 @@ void CreateControls(HWND root)
         ui::Label(window, IDC_GATE_LOOKAHEAD_LABEL, L"Lookahead (ms)");
     g_gateLookaheadSlider = ui::Slider(window, IDC_GATE_LOOKAHEAD_SLIDER,
                                        {0.0, 300.0, 1.0, false, 0});
-    g_gateLookaheadIcon = ui::OwnerDrawIcon(window, IDC_GATE_LOOKAHEAD_ICON);
+    g_gateLookaheadIcon = BitmapIcon(window, IDC_GATE_LOOKAHEAD_ICON);
     AddTooltip(g_gateLookaheadIcon,
                L"This parameter delays the audio stream by the set amount.");
 
@@ -484,7 +574,7 @@ void CreateControls(HWND root)
         ui::Label(window, IDC_REVERB_PREDELAY_LABEL, L"Predelay (ms)");
     g_reverbPredelaySlider = ui::Slider(window, IDC_REVERB_PREDELAY_SLIDER,
                                         {0.0, 200.0, 1.0, false, 0});
-    g_reverbPredelayIcon = ui::OwnerDrawIcon(window, IDC_REVERB_PREDELAY_ICON);
+    g_reverbPredelayIcon = BitmapIcon(window, IDC_REVERB_PREDELAY_ICON);
     AddTooltip(g_reverbPredelayIcon,
                L"This parameter delays the audio stream by the set amount.");
 
@@ -512,6 +602,26 @@ void CreateControls(HWND root)
     }
 
     g_status = ui::Label(root, IDC_STATUS, L"");
+
+    RefreshLatencyIcons();
+}
+
+void RefreshLatencyIcons()
+{
+    HWND controls[] = {g_gateLookaheadIcon, g_reverbPredelayIcon};
+    for (int i = 0; i < 2; ++i) {
+        SetLatencyIconBitmap(controls[i], i);
+    }
+}
+
+void DestroyLatencyIcons()
+{
+    for (HBITMAP& bitmap : g_latencyIconBitmaps) {
+        if (bitmap != nullptr) {
+            DeleteObject(bitmap);
+            bitmap = nullptr;
+        }
+    }
 }
 
 void Layout(int width, int height)

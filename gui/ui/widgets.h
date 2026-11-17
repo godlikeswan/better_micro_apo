@@ -31,9 +31,6 @@ HWND Button(HWND parent, int id, const wchar_t* text);
 // through DrawIconButton.
 HWND IconButton(HWND parent, int id, const wchar_t* glyph);
 bool DrawIconButton(DRAWITEMSTRUCT* item);
-// Owner-drawn static used for the small latency stopwatch.
-HWND OwnerDrawIcon(HWND parent, int id);
-bool DrawLatencyIcon(DRAWITEMSTRUCT* item);
 HWND CheckBox(HWND parent, int id, const wchar_t* text);
 HWND Slider(HWND parent, int id, const SliderSpec& spec);
 HWND GroupFrame(HWND parent, int id, const wchar_t* text);

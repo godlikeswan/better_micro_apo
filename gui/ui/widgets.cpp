@@ -1043,55 +1043,6 @@ bool DrawIconButton(DRAWITEMSTRUCT* item)
     return true;
 }
 
-HWND OwnerDrawIcon(HWND parent, int id)
-{
-    return CreateWindowExW(
-        0, WC_STATICW, nullptr,
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | SS_OWNERDRAW | SS_NOTIFY,
-        0, 0, 0, 0, parent,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
-}
-
-bool DrawLatencyIcon(DRAWITEMSTRUCT* item)
-{
-    if (item == nullptr || item->CtlType != ODT_STATIC ||
-        item->hwndItem == nullptr) {
-        return false;
-    }
-
-    const Theme& theme = GetTheme();
-    const COLORREF color =
-        IsWindowEnabled(item->hwndItem) ? theme.color.text
-                                        : theme.color.disabledText;
-    const RECT& rect = item->rcItem;
-    const int centerX = (rect.left + rect.right) / 2;
-    const int centerY = (rect.top + rect.bottom) / 2 + Scale(2);
-    const int size = static_cast<int>(
-        std::min(rect.right - rect.left, rect.bottom - rect.top));
-    const int radius = std::max(Scale(3), size / 2 - Scale(4));
-
-    HDC dc = item->hDC;
-    const int oldBkMode = SetBkMode(dc, TRANSPARENT);
-    HPEN pen = CreatePen(PS_SOLID, Scale(1), color);
-    HGDIOBJ oldPen = SelectObject(dc, pen);
-    HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-
-    Ellipse(dc, centerX - radius, centerY - radius, centerX + radius,
-            centerY + radius);
-    MoveToEx(dc, centerX, centerY - radius, nullptr);
-    LineTo(dc, centerX, centerY - radius - Scale(3));
-    MoveToEx(dc, centerX - Scale(3), centerY - radius - Scale(3), nullptr);
-    LineTo(dc, centerX + Scale(3), centerY - radius - Scale(3));
-    MoveToEx(dc, centerX, centerY, nullptr);
-    LineTo(dc, centerX + radius / 2, centerY - radius / 2);
-
-    SelectObject(dc, oldBrush);
-    SelectObject(dc, oldPen);
-    DeleteObject(pen);
-    SetBkMode(dc, oldBkMode);
-    return true;
-}
-
 HWND CheckBox(HWND parent, int id, const wchar_t* text)
 {
     HWND control = CreateWindowExW(

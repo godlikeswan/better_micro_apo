@@ -1986,6 +1986,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             ui::ApplyNativeThemeToChildren(window);
             ui::ApplyNativeTheme(g_latencyTooltip);
             ui::ApplyListStateImages(g_effectList);
+            RefreshLatencyIcons();
             RedrawWindow(window, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE);
             RepaintAll();
         }
@@ -1998,6 +1999,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         ui::ApplyNativeThemeToChildren(window);
         ui::ApplyNativeTheme(g_latencyTooltip);
         ui::ApplyListStateImages(g_effectList);
+        RefreshLatencyIcons();
         RedrawWindow(window, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE);
         RepaintAll();
         break;
@@ -2029,10 +2031,6 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         break;
 
     case WM_DRAWITEM:
-        if (ui::DrawLatencyIcon(
-                reinterpret_cast<DRAWITEMSTRUCT*>(lParam))) {
-            return TRUE;
-        }
         if (ui::DrawIconButton(
                 reinterpret_cast<DRAWITEMSTRUCT*>(lParam))) {
             return TRUE;
@@ -2277,6 +2275,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             g_worker.join();
         }
         ui::DestroyFonts();
+        DestroyLatencyIcons();
         ui::ShutdownTheme();
         PostQuitMessage(0);
         break;
