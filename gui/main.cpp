@@ -2073,6 +2073,12 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
                 DoAddEffect();
             }
             break;
+        case IDC_GATE_LOOKAHEAD_ICON:
+        case IDC_REVERB_PREDELAY_ICON:
+            if (HIWORD(wParam) == STN_CLICKED) {
+                SendMessageW(g_latencyTooltip, TTM_POPUP, 0, 0);
+            }
+            break;
         case IDC_PARAM_RESET:
             if (HIWORD(wParam) == BN_CLICKED) {
                 HWND button = reinterpret_cast<HWND>(lParam);

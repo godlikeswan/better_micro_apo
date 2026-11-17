@@ -949,6 +949,10 @@ void CreateFonts()
         -MulDiv(14, g_dpi, 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    g_latencyIconFont = CreateFontW(
+        -MulDiv(12, g_dpi, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Symbol");
 }
 
 void DestroyFonts()
@@ -964,6 +968,10 @@ void DestroyFonts()
     if (g_titleFont != nullptr) {
         DeleteObject(g_titleFont);
         g_titleFont = nullptr;
+    }
+    if (g_latencyIconFont != nullptr) {
+        DeleteObject(g_latencyIconFont);
+        g_latencyIconFont = nullptr;
     }
 }
 

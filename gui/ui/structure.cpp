@@ -37,7 +37,9 @@ void AddTooltip(HWND control, const wchar_t* text)
     TOOLINFOW info{};
     info.cbSize = sizeof(info);
     info.uFlags = TTF_SUBCLASS | TTF_IDISHWND;
-    info.hwnd = GetParent(control);
+    // Tooltips must subclass the tool window itself: static controls do not
+    // forward mouse movement to their parent.
+    info.hwnd = control;
     info.uId = reinterpret_cast<UINT_PTR>(control);
     info.lpszText = const_cast<wchar_t*>(text);
     SendMessageW(g_latencyTooltip, TTM_ADDTOOLW, 0,
@@ -84,6 +86,8 @@ void LayoutEffectParams(int x, int y, int width)
     for (HWND button : g_paramResetButtons) {
         ShowWindow(button, SW_HIDE);
     }
+    ShowWindow(g_gateLookaheadIcon, SW_HIDE);
+    ShowWindow(g_reverbPredelayIcon, SW_HIDE);
     if (g_effectSelection < 0) {
         return;
     }
@@ -106,6 +110,16 @@ void LayoutEffectParams(int x, int y, int width)
         MoveWindow(button, columnX + columnWidth - resetWidth, rowY,
                    resetWidth, controlHeight, TRUE);
         ShowWindow(button, SW_SHOW);
+    };
+
+    const int iconSize = Scale(20);
+    auto placeIcon = [&](HWND icon, int columnX, int rowY) {
+        if (icon == nullptr) {
+            return;
+        }
+        MoveWindow(icon, columnX + labelWidth - iconSize, rowY - Scale(2),
+                   iconSize, iconSize, TRUE);
+        ShowWindow(icon, SW_SHOW);
     };
 
     auto placePair = [&](HWND leftLabel, HWND leftSlider, int leftReset,
@@ -144,6 +158,8 @@ void LayoutEffectParams(int x, int y, int width)
         placePair(g_gateReleaseLabel, g_gateReleaseSlider,
                   ParamResetGateRelease, g_gateLookaheadLabel,
                   g_gateLookaheadSlider, ParamResetGateLookahead);
+        placeIcon(g_gateLookaheadIcon, x + columnWidth + columnGap,
+                  y - rowStep);
         break;
     case apo::EffectType::Dynamic:
         MoveWindow(g_dynamicExtend, x, y,
@@ -196,6 +212,8 @@ void LayoutEffectParams(int x, int y, int width)
         placePair(g_reverbDampingLabel, g_reverbDampingSlider,
                   ParamResetReverbDamping, g_reverbPredelayLabel,
                   g_reverbPredelaySlider, ParamResetReverbPredelay);
+        placeIcon(g_reverbPredelayIcon, x + columnWidth + columnGap,
+                  y - rowStep);
         break;
     default:
         break;
@@ -396,10 +414,13 @@ void CreateControls(HWND root)
     g_gateReleaseSlider = ui::Slider(window, IDC_GATE_RELEASE_SLIDER,
                                      {1.0, 5000.0, 0.0, true, 0});
     g_gateLookaheadLabel =
-        ui::Label(window, IDC_GATE_LOOKAHEAD_LABEL, L"Lookahead (ms)  \u23F1");
+        ui::Label(window, IDC_GATE_LOOKAHEAD_LABEL, L"Lookahead (ms)");
     g_gateLookaheadSlider = ui::Slider(window, IDC_GATE_LOOKAHEAD_SLIDER,
                                        {0.0, 300.0, 1.0, false, 0});
-    AddTooltip(g_gateLookaheadLabel,
+    g_gateLookaheadIcon = ui::Label(
+        window, IDC_GATE_LOOKAHEAD_ICON, L"\u23F1", SS_CENTER | SS_NOTIFY);
+    ui::ApplyFont(g_gateLookaheadIcon, g_latencyIconFont);
+    AddTooltip(g_gateLookaheadIcon,
                L"This parameter delays the audio stream by the set amount.");
 
     g_compThresholdLabel =
@@ -462,10 +483,13 @@ void CreateControls(HWND root)
     g_reverbDampingSlider = ui::Slider(window, IDC_REVERB_DAMPING_SLIDER,
                                        {0.0, 100.0, 1.0, false, 0});
     g_reverbPredelayLabel =
-        ui::Label(window, IDC_REVERB_PREDELAY_LABEL, L"Predelay (ms)  \u23F1");
+        ui::Label(window, IDC_REVERB_PREDELAY_LABEL, L"Predelay (ms)");
     g_reverbPredelaySlider = ui::Slider(window, IDC_REVERB_PREDELAY_SLIDER,
                                         {0.0, 200.0, 1.0, false, 0});
-    AddTooltip(g_reverbPredelayLabel,
+    g_reverbPredelayIcon = ui::Label(
+        window, IDC_REVERB_PREDELAY_ICON, L"\u23F1", SS_CENTER | SS_NOTIFY);
+    ui::ApplyFont(g_reverbPredelayIcon, g_latencyIconFont);
+    AddTooltip(g_reverbPredelayIcon,
                L"This parameter delays the audio stream by the set amount.");
 
     g_noiseReductionLabel =

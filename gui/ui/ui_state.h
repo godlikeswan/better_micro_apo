@@ -42,6 +42,7 @@ enum : int {
     IDC_GATE_RELEASE_SLIDER,
     IDC_GATE_LOOKAHEAD_LABEL,
     IDC_GATE_LOOKAHEAD_SLIDER,
+    IDC_GATE_LOOKAHEAD_ICON,
     IDC_COMP_THRESHOLD_LABEL,
     IDC_COMP_THRESHOLD_SLIDER,
     IDC_COMP_RATIO_LABEL,
@@ -84,6 +85,7 @@ enum : int {
     IDC_REVERB_DAMPING_SLIDER,
     IDC_REVERB_PREDELAY_LABEL,
     IDC_REVERB_PREDELAY_SLIDER,
+    IDC_REVERB_PREDELAY_ICON,
     IDC_NOISE_REDUCTION_LABEL,
     IDC_NOISE_REDUCTION_SLIDER,
     IDC_NOISE_CAPTURE,
@@ -179,6 +181,7 @@ extern HWND g_gateReleaseLabel;
 extern HWND g_gateReleaseSlider;
 extern HWND g_gateLookaheadLabel;
 extern HWND g_gateLookaheadSlider;
+extern HWND g_gateLookaheadIcon;
 extern HWND g_compThresholdLabel;
 extern HWND g_compThresholdSlider;
 extern HWND g_compRatioLabel;
@@ -221,6 +224,7 @@ extern HWND g_reverbDampingLabel;
 extern HWND g_reverbDampingSlider;
 extern HWND g_reverbPredelayLabel;
 extern HWND g_reverbPredelaySlider;
+extern HWND g_reverbPredelayIcon;
 extern HWND g_noiseReductionLabel;
 extern HWND g_noiseReductionSlider;
 extern HWND g_noiseCapture;
@@ -231,6 +235,7 @@ extern HWND g_meter;
 extern HFONT g_font;
 extern HFONT g_boldFont;
 extern HFONT g_titleFont;
+extern HFONT g_latencyIconFont;
 extern int g_dpi;
 
 // Selected row in the effect list and the type of that row. The list mirrors
