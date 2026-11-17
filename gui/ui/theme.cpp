@@ -65,6 +65,8 @@ void BuildTheme(bool dark)
 
     if (dark) {
         theme.color.background = RGB(32, 32, 32);
+        theme.color.menuBackground = RGB(38, 38, 38);
+        theme.color.menuDivider = RGB(20, 20, 20);
         theme.color.text = RGB(240, 240, 240);
         theme.color.disabledText = RGB(132, 132, 132);
         theme.color.frame = RGB(92, 92, 92);
@@ -90,6 +92,8 @@ void BuildTheme(bool dark)
         theme.color.checkMark = RGB(90, 180, 255);
     } else {
         theme.color.background = RGB(240, 240, 240);
+        theme.color.menuBackground = RGB(234, 234, 234);
+        theme.color.menuDivider = RGB(205, 205, 205);
         theme.color.text = RGB(0, 0, 0);
         theme.color.disabledText = RGB(109, 109, 109);
         theme.color.frame = RGB(160, 160, 160);
@@ -116,6 +120,7 @@ void BuildTheme(bool dark)
     }
 
     RecreateBrush(theme.backgroundBrush, theme.color.background);
+    RecreateBrush(theme.menuBrush, theme.color.menuBackground);
     RecreateBrush(theme.editBrush, theme.color.editBackground);
     RecreateBrush(theme.listBrush, theme.color.listBackground);
     RecreateBrush(theme.listHeaderBrush, theme.color.listHeaderBackground);
@@ -152,6 +157,7 @@ void InitializeTheme()
 void ShutdownTheme()
 {
     DeleteObject(g_theme.backgroundBrush);
+    DeleteObject(g_theme.menuBrush);
     DeleteObject(g_theme.editBrush);
     DeleteObject(g_theme.listBrush);
     DeleteObject(g_theme.listHeaderBrush);

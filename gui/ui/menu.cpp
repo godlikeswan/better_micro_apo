@@ -58,7 +58,7 @@ void ApplyMenuBackground(HWND window)
     MENUINFO info{};
     info.cbSize = sizeof(info);
     info.fMask = MIM_BACKGROUND | MIM_APPLYTOSUBMENUS;
-    info.hbrBack = GetTheme().backgroundBrush;
+    info.hbrBack = GetTheme().menuBrush;
     SetMenuInfo(g_menuBar, &info);
 
     if (window != nullptr) {
@@ -231,7 +231,7 @@ bool DrawMenuItem(HWND window, DRAWITEMSTRUCT* item)
     const bool selected = (item->itemState & ODS_SELECTED) != 0;
     const bool disabled = (item->itemState & ODS_DISABLED) != 0;
     const COLORREF background =
-        selected ? theme.color.accent : theme.color.background;
+        selected ? theme.color.accent : theme.color.menuBackground;
     const COLORREF textColor =
         selected ? theme.color.accentText
                  : (disabled ? theme.color.disabledText : theme.color.text);

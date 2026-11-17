@@ -6,6 +6,8 @@ namespace ui {
 
 struct Palette {
     COLORREF background;
+    COLORREF menuBackground;
+    COLORREF menuDivider;
     COLORREF text;
     COLORREF disabledText;
     COLORREF frame;
@@ -37,6 +39,7 @@ struct Palette {
 struct Theme {
     Palette color;
     HBRUSH backgroundBrush;
+    HBRUSH menuBrush;
     HBRUSH editBrush;
     HBRUSH listBrush;
     HBRUSH listHeaderBrush;

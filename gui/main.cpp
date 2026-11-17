@@ -1887,6 +1887,32 @@ void ToggleShowAllDevices()
     Refresh();
 }
 
+void PaintMenuDivider(HWND window)
+{
+    if (GetMenu(window) == nullptr) {
+        return;
+    }
+
+    RECT windowRect{};
+    GetWindowRect(window, &windowRect);
+    POINT clientOrigin{};
+    ClientToScreen(window, &clientOrigin);
+    const int lineY = clientOrigin.y - windowRect.top - 1;
+    if (lineY <= 0) {
+        return;
+    }
+
+    HDC dc = GetWindowDC(window);
+    if (dc == nullptr) {
+        return;
+    }
+    RECT line{0, lineY, windowRect.right - windowRect.left, lineY + 1};
+    HBRUSH brush = CreateSolidBrush(ui::GetTheme().color.menuDivider);
+    FillRect(dc, &line, brush);
+    DeleteObject(brush);
+    ReleaseDC(window, dc);
+}
+
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
                             LPARAM lParam)
 {
@@ -1902,6 +1928,12 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         Refresh();
         RepaintAll();
         return 0;
+    }
+
+    case WM_NCPAINT: {
+        LRESULT result = DefWindowProcW(window, message, wParam, lParam);
+        PaintMenuDivider(window);
+        return result;
     }
 
     case WM_ERASEBKGND: {
@@ -1938,6 +1970,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             ui::ApplyTitleBarTheme(window);
             ui::ApplyNativeThemeToChildren(window);
             ui::ApplyListStateImages(g_effectList);
+            RedrawWindow(window, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE);
             RepaintAll();
         }
         break;
@@ -1948,6 +1981,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         ui::ApplyTitleBarTheme(window);
         ui::ApplyNativeThemeToChildren(window);
         ui::ApplyListStateImages(g_effectList);
+        RedrawWindow(window, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE);
         RepaintAll();
         break;
 
