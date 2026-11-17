@@ -1984,9 +1984,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             ui::RefreshMenuBar(window);
             ui::ApplyTitleBarTheme(window);
             ui::ApplyNativeThemeToChildren(window);
-            ui::ApplyNativeTheme(g_latencyTooltip);
+            ui::ApplyNativeTheme(g_infoTooltip);
             ui::ApplyListStateImages(g_effectList);
-            RefreshLatencyIcons();
+            RefreshInfoIcons();
             RedrawWindow(window, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE);
             RepaintAll();
         }
@@ -1997,9 +1997,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         ui::RefreshMenuBar(window);
         ui::ApplyTitleBarTheme(window);
         ui::ApplyNativeThemeToChildren(window);
-        ui::ApplyNativeTheme(g_latencyTooltip);
+        ui::ApplyNativeTheme(g_infoTooltip);
         ui::ApplyListStateImages(g_effectList);
-        RefreshLatencyIcons();
+        RefreshInfoIcons();
         RedrawWindow(window, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE);
         RepaintAll();
         break;
@@ -2075,10 +2075,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
                 DoAddEffect();
             }
             break;
+        case IDC_MAIN_ENABLE_ICON:
         case IDC_GATE_LOOKAHEAD_ICON:
         case IDC_REVERB_PREDELAY_ICON:
             if (HIWORD(wParam) == STN_CLICKED) {
-                SendMessageW(g_latencyTooltip, TTM_POPUP, 0, 0);
+                SendMessageW(g_infoTooltip, TTM_POPUP, 0, 0);
             }
             break;
         case IDC_PARAM_RESET:
@@ -2275,7 +2276,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             g_worker.join();
         }
         ui::DestroyFonts();
-        DestroyLatencyIcons();
+        DestroyInfoIcons();
         ui::ShutdownTheme();
         PostQuitMessage(0);
         break;

@@ -26,6 +26,7 @@ enum : int {
     IDC_EFFECT_HEADING,
     IDC_EFFECT_GRAPH,
     IDC_MAIN_ENABLE,
+    IDC_MAIN_ENABLE_ICON,
     IDC_MAIN_HINT,
     IDC_MONO_NOTE,
 
@@ -151,7 +152,7 @@ extern HWND g_title;
 extern HWND g_refresh;
 extern HWND g_pageBackground;
 extern HWND g_status;
-extern HWND g_latencyTooltip;
+extern HWND g_infoTooltip;
 
 // Main view.
 extern HWND g_effectDeviceLabel;
@@ -165,6 +166,7 @@ extern HWND g_effectGroup;
 extern HWND g_effectHeading;
 extern HWND g_effectGraph;
 extern HWND g_mainEnable;
+extern HWND g_mainEnableIcon;
 extern HWND g_mainHint;
 extern HWND g_monoNote;
 extern HWND g_paramResetButtons[ParamResetCount];

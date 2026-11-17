@@ -7,7 +7,7 @@ HWND g_title = nullptr;
 HWND g_refresh = nullptr;
 HWND g_pageBackground = nullptr;
 HWND g_status = nullptr;
-HWND g_latencyTooltip = nullptr;
+HWND g_infoTooltip = nullptr;
 
 HWND g_effectDeviceLabel = nullptr;
 HWND g_effectDeviceCombo = nullptr;
@@ -20,6 +20,7 @@ HWND g_effectGroup = nullptr;
 HWND g_effectHeading = nullptr;
 HWND g_effectGraph = nullptr;
 HWND g_mainEnable = nullptr;
+HWND g_mainEnableIcon = nullptr;
 HWND g_mainHint = nullptr;
 HWND g_monoNote = nullptr;
 HWND g_paramResetButtons[ParamResetCount]{};

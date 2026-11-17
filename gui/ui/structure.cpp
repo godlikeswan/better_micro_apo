@@ -30,7 +30,7 @@ void AddColumn(HWND list, int index, const wchar_t* text, int width,
 
 void AddTooltip(HWND control, const wchar_t* text)
 {
-    if (g_latencyTooltip == nullptr || control == nullptr) {
+    if (g_infoTooltip == nullptr || control == nullptr) {
         return;
     }
 
@@ -42,14 +42,58 @@ void AddTooltip(HWND control, const wchar_t* text)
     info.hwnd = control;
     info.uId = reinterpret_cast<UINT_PTR>(control);
     info.lpszText = const_cast<wchar_t*>(text);
-    SendMessageW(g_latencyTooltip, TTM_ADDTOOLW, 0,
+    SendMessageW(g_infoTooltip, TTM_ADDTOOLW, 0,
                  reinterpret_cast<LPARAM>(&info));
 }
 
-constexpr UINT_PTR kLatencyIconSubclassId = 5;
+enum class InfoIconKind : DWORD_PTR {
+    Latency = 0,
+    Interrupt = 1,
+};
 
-LRESULT CALLBACK LatencyIconProc(HWND window, UINT message, WPARAM wParam,
-                                 LPARAM lParam, UINT_PTR, DWORD_PTR)
+constexpr UINT_PTR kInfoIconSubclassId = 5;
+
+void DrawStopwatch(HDC dc, const RECT& client)
+{
+    const int centerX = (client.left + client.right) / 2;
+    const int centerY = (client.top + client.bottom) / 2 + Scale(1);
+    const int size = static_cast<int>(
+        std::min(client.right - client.left, client.bottom - client.top));
+    const int radius = std::max(Scale(3), size / 2 - Scale(3));
+    const int stem = Scale(3);
+
+    Ellipse(dc, centerX - radius, centerY - radius, centerX + radius,
+            centerY + radius);
+    MoveToEx(dc, centerX, centerY - radius, nullptr);
+    LineTo(dc, centerX, centerY - radius - stem);
+    MoveToEx(dc, centerX - stem, centerY - radius - stem, nullptr);
+    LineTo(dc, centerX + stem, centerY - radius - stem);
+    MoveToEx(dc, centerX, centerY, nullptr);
+    LineTo(dc, centerX + radius / 2, centerY - radius / 2);
+}
+
+void DrawInterrupt(HDC dc, const RECT& client)
+{
+    const int centerX = (client.left + client.right) / 2;
+    const int centerY = (client.top + client.bottom) / 2;
+    const int size = static_cast<int>(
+        std::min(client.right - client.left, client.bottom - client.top));
+    const int radius = std::max(Scale(4), size / 2 - Scale(3));
+
+    MoveToEx(dc, centerX, centerY - radius, nullptr);
+    LineTo(dc, centerX + radius, centerY + radius);
+    LineTo(dc, centerX - radius, centerY + radius);
+    LineTo(dc, centerX, centerY - radius);
+
+    MoveToEx(dc, centerX, centerY - radius / 2, nullptr);
+    LineTo(dc, centerX, centerY + radius / 4);
+    const int dotY = centerY + radius / 2;
+    MoveToEx(dc, centerX, dotY, nullptr);
+    LineTo(dc, centerX, dotY + Scale(1));
+}
+
+LRESULT CALLBACK InfoIconProc(HWND window, UINT message, WPARAM wParam,
+                              LPARAM lParam, UINT_PTR, DWORD_PTR ref)
 {
     if (message == WM_ERASEBKGND) {
         return 1;
@@ -66,27 +110,17 @@ LRESULT CALLBACK LatencyIconProc(HWND window, UINT message, WPARAM wParam,
     GetClientRect(window, &client);
     FillRect(dc, &client, theme.backgroundBrush);
 
-    const int centerX = (client.left + client.right) / 2;
-    const int centerY = (client.top + client.bottom) / 2 + Scale(1);
-    const int size = static_cast<int>(
-        std::min(client.right - client.left, client.bottom - client.top));
-    const int radius = std::max(Scale(3), size / 2 - Scale(3));
-    const int stem = Scale(3);
     const COLORREF color = IsWindowEnabled(window) ? theme.color.text
                                                    : theme.color.disabledText;
-
     HPEN pen = CreatePen(PS_SOLID, std::max(1, Scale(1)), color);
     HGDIOBJ oldPen = SelectObject(dc, pen);
     HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
 
-    Ellipse(dc, centerX - radius, centerY - radius, centerX + radius,
-            centerY + radius);
-    MoveToEx(dc, centerX, centerY - radius, nullptr);
-    LineTo(dc, centerX, centerY - radius - stem);
-    MoveToEx(dc, centerX - stem, centerY - radius - stem, nullptr);
-    LineTo(dc, centerX + stem, centerY - radius - stem);
-    MoveToEx(dc, centerX, centerY, nullptr);
-    LineTo(dc, centerX + radius / 2, centerY - radius / 2);
+    if (ref == static_cast<DWORD_PTR>(InfoIconKind::Interrupt)) {
+        DrawInterrupt(dc, client);
+    } else {
+        DrawStopwatch(dc, client);
+    }
 
     SelectObject(dc, oldBrush);
     SelectObject(dc, oldPen);
@@ -95,15 +129,61 @@ LRESULT CALLBACK LatencyIconProc(HWND window, UINT message, WPARAM wParam,
     return 0;
 }
 
-HWND IconStatic(HWND parent, int id)
+HWND InfoIcon(HWND parent, int id, InfoIconKind kind)
 {
     HWND control = CreateWindowExW(
         0, WC_STATICW, nullptr,
         WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | SS_CENTER | SS_NOTIFY,
         0, 0, 0, 0, parent,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
-    SetWindowSubclass(control, LatencyIconProc, kLatencyIconSubclassId, 0);
+    SetWindowSubclass(control, InfoIconProc, kInfoIconSubclassId,
+                      static_cast<DWORD_PTR>(kind));
     return control;
+}
+
+void PlaceInfoIcon(HWND icon, HWND textControl, int x, int y, int iconSize,
+                   int rowHeight, int maxRight)
+{
+    if (icon == nullptr) {
+        return;
+    }
+
+    // Put the marker just past the control's text, clamped before maxRight.
+    int textWidth = 0;
+    if (textControl != nullptr) {
+        const int length = GetWindowTextLengthW(textControl);
+        std::wstring text(static_cast<size_t>(length) + 1, L'\0');
+        if (length > 0) {
+            GetWindowTextW(textControl, text.data(), length + 1);
+            text.resize(static_cast<size_t>(length));
+        } else {
+            text.clear();
+        }
+        HDC dc = GetDC(textControl);
+        if (dc != nullptr) {
+            HFONT font = reinterpret_cast<HFONT>(
+                SendMessageW(textControl, WM_GETFONT, 0, 0));
+            HGDIOBJ oldFont =
+                font != nullptr ? SelectObject(dc, font) : nullptr;
+            SIZE extent{};
+            GetTextExtentPoint32W(dc, text.c_str(),
+                                  static_cast<int>(text.size()), &extent);
+            textWidth = extent.cx;
+            if (oldFont != nullptr) {
+                SelectObject(dc, oldFont);
+            }
+            ReleaseDC(textControl, dc);
+        }
+    }
+
+    const int iconX = std::max(
+        x, std::min(x + textWidth + Scale(4), maxRight - iconSize));
+    const int iconY = y + (rowHeight - iconSize) / 2;
+    MoveWindow(icon, iconX, iconY, iconSize, iconSize, TRUE);
+    ShowWindow(icon, SW_SHOW);
+    // The icon overlays the label, so keep it above that sibling.
+    SetWindowPos(icon, HWND_TOP, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
 void CreateParamResetButtons(HWND parent)
@@ -174,46 +254,8 @@ void LayoutEffectParams(int x, int y, int width)
 
     const int iconSize = Scale(16);
     auto placeIcon = [&](HWND icon, HWND label, int columnX, int rowY) {
-        if (icon == nullptr) {
-            return;
-        }
-
-        // Put the marker just past the label's text, not at the slider edge.
-        int textWidth = 0;
-        if (label != nullptr) {
-            const int length = GetWindowTextLengthW(label);
-            std::wstring text(static_cast<size_t>(length) + 1, L'\0');
-            if (length > 0) {
-                GetWindowTextW(label, text.data(), length + 1);
-                text.resize(static_cast<size_t>(length));
-            } else {
-                text.clear();
-            }
-            HDC dc = GetDC(label);
-            if (dc != nullptr) {
-                HFONT font = reinterpret_cast<HFONT>(
-                    SendMessageW(label, WM_GETFONT, 0, 0));
-                HGDIOBJ oldFont = font != nullptr ? SelectObject(dc, font)
-                                                  : nullptr;
-                SIZE extent{};
-                GetTextExtentPoint32W(dc, text.c_str(),
-                                      static_cast<int>(text.size()), &extent);
-                textWidth = extent.cx;
-                if (oldFont != nullptr) {
-                    SelectObject(dc, oldFont);
-                }
-                ReleaseDC(label, dc);
-            }
-        }
-
-        const int iconX = std::min(columnX + textWidth + Scale(4),
-                                   columnX + labelWidth - iconSize);
-        const int iconY = rowY + (Scale(20) - iconSize) / 2;
-        MoveWindow(icon, iconX, iconY, iconSize, iconSize, TRUE);
-        ShowWindow(icon, SW_SHOW);
-        // The icon overlays the label, so keep it above that sibling.
-        SetWindowPos(icon, HWND_TOP, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        PlaceInfoIcon(icon, label, columnX, rowY, iconSize, Scale(20),
+                      columnX + labelWidth);
     };
 
     auto placePair = [&](HWND leftLabel, HWND leftSlider, int leftReset,
@@ -329,6 +371,8 @@ void LayoutEffects(int x, int y, int width, int height)
     // selector. Listening is the next action, immediately after Enable.
     int nextX = x + labelWidth + comboWidth + Scale(16);
     MoveWindow(g_mainEnable, nextX, y + Scale(1), Scale(96), Scale(24), TRUE);
+    PlaceInfoIcon(g_mainEnableIcon, g_mainEnable, nextX, y + Scale(1),
+                  Scale(16), Scale(24), nextX + Scale(96));
     nextX += Scale(96) + Scale(16);
     MoveWindow(g_listen, nextX, y + Scale(1), Scale(230), Scale(24), TRUE);
     nextX += Scale(230) + Scale(16);
@@ -410,14 +454,14 @@ void CreateControls(HWND root)
         root, nullptr, g_instance, nullptr);
     HWND window = g_pageBackground;
 
-    g_latencyTooltip = CreateWindowExW(
+    g_infoTooltip = CreateWindowExW(
         0, TOOLTIPS_CLASSW, nullptr,
         WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, CW_USEDEFAULT, CW_USEDEFAULT,
         CW_USEDEFAULT, CW_USEDEFAULT, root, nullptr, g_instance, nullptr);
-    if (g_latencyTooltip != nullptr) {
-        ui::ApplyNativeTheme(g_latencyTooltip);
-        SendMessageW(g_latencyTooltip, TTM_SETMAXTIPWIDTH, 0, Scale(240));
-        SendMessageW(g_latencyTooltip, TTM_SETDELAYTIME, TTDT_INITIAL, 250);
+    if (g_infoTooltip != nullptr) {
+        ui::ApplyNativeTheme(g_infoTooltip);
+        SendMessageW(g_infoTooltip, TTM_SETMAXTIPWIDTH, 0, Scale(240));
+        SendMessageW(g_infoTooltip, TTM_SETDELAYTIME, TTDT_INITIAL, 250);
     }
 
     g_effectDeviceLabel =
@@ -426,6 +470,10 @@ void CreateControls(HWND root)
         ui::ComboBox(window, IDC_EFFECT_DEVICE_COMBO, CBS_DROPDOWNLIST);
     g_mainEnable = ui::CheckBox(window, IDC_MAIN_ENABLE, L"Enable");
     ui::ApplyFont(g_mainEnable, g_boldFont);
+    g_mainEnableIcon =
+        InfoIcon(window, IDC_MAIN_ENABLE_ICON, InfoIconKind::Interrupt);
+    AddTooltip(g_mainEnableIcon,
+               L"Turning this on or off briefly interrupts audio.");
     g_mainHint = ui::Label(window, IDC_MAIN_HINT, L"");
     g_effectPresetLabel =
         ui::Label(window, IDC_EFFECT_PRESET_LABEL, L"Preset:");
@@ -511,9 +559,10 @@ void CreateControls(HWND root)
         ui::Label(window, IDC_GATE_LOOKAHEAD_LABEL, L"Lookahead (ms)");
     g_gateLookaheadSlider = ui::Slider(window, IDC_GATE_LOOKAHEAD_SLIDER,
                                        {0.0, 300.0, 1.0, false, 0});
-    g_gateLookaheadIcon = IconStatic(window, IDC_GATE_LOOKAHEAD_ICON);
+    g_gateLookaheadIcon =
+        InfoIcon(window, IDC_GATE_LOOKAHEAD_ICON, InfoIconKind::Latency);
     AddTooltip(g_gateLookaheadIcon,
-               L"This parameter delays the audio stream by the set amount.");
+               L"Adds delay to the audio stream.");
 
     g_compThresholdLabel =
         ui::Label(window, IDC_COMP_THRESHOLD_LABEL, L"Threshold (dBFS)");
@@ -578,9 +627,10 @@ void CreateControls(HWND root)
         ui::Label(window, IDC_REVERB_PREDELAY_LABEL, L"Predelay (ms)");
     g_reverbPredelaySlider = ui::Slider(window, IDC_REVERB_PREDELAY_SLIDER,
                                         {0.0, 200.0, 1.0, false, 0});
-    g_reverbPredelayIcon = IconStatic(window, IDC_REVERB_PREDELAY_ICON);
+    g_reverbPredelayIcon =
+        InfoIcon(window, IDC_REVERB_PREDELAY_ICON, InfoIconKind::Latency);
     AddTooltip(g_reverbPredelayIcon,
-               L"This parameter delays the audio stream by the set amount.");
+               L"Adds delay to the audio stream.");
 
     g_noiseReductionLabel =
         ui::Label(window, IDC_NOISE_REDUCTION_LABEL, L"Reduction (dB)");
@@ -607,28 +657,28 @@ void CreateControls(HWND root)
 
     g_status = ui::Label(root, IDC_STATUS, L"");
 
-    RefreshLatencyIcons();
+    RefreshInfoIcons();
 }
 
-void RefreshLatencyIcons()
+void RefreshInfoIcons()
 {
-    if (g_gateLookaheadIcon != nullptr) {
-        InvalidateRect(g_gateLookaheadIcon, nullptr, TRUE);
-    }
-    if (g_reverbPredelayIcon != nullptr) {
-        InvalidateRect(g_reverbPredelayIcon, nullptr, TRUE);
+    const HWND icons[] = {g_mainEnableIcon, g_gateLookaheadIcon,
+                          g_reverbPredelayIcon};
+    for (HWND icon : icons) {
+        if (icon != nullptr) {
+            InvalidateRect(icon, nullptr, TRUE);
+        }
     }
 }
 
-void DestroyLatencyIcons()
+void DestroyInfoIcons()
 {
-    if (g_gateLookaheadIcon != nullptr) {
-        RemoveWindowSubclass(g_gateLookaheadIcon, LatencyIconProc,
-                             kLatencyIconSubclassId);
-    }
-    if (g_reverbPredelayIcon != nullptr) {
-        RemoveWindowSubclass(g_reverbPredelayIcon, LatencyIconProc,
-                             kLatencyIconSubclassId);
+    const HWND icons[] = {g_mainEnableIcon, g_gateLookaheadIcon,
+                          g_reverbPredelayIcon};
+    for (HWND icon : icons) {
+        if (icon != nullptr) {
+            RemoveWindowSubclass(icon, InfoIconProc, kInfoIconSubclassId);
+        }
     }
 }
 
