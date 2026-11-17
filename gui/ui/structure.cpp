@@ -389,8 +389,7 @@ void LayoutEffects(int x, int y, int width, int height)
     MoveWindow(g_mainHint, x, y + Scale(30), width, Scale(20), TRUE);
     const int top = y + Scale(56);
 
-    const int bottomHeight = Scale(48);
-    const int panelHeight = height - (top - y) - bottomHeight;
+    const int panelHeight = height - (top - y);
     const int listWidth = Scale(220);
 
     MoveWindow(g_effectListGroup, x, top, listWidth, panelHeight, TRUE);
@@ -427,9 +426,6 @@ void LayoutEffects(int x, int y, int width, int height)
         paramsY = graphTop + graphHeight + Scale(10);
     }
     LayoutEffectParams(innerX, paramsY, innerWidth);
-
-    const int bottomY = top + panelHeight + gap;
-    MoveWindow(g_meter, x, bottomY, Scale(320), Scale(22), TRUE);
 
     ResizeEffectColumns();
 }
@@ -639,7 +635,6 @@ void CreateControls(HWND root)
     g_noiseNote = ui::Label(window, IDC_NOISE_NOTE, L"");
 
     g_listen = ui::CheckBox(window, IDC_LISTEN, L"Listen to this device");
-    g_meter = ui::Label(window, IDC_METER, L"Peak: --  RMS: --");
 
     CreateParamResetButtons(window);
 
@@ -654,6 +649,9 @@ void CreateControls(HWND root)
     }
 
     g_status = ui::Label(root, IDC_STATUS, L"");
+    // Status and live levels share the bottom row of the root window, so the
+    // meter is a sibling of the status instead of a child of the page panel.
+    g_meter = ui::Label(root, IDC_METER, L"Peak: --  RMS: --", SS_RIGHT);
 
     RefreshInfoIcons();
 }
@@ -682,22 +680,28 @@ void DestroyInfoIcons()
 
 void Layout(int width, int height)
 {
-    const int margin = Scale(16);
+    const int margin = Scale(8);
+    const int padding = Scale(8);
+    const int bottomHeight = Scale(24);
+    const int bottomGap = Scale(4);
 
-    const int statusHeight = Scale(28);
     const int contentWidth = width - 2 * margin;
-    const int contentHeight = height - margin - statusHeight;
+    const int contentHeight = height - margin - bottomGap - bottomHeight;
     MoveWindow(g_pageBackground, margin, margin, contentWidth, contentHeight,
                TRUE);
 
-    const int contentPadding = Scale(12);
-    const int viewWidth = contentWidth - 2 * contentPadding;
-    const int viewHeight = contentHeight - 2 * contentPadding;
-    LayoutEffects(contentPadding, contentPadding, viewWidth, viewHeight);
+    const int viewWidth = contentWidth - 2 * padding;
+    const int viewHeight = contentHeight - 2 * padding;
+    LayoutEffects(padding, padding, viewWidth, viewHeight);
 
-    const int statusY = height - statusHeight;
-    MoveWindow(g_status, margin, statusY + (statusHeight - Scale(20)) / 2,
-               width - 2 * margin, Scale(20), TRUE);
+    // One bottom row: status on the left, live levels on the right.
+    const int rowHeight = Scale(20);
+    const int rowY = height - bottomHeight + (bottomHeight - rowHeight) / 2;
+    const int meterWidth = Scale(320);
+    const int meterX = width - margin - meterWidth;
+    const int statusWidth = std::max(0, meterX - margin - padding);
+    MoveWindow(g_status, margin, rowY, statusWidth, rowHeight, TRUE);
+    MoveWindow(g_meter, meterX, rowY, meterWidth, rowHeight, TRUE);
 }
 
 void Relayout()
