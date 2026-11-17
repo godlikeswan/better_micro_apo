@@ -11,9 +11,6 @@
 // Control identifiers. Keeping them in one place lets a view add a control
 // without touching an enum in the window procedure.
 enum : int {
-    IDC_TITLE = 100,
-    IDC_REFRESH,
-
     // Main view.
     IDC_EFFECT_DEVICE_LABEL,
     IDC_EFFECT_DEVICE_COMBO,
@@ -148,8 +145,6 @@ extern HINSTANCE g_instance;
 extern HWND g_window;
 
 // Always-visible chrome.
-extern HWND g_title;
-extern HWND g_refresh;
 extern HWND g_pageBackground;
 extern HWND g_status;
 extern HWND g_infoTooltip;
@@ -236,7 +231,6 @@ extern HWND g_meter;
 
 extern HFONT g_font;
 extern HFONT g_boldFont;
-extern HFONT g_titleFont;
 extern int g_dpi;
 
 // Selected row in the effect list and the type of that row. The list mirrors

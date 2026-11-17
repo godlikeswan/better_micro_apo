@@ -15,6 +15,7 @@
 #include "ui/widgets.h"
 
 #include <commctrl.h>
+#include <dbt.h>
 #include <shellapi.h>
 
 #include <algorithm>
@@ -46,7 +47,11 @@ using ui::SetSliderValue;
 constexpr UINT WM_APP_WORK_DONE = WM_APP + 1;
 constexpr UINT_PTR kMonitorTimer = 1;
 constexpr UINT_PTR kLiveApplyTimer = 2;
+constexpr UINT_PTR kRefreshTimer = 3;
+constexpr UINT_PTR kDeviceChangeTimer = 4;
 constexpr UINT kLiveApplyDelayMs = 200;
+constexpr UINT kRefreshPollMs = 1200;
+constexpr UINT kDeviceChangeDebounceMs = 200;
 constexpr DWORD kMeterWindowMs = 500;
 
 constexpr wchar_t kWindowClass[] = L"BetterMicroApoInstaller";
@@ -104,6 +109,11 @@ std::wstring g_resumeListenId;
 // the refresh does not silently discard them.
 bool g_preserveDirtyEffects = false;
 
+// Snapshot of externally visible install/device state. The UI compares it on a
+// timer and after device-change notifications so plug/unplug and out-of-band
+// binding edits refresh without a manual Refresh button.
+std::wstring g_stateSignature;
+
 // Forward declarations for helpers that are used before their definitions.
 void UpdateMainUi();
 void UpdateEffectsUi();
@@ -113,6 +123,45 @@ void RefreshEffectGraph();
 bool ValidEffectIndex();
 void DoEnable(bool enable);
 void UpdateChromeUi();
+
+// Describes the install state and the identity/state/bindings of every capture
+// endpoint. Deliberately excludes per-device settings: those are edited in
+// memory by this window, so including them would make a poll reload over the
+// user's unsaved effect edits.
+std::wstring StateSignature(const apo::FilesStatus& files,
+                            const std::vector<apo::Endpoint>& endpoints)
+{
+    std::wstring text;
+    text.reserve(256);
+    const auto flag = [&text](bool value) { text += value ? L'1' : L'0'; };
+
+    flag(files.dllPresent);
+    flag(files.dllUpToDate);
+    flag(files.comRegistered);
+    flag(files.apoKeyPresent);
+    text += std::to_wstring(files.embeddedHash);
+    text += L'/';
+    text += std::to_wstring(files.installedHash);
+    text += files.registeredPath;
+    text += L'|';
+
+    for (const apo::Endpoint& endpoint : endpoints) {
+        text += endpoint.id;
+        text += L'/';
+        text += endpoint.name;
+        text += L'/';
+        text += std::to_wstring(endpoint.state);
+        flag(endpoint.premixOurs);
+        flag(endpoint.streamOurs);
+        flag(endpoint.endpointOurs);
+        flag(endpoint.disableSysFx);
+        flag(endpoint.compositePresent);
+        flag(endpoint.compositeOurs);
+        flag(endpoint.compositeEndpointOurs);
+        text += L';';
+    }
+    return text;
+}
 
 int CountEffectType(const apo::ApoSettings& settings, apo::EffectType type)
 {
@@ -1094,7 +1143,6 @@ bool StartListening()
 
 void UpdateChromeUi()
 {
-    EnableWindow(g_refresh, !g_busy);
     ui::UpdateMenuCommands(g_window, g_busy,
                            !g_files.FullyInstalled() || g_files.DllStale(),
                            g_files.AnyPresent());
@@ -1285,6 +1333,29 @@ void Refresh()
             StopListening();
         }
     }
+
+    // Any refresh establishes the new baseline, including the ones triggered
+    // by the poll itself, so it does not immediately refresh again.
+    g_stateSignature = StateSignature(g_files, g_endpoints);
+}
+
+// Re-enumerates on the UI thread and refreshes only when something outside this
+// window actually changed. g_preserveDirtyEffects keeps in-progress effect
+// edits alive across the reload, just like the old manual Refresh button did.
+void CheckForExternalChanges()
+{
+    if (g_busy) {
+        return;
+    }
+
+    const apo::FilesStatus files = apo::GetFilesStatus();
+    const std::vector<apo::Endpoint> endpoints = apo::EnumEndpoints();
+    if (StateSignature(files, endpoints) == g_stateSignature) {
+        return;
+    }
+
+    g_preserveDirtyEffects = true;
+    Refresh();
 }
 
 // ---------------------------------------------------------------------------
@@ -1934,6 +2005,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         ui::ApplyListStateImages(g_effectList);
         Refresh();
         RepaintAll();
+        SetTimer(window, kRefreshTimer, kRefreshPollMs, nullptr);
         return 0;
     }
 
@@ -2060,10 +2132,6 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             break;
         case IDM_ABOUT_OPEN_LOG:
             DoOpenLog();
-            break;
-        case IDC_REFRESH:
-            g_preserveDirtyEffects = true;
-            Refresh();
             break;
         case IDC_MAIN_ENABLE:
             if (HIWORD(wParam) == BN_CLICKED) {
@@ -2254,6 +2322,21 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             }
         } else if (wParam == kLiveApplyTimer) {
             DoLiveApply();
+        } else if (wParam == kDeviceChangeTimer) {
+            KillTimer(window, kDeviceChangeTimer);
+            CheckForExternalChanges();
+        } else if (wParam == kRefreshTimer) {
+            CheckForExternalChanges();
+        }
+        break;
+
+    case WM_DEVICECHANGE:
+        if (wParam == DBT_DEVNODES_CHANGED || wParam == DBT_DEVICEARRIVAL ||
+            wParam == DBT_DEVICEREMOVECOMPLETE) {
+            // Notifications arrive in bursts while the audio stack settles.
+            // Collapse them into one re-check shortly after the last event.
+            SetTimer(window, kDeviceChangeTimer, kDeviceChangeDebounceMs,
+                     nullptr);
         }
         break;
 
@@ -2270,6 +2353,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         ui::DestroyMenuBar(window);
         KillTimer(window, kMonitorTimer);
         KillTimer(window, kLiveApplyTimer);
+        KillTimer(window, kRefreshTimer);
+        KillTimer(window, kDeviceChangeTimer);
         g_liveApplyPending = false;
         apo::StopMonitor();
         if (g_worker.joinable()) {

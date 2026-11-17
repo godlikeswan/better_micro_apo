@@ -443,10 +443,6 @@ void ResizeColumns()
 
 void CreateControls(HWND root)
 {
-    g_title = ui::Label(root, IDC_TITLE, L"Better Micro APO");
-    ui::ApplyFont(g_title, g_titleFont);
-    g_refresh = ui::Button(root, IDC_REFRESH, L"Refresh");
-
     // Every main-screen control is a child of this panel. Keeping them off the
     // root window gives them a stable background and makes repaint handling a
     // single pass.
@@ -687,17 +683,12 @@ void DestroyInfoIcons()
 void Layout(int width, int height)
 {
     const int margin = Scale(16);
-    int y = margin;
-
-    MoveWindow(g_title, margin, y, Scale(320), Scale(26), TRUE);
-    MoveWindow(g_refresh, width - margin - Scale(96), y, Scale(96),
-               Scale(28), TRUE);
-    y += Scale(40);
 
     const int statusHeight = Scale(28);
     const int contentWidth = width - 2 * margin;
-    const int contentHeight = height - y - statusHeight;
-    MoveWindow(g_pageBackground, margin, y, contentWidth, contentHeight, TRUE);
+    const int contentHeight = height - margin - statusHeight;
+    MoveWindow(g_pageBackground, margin, margin, contentWidth, contentHeight,
+               TRUE);
 
     const int contentPadding = Scale(12);
     const int viewWidth = contentWidth - 2 * contentPadding;

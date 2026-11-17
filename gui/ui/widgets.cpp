@@ -945,10 +945,6 @@ void CreateFonts()
         -MulDiv(9, g_dpi, 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    g_titleFont = CreateFontW(
-        -MulDiv(14, g_dpi, 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 }
 
 void DestroyFonts()
@@ -960,10 +956,6 @@ void DestroyFonts()
     if (g_boldFont != nullptr) {
         DeleteObject(g_boldFont);
         g_boldFont = nullptr;
-    }
-    if (g_titleFont != nullptr) {
-        DeleteObject(g_titleFont);
-        g_titleFont = nullptr;
     }
 }
 

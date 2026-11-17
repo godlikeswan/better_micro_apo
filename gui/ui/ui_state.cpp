@@ -3,8 +3,6 @@
 HINSTANCE g_instance = nullptr;
 HWND g_window = nullptr;
 
-HWND g_title = nullptr;
-HWND g_refresh = nullptr;
 HWND g_pageBackground = nullptr;
 HWND g_status = nullptr;
 HWND g_infoTooltip = nullptr;
@@ -90,7 +88,6 @@ HWND g_meter = nullptr;
 
 HFONT g_font = nullptr;
 HFONT g_boldFont = nullptr;
-HFONT g_titleFont = nullptr;
 int g_dpi = 96;
 
 int g_effectSelection = -1;
