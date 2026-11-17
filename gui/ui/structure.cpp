@@ -46,94 +46,64 @@ void AddTooltip(HWND control, const wchar_t* text)
                  reinterpret_cast<LPARAM>(&info));
 }
 
-HBITMAP g_latencyIconBitmaps[2]{};
+constexpr UINT_PTR kLatencyIconSubclassId = 5;
 
-HWND BitmapIcon(HWND parent, int id)
+LRESULT CALLBACK LatencyIconProc(HWND window, UINT message, WPARAM wParam,
+                                 LPARAM lParam, UINT_PTR, DWORD_PTR)
 {
-    return CreateWindowExW(
-        0, WC_STATICW, nullptr,
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | SS_BITMAP | SS_NOTIFY |
-            SS_CENTERIMAGE,
-        0, 0, 0, 0, parent,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
-}
+    if (message == WM_ERASEBKGND) {
+        return 1;
+    }
+    if (message != WM_PAINT) {
+        return DefSubclassProc(window, message, wParam, lParam);
+    }
 
-HBITMAP CreateLatencyIconBitmap()
-{
+    PAINTSTRUCT paint{};
+    HDC dc = BeginPaint(window, &paint);
+
     const ui::Theme& theme = ui::GetTheme();
-    const int size = Scale(20);
-    if (size <= 0) {
-        return nullptr;
-    }
+    RECT client{};
+    GetClientRect(window, &client);
+    FillRect(dc, &client, theme.backgroundBrush);
 
-    HDC screen = GetDC(nullptr);
-    if (screen == nullptr) {
-        return nullptr;
-    }
-    HBITMAP bitmap = CreateCompatibleBitmap(screen, size, size);
-    HDC dc = CreateCompatibleDC(screen);
-    ReleaseDC(nullptr, screen);
-    if (bitmap == nullptr || dc == nullptr) {
-        if (bitmap != nullptr) {
-            DeleteObject(bitmap);
-        }
-        if (dc != nullptr) {
-            DeleteDC(dc);
-        }
-        return nullptr;
-    }
-
-    HGDIOBJ oldBitmap = SelectObject(dc, bitmap);
-
-    const RECT area{0, 0, size, size};
-    HBRUSH background = CreateSolidBrush(theme.color.background);
-    FillRect(dc, &area, background);
-    DeleteObject(background);
-
-    const int center = size / 2;
-    const int shift = Scale(1);
+    const int centerX = (client.left + client.right) / 2;
+    const int centerY = (client.top + client.bottom) / 2 + Scale(1);
+    const int size = static_cast<int>(
+        std::min(client.right - client.left, client.bottom - client.top));
     const int radius = std::max(Scale(3), size / 2 - Scale(3));
     const int stem = Scale(3);
+    const COLORREF color = IsWindowEnabled(window) ? theme.color.text
+                                                   : theme.color.disabledText;
 
-    HPEN pen = CreatePen(PS_SOLID, std::max(1, Scale(1)), theme.color.text);
+    HPEN pen = CreatePen(PS_SOLID, std::max(1, Scale(1)), color);
     HGDIOBJ oldPen = SelectObject(dc, pen);
     HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
 
-    Ellipse(dc, center - radius, center - radius + shift, center + radius,
-            center + radius + shift);
-    MoveToEx(dc, center, center - radius + shift, nullptr);
-    LineTo(dc, center, center - radius - stem + shift);
-    MoveToEx(dc, center - stem, center - radius - stem + shift, nullptr);
-    LineTo(dc, center + stem, center - radius - stem + shift);
-    MoveToEx(dc, center, center + shift, nullptr);
-    LineTo(dc, center + radius / 2, center - radius / 2 + shift);
+    Ellipse(dc, centerX - radius, centerY - radius, centerX + radius,
+            centerY + radius);
+    MoveToEx(dc, centerX, centerY - radius, nullptr);
+    LineTo(dc, centerX, centerY - radius - stem);
+    MoveToEx(dc, centerX - stem, centerY - radius - stem, nullptr);
+    LineTo(dc, centerX + stem, centerY - radius - stem);
+    MoveToEx(dc, centerX, centerY, nullptr);
+    LineTo(dc, centerX + radius / 2, centerY - radius / 2);
 
     SelectObject(dc, oldBrush);
     SelectObject(dc, oldPen);
-    SelectObject(dc, oldBitmap);
     DeleteObject(pen);
-    DeleteDC(dc);
-    return bitmap;
+    EndPaint(window, &paint);
+    return 0;
 }
 
-void SetLatencyIconBitmap(HWND control, int index)
+HWND IconStatic(HWND parent, int id)
 {
-    HBITMAP bitmap = CreateLatencyIconBitmap();
-    if (bitmap == nullptr) {
-        return;
-    }
-    if (control == nullptr) {
-        DeleteObject(bitmap);
-        return;
-    }
-
-    HBITMAP previous = reinterpret_cast<HBITMAP>(SendMessageW(
-        control, STM_SETIMAGE, IMAGE_BITMAP, reinterpret_cast<LPARAM>(bitmap)));
-    if (previous != nullptr && previous != bitmap) {
-        DeleteObject(previous);
-    }
-    g_latencyIconBitmaps[index] = bitmap;
-    InvalidateRect(control, nullptr, TRUE);
+    HWND control = CreateWindowExW(
+        0, WC_STATICW, nullptr,
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | SS_CENTER | SS_NOTIFY,
+        0, 0, 0, 0, parent,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
+    SetWindowSubclass(control, LatencyIconProc, kLatencyIconSubclassId, 0);
+    return control;
 }
 
 void CreateParamResetButtons(HWND parent)
@@ -507,7 +477,7 @@ void CreateControls(HWND root)
         ui::Label(window, IDC_GATE_LOOKAHEAD_LABEL, L"Lookahead (ms)");
     g_gateLookaheadSlider = ui::Slider(window, IDC_GATE_LOOKAHEAD_SLIDER,
                                        {0.0, 300.0, 1.0, false, 0});
-    g_gateLookaheadIcon = BitmapIcon(window, IDC_GATE_LOOKAHEAD_ICON);
+    g_gateLookaheadIcon = IconStatic(window, IDC_GATE_LOOKAHEAD_ICON);
     AddTooltip(g_gateLookaheadIcon,
                L"This parameter delays the audio stream by the set amount.");
 
@@ -574,7 +544,7 @@ void CreateControls(HWND root)
         ui::Label(window, IDC_REVERB_PREDELAY_LABEL, L"Predelay (ms)");
     g_reverbPredelaySlider = ui::Slider(window, IDC_REVERB_PREDELAY_SLIDER,
                                         {0.0, 200.0, 1.0, false, 0});
-    g_reverbPredelayIcon = BitmapIcon(window, IDC_REVERB_PREDELAY_ICON);
+    g_reverbPredelayIcon = IconStatic(window, IDC_REVERB_PREDELAY_ICON);
     AddTooltip(g_reverbPredelayIcon,
                L"This parameter delays the audio stream by the set amount.");
 
@@ -608,19 +578,23 @@ void CreateControls(HWND root)
 
 void RefreshLatencyIcons()
 {
-    HWND controls[] = {g_gateLookaheadIcon, g_reverbPredelayIcon};
-    for (int i = 0; i < 2; ++i) {
-        SetLatencyIconBitmap(controls[i], i);
+    if (g_gateLookaheadIcon != nullptr) {
+        InvalidateRect(g_gateLookaheadIcon, nullptr, TRUE);
+    }
+    if (g_reverbPredelayIcon != nullptr) {
+        InvalidateRect(g_reverbPredelayIcon, nullptr, TRUE);
     }
 }
 
 void DestroyLatencyIcons()
 {
-    for (HBITMAP& bitmap : g_latencyIconBitmaps) {
-        if (bitmap != nullptr) {
-            DeleteObject(bitmap);
-            bitmap = nullptr;
-        }
+    if (g_gateLookaheadIcon != nullptr) {
+        RemoveWindowSubclass(g_gateLookaheadIcon, LatencyIconProc,
+                             kLatencyIconSubclassId);
+    }
+    if (g_reverbPredelayIcon != nullptr) {
+        RemoveWindowSubclass(g_reverbPredelayIcon, LatencyIconProc,
+                             kLatencyIconSubclassId);
     }
 }
 
