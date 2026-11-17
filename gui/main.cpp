@@ -287,7 +287,7 @@ void ShowEffectControls(apo::EffectType type, bool show)
         showAll({g_distFunctionLabel, g_distFunctionCombo,
                  g_distDriveLabel, g_distDriveSlider,
                  g_distCurvatureLabel, g_distCurvatureSlider,
-                 g_distOutputLabel, g_distOutputSlider, g_distortionNote});
+                 g_distOutputLabel, g_distOutputSlider});
         break;
     case apo::EffectType::Reverb:
         showAll({g_reverbMixLabel, g_reverbMixSlider, g_reverbSizeLabel,

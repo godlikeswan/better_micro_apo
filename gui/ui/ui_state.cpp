@@ -68,7 +68,6 @@ HWND g_distCurvatureLabel = nullptr;
 HWND g_distCurvatureSlider = nullptr;
 HWND g_distOutputLabel = nullptr;
 HWND g_distOutputSlider = nullptr;
-HWND g_distortionNote = nullptr;
 HWND g_reverbMixLabel = nullptr;
 HWND g_reverbMixSlider = nullptr;
 HWND g_reverbSizeLabel = nullptr;

@@ -340,7 +340,6 @@ void LayoutEffectParams(int x, int y, int width)
                   ParamResetDistCurvature);
         placePair(g_distOutputLabel, g_distOutputSlider, ParamResetDistOutput,
                   nullptr, nullptr, 0);
-        MoveWindow(g_distortionNote, x, y, width, Scale(44), TRUE);
         break;
     case apo::EffectType::Reverb:
         placePair(g_reverbMixLabel, g_reverbMixSlider, ParamResetReverbMix,
@@ -521,12 +520,6 @@ void CreateControls(HWND root)
         ui::Label(window, IDC_DIST_OUTPUT_LABEL, L"Output (dB)");
     g_distOutputSlider = ui::Slider(window, IDC_DIST_OUTPUT_SLIDER,
                                     {-24.0, 12.0, 0.5, false, 1});
-
-    g_distortionNote = ui::Label(
-        window, IDC_DISTORTION_NOTE,
-        L"Drive pushes the signal into the curve; Output sets the level after "
-        L"it.\r\nCurvature bends the curve from nearly linear to fully "
-        L"saturated.");
 
     g_gateThresholdLabel =
         ui::Label(window, IDC_GATE_THRESHOLD_LABEL, L"Threshold (dBFS)");
