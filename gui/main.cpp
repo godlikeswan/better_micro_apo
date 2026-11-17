@@ -1181,7 +1181,7 @@ void UpdateEffectsUi()
 
 void UpdateMainUi()
 {
-    if (g_mainEnable == nullptr || g_mainHint == nullptr) {
+    if (g_mainEnable == nullptr) {
         return;
     }
 
@@ -1197,26 +1197,6 @@ void UpdateMainUi()
         SendMessageW(g_mainEnable, BM_SETCHECK,
                      bound ? BST_CHECKED : BST_UNCHECKED, 0);
     }
-
-    std::wstring hint;
-    if (!hasDevice) {
-        hint = g_endpoints.empty()
-                   ? L"No capture devices found."
-                   : L"No active capture devices. Turn on View / Show all "
-                     L"devices to edit an inactive endpoint.";
-    } else if (!active) {
-        hint = L"This device is inactive. Its settings can be edited, but "
-               L"Enable needs an active device.";
-    } else if (bound) {
-        hint = L"Enabled on this device. Effects apply live and other effects "
-               L"are ignored.";
-    } else if (!g_files.FullyInstalled() || g_files.DllStale()) {
-        hint = L"Not enabled. Checking Enable installs or updates the APO, "
-               L"then applies it to this device.";
-    } else {
-        hint = L"Not enabled. Checking Enable applies the APO to this device.";
-    }
-    SetWindowTextW(g_mainHint, hint.c_str());
 }
 
 // ---------------------------------------------------------------------------

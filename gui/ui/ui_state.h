@@ -24,7 +24,6 @@ enum : int {
     IDC_EFFECT_GRAPH,
     IDC_MAIN_ENABLE,
     IDC_MAIN_ENABLE_ICON,
-    IDC_MAIN_HINT,
     IDC_MONO_NOTE,
 
     // Effect parameters.
@@ -162,7 +161,6 @@ extern HWND g_effectHeading;
 extern HWND g_effectGraph;
 extern HWND g_mainEnable;
 extern HWND g_mainEnableIcon;
-extern HWND g_mainHint;
 extern HWND g_monoNote;
 extern HWND g_paramResetButtons[ParamResetCount];
 

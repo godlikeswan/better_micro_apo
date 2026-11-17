@@ -386,8 +386,7 @@ void LayoutEffects(int x, int y, int width, int height)
     MoveWindow(g_effectPresetCombo, nextX + presetLabelWidth, y,
                presetComboWidth, Scale(200), TRUE);
 
-    MoveWindow(g_mainHint, x, y + Scale(30), width, Scale(20), TRUE);
-    const int top = y + Scale(56);
+    const int top = y + Scale(34);
 
     const int panelHeight = height - (top - y);
     const int listWidth = Scale(220);
@@ -468,7 +467,6 @@ void CreateControls(HWND root)
         InfoIcon(window, IDC_MAIN_ENABLE_ICON, InfoIconKind::Interrupt);
     AddTooltip(g_mainEnableIcon,
                L"Turning this on or off briefly interrupts audio.");
-    g_mainHint = ui::Label(window, IDC_MAIN_HINT, L"");
     g_effectPresetLabel =
         ui::Label(window, IDC_EFFECT_PRESET_LABEL, L"Preset:");
     g_effectPresetCombo =
@@ -683,10 +681,9 @@ void Layout(int width, int height)
     const int margin = Scale(8);
     const int padding = Scale(8);
     const int bottomHeight = Scale(24);
-    const int bottomGap = Scale(4);
 
     const int contentWidth = width - 2 * margin;
-    const int contentHeight = height - margin - bottomGap - bottomHeight;
+    const int contentHeight = height - margin - bottomHeight;
     MoveWindow(g_pageBackground, margin, margin, contentWidth, contentHeight,
                TRUE);
 
@@ -694,13 +691,15 @@ void Layout(int width, int height)
     const int viewHeight = contentHeight - 2 * padding;
     LayoutEffects(padding, padding, viewWidth, viewHeight);
 
-    // One bottom row: status on the left, live levels on the right.
+    // One bottom row: status on the left, live levels on the right. Use the
+    // same total inset as the view controls and center the text in the strip.
     const int rowHeight = Scale(20);
     const int rowY = height - bottomHeight + (bottomHeight - rowHeight) / 2;
+    const int rowInset = margin + padding;
     const int meterWidth = Scale(320);
-    const int meterX = width - margin - meterWidth;
-    const int statusWidth = std::max(0, meterX - margin - padding);
-    MoveWindow(g_status, margin, rowY, statusWidth, rowHeight, TRUE);
+    const int meterX = width - rowInset - meterWidth;
+    const int statusWidth = std::max(0, meterX - rowInset - padding);
+    MoveWindow(g_status, rowInset, rowY, statusWidth, rowHeight, TRUE);
     MoveWindow(g_meter, meterX, rowY, meterWidth, rowHeight, TRUE);
 }
 

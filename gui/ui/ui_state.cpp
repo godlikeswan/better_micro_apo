@@ -19,7 +19,6 @@ HWND g_effectHeading = nullptr;
 HWND g_effectGraph = nullptr;
 HWND g_mainEnable = nullptr;
 HWND g_mainEnableIcon = nullptr;
-HWND g_mainHint = nullptr;
 HWND g_monoNote = nullptr;
 HWND g_paramResetButtons[ParamResetCount]{};
 
