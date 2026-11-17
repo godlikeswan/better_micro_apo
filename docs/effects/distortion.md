@@ -1,23 +1,37 @@
 # Distortion
 
-Soft saturation with a selectable odd transfer curve. It adds warmth or edge
-without generating DC offset: every curve maps full scale to full scale.
+Adds a gritty, overdriven edge. Use it for guitar, a deliberately rough vocal,
+or a special effect — not as a general fix for a quiet microphone.
 
-Typical placement: after mono and before reverb, so the reverb tail stays
-clean. Up to 16 instances are supported.
+## Try this
 
-## Parameters
+- Put Distortion near the end of the list, usually after
+  [Mono](mono.md) and before [Reverb](reverb.md), so the reverb tail stays
+  clean.
+- Start with **Drive** at 0 dB and raise it until the signal is pushed into the
+  curve. A little adds warmth and bite; a lot gets buzzy.
+- **Curvature** controls how hard the curve bends. Around 0% it is almost
+  linear; around 100% it is fully saturated. Move it slowly — the graph in the
+  panel updates as you go.
+- **Function** changes the character. **Tanh** is the smooth default; try the
+  others if you want a different color.
+- **Output** sets the level after the effect. Distortion can sound much louder
+  than the clean signal even without clipping, so turn Output down if it jumps
+  out at you. If the bottom meter shows **CLIP**, lower Output first.
+- A newly added Distortion starts with Tanh, 0 dB Drive, 50% Curvature, and 0 dB
+  Output. The small ↺ buttons reset individual controls. Up to 16 instances are
+  supported.
 
-| Parameter | Default | Clamp | Unit / meaning |
+## Controls
+
+| Control | Default | Range | What it does |
 | --- | --- | --- | --- |
 | Function | Tanh | Tanh, Arctan, Cubic polynomial, Logarithmic, Exponential, Error function | Curve family. |
-| Drive | 0 dB | 0–36 dB | Level into the curve. |
-| Curvature | 50 % | 0–100 % | How hard the curve bends, from nearly linear to fully saturated. |
+| Drive | 0 dB | 0 to 36 dB | Level into the curve. |
+| Curvature | 50% | 0 to 100% | How hard the curve bends, from nearly linear to fully saturated. |
 | Output | 0 dB | −24 to +12 dB | Level after the curve. |
 
-Newly added instances are enabled by `MakeEffect`; the default function is Tanh.
-
-## Implementation details
+## Under the hood
 
 `DistortionStage` (`src/dsp/stages.cpp`):
 
@@ -29,10 +43,3 @@ Newly added instances are enabled by `MakeEffect`; the default function is Tanh.
 - All six curves are odd and map −1…1 to −1…1, so no DC blocker is needed.
 - The curve math lives in `src/dsp/transfer.h`; the GUI graph calls the same
   inline functions, so the plotted curve matches what the DSP applies.
-
-## GUI notes
-
-The Function combo lists the six curves. The parameter panel shows a live
-transfer curve from `src/dsp/transfer.h`; moving Curvature or Drive changes it
-immediately. The explanatory note about drive/curvature was removed from the UI
-to keep the panel compact — the graph now conveys the shape.
