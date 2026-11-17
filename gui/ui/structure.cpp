@@ -142,7 +142,7 @@ HWND InfoIcon(HWND parent, int id, InfoIconKind kind)
 }
 
 void PlaceInfoIcon(HWND icon, HWND textControl, int x, int y, int iconSize,
-                   int rowHeight, int maxRight)
+                   int rowHeight, int maxRight, int textOffset = 0)
 {
     if (icon == nullptr) {
         return;
@@ -177,7 +177,8 @@ void PlaceInfoIcon(HWND icon, HWND textControl, int x, int y, int iconSize,
     }
 
     const int iconX = std::max(
-        x, std::min(x + textWidth + Scale(4), maxRight - iconSize));
+        x, std::min(x + textOffset + textWidth + Scale(4),
+                    maxRight - iconSize));
     const int iconY = y + (rowHeight - iconSize) / 2;
     MoveWindow(icon, iconX, iconY, iconSize, iconSize, TRUE);
     ShowWindow(icon, SW_SHOW);
@@ -371,8 +372,9 @@ void LayoutEffects(int x, int y, int width, int height)
     // selector. Listening is the next action, immediately after Enable.
     int nextX = x + labelWidth + comboWidth + Scale(16);
     MoveWindow(g_mainEnable, nextX, y + Scale(1), Scale(96), Scale(24), TRUE);
+    // Checkbox text starts after the box, so account for that offset.
     PlaceInfoIcon(g_mainEnableIcon, g_mainEnable, nextX, y + Scale(1),
-                  Scale(16), Scale(24), nextX + Scale(96));
+                  Scale(16), Scale(24), nextX + Scale(96), Scale(20));
     nextX += Scale(96) + Scale(16);
     MoveWindow(g_listen, nextX, y + Scale(1), Scale(230), Scale(24), TRUE);
     nextX += Scale(230) + Scale(16);
