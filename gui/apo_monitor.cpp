@@ -412,6 +412,10 @@ void RunMonitor(Monitor& monitor)
     const size_t maxPending = static_cast<size_t>(monitor.frameBytes) *
                               monitor.format->nSamplesPerSec;
 
+    // WASAPI commonly flags the first packet after Start() as a discontinuity.
+    // That is the expected start of capture, not a real gap, so skip it.
+    bool firstPacket = true;
+
     while (g_running.load()) {
         UINT32 packet = 0;
         while (g_running.load() &&
@@ -425,9 +429,11 @@ void RunMonitor(Monitor& monitor)
                 break;
             }
 
-            if ((flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0) {
+            if ((flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0 &&
+                !firstPacket) {
                 g_drops.fetch_add(1, std::memory_order_relaxed);
             }
+            firstPacket = false;
 
             if (frames != 0) {
                 const size_t bytes =

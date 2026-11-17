@@ -22,7 +22,9 @@ struct MonitorLevel {
     double sumSquares = 0.0;    // Sum of squared samples since the previous call.
     unsigned long long samples = 0;  // Sample count since the previous call.
     bool clipped = false;
-    unsigned drops = 0;  // Capture gaps or queued audio dropped by the monitor.
+    // Real capture gaps (excluding the expected first-packet flag) or audio
+    // dropped from the monitor's playback queue.
+    unsigned drops = 0;
 };
 
 // Returns the peak/RMS accumulators, clip flag, and drop counter accumulated
