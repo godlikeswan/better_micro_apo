@@ -309,6 +309,18 @@ void Chain::Add(Stage* stage)
     }
 }
 
+void Chain::Insert(size_t index, Stage* stage)
+{
+    if (stage == nullptr || m_stages.size() >= m_stages.capacity())
+    {
+        return;
+    }
+
+    index = std::min(index, m_stages.size());
+    m_stages.insert(m_stages.begin() + static_cast<std::ptrdiff_t>(index),
+                    stage);
+}
+
 void Chain::Clear()
 {
     m_stages.clear();

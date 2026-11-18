@@ -77,9 +77,10 @@ ProgramData. A later **Enable** installs the DLL again and uses those settings.
 `StopAudio`/`StartAudio` open the service manager, collect `Audiosrv`
 dependents, stop them in dependency order, and start them again afterwards, with
 state waits and a scope-exit guard so a failed step still restores the service.
-This is why binding, install, uninstall, and noise-profile capture briefly
-interrupt audio. Settings-only applies avoid the restart by going through the
-[runtime snapshot](../runtime-sharing.md) instead.
+This is why binding, install, and uninstall briefly interrupt audio.
+Settings-only applies and noise-profile captures avoid the restart by going
+through the [runtime snapshot](../runtime-sharing.md) and the stage capture
+channel instead.
 
 ## Status and log
 

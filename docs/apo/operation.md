@@ -34,7 +34,8 @@ Sequence:
    maximum frame count, and sample format.
 4. The endpoint's INI (`devices\{endpoint-guid}.ini`) is loaded, clamped, and
    its `.noise` profile is analyzed — even when noise reduction is off, so it
-   can be enabled live without a restart.
+   can be enabled live without a restart. The capture control block is also
+   mapped for one-shot profile requests.
 5. The runtime `.dat` snapshot is opened read-only if present and of the
    current version; its generation becomes the baseline (see
    [DLL ↔ GUI settings sharing](../runtime-sharing.md)).
@@ -50,13 +51,14 @@ All of these happen once per stream bind; none happen in `APOProcess`.
 | Owner | Allocation | Size / notes |
 | --- | --- | --- |
 | `BetterMicroApo` | `m_scratch` | `maxFrames * channels` `double`s. The interleaved input is decoded here, stages run in place, and the result is encoded to the output. |
-| `Chain` | `m_stages` | Reserves `kMaxEffects` (16) `Stage*` slots at construction; `Clear`/refill never allocates. |
-| `StagePool` | stage objects | One stage per possible slot per type, `Configure`d once. Heavy types (noise, gate, reverb) allow 4 instances; all others 16. Noise stages are only created when a valid profile was loaded. |
+| `Chain` | `m_stages` | Reserves `kMaxEffects + 1` (17) `Stage*` slots at construction so the temporary capture tap never allocates; `Clear`/refill never allocates. |
+| `StagePool` | stage objects | One stage per possible slot per type, `Configure`d once. Heavy types (noise, gate, reverb) allow 4 instances; all others 16. Noise stages are always created and pass audio through until a profile is available. |
 | `GateStage` | `m_delay` | `ceil(300 ms * sampleRate) * channels` `double`s, sized for the maximum clamp so a live lookahead change never allocates. |
 | `DynamicStage` | `m_ic1`, `m_ic2`, `m_band` | Per-channel filter and band state. |
 | `NoiseStage` | FFT plan + analysis buffers | Precomputed radix-2 tables and 512-point window, profile bins, gain arrays, input/output/history/overlap-add and real/imag arrays, sized from the stream and FFT geometry. |
 | `ReverbStage` | tank buffers + predelay | Per channel: 8 damped combs and 4 allpasses (tunings scaled to the sample rate, odd channels get the classic stereo spread) plus `ceil(200 ms * sampleRate) + 1` predelay frames. |
 | `BetterMicroApo` | runtime file mapping | A read-only `MapViewOfFile` of `runtime\{endpoint-guid}.dat`, closed in `UnlockForProcess`. |
+| `BetterMicroApo` | capture mapping and tap | A read/write mapping of `runtime\{endpoint-guid}.capture` plus one configured `StageCaptureTap`, both closed in `UnlockForProcess`. |
 
 Gain, mono, and distortion stages allocate no buffers at bind time; their
 coefficients are derived in `Update`.
@@ -71,9 +73,10 @@ profile and format, and releases the scratch buffer.
 1. Validates connections, lock state, format, buffer flags, and frame count
    against `maxFrames` (invalid buffers produce `BUFFER_INVALID` with zero
    frames).
-2. Calls `PollRuntimeSettings()`: one generation load in the common case. If
-   the GUI published a new generation, it re-validates magic/version/struct
-   size and the seqlock, clamps the snapshot, and calls `StagePool::Update`.
+2. Calls `PollRuntimeSettings()` and `PollStageCapture()`: one generation/state
+   load in the common case. A new settings generation is validated and applied
+   through `RebuildChain`. A capture request inserts the tap; a finished
+   capture publishes bins and retunes the live noise stages.
 3. For `BUFFER_SILENT`, runs `Chain::ProcessSilence` only when a stage needs
    silence (to flush a lookahead or reverb tail); otherwise the output is
    marked silent and zeroed if the engine did not supply an in-place buffer.
@@ -95,7 +98,13 @@ If a slot now holds a different stable instance id, the stage is reset before
 being retuned from the new instance. Each enabled effect then gets
 `Stage::Update(effect, format)` and is added to the non-owning `Chain`. The
 chain is cleared and refilled without allocation, which is what makes live
-settings changes safe from the real-time path.
+settings changes safe from the real-time path. `RebuildChain` is the single
+place that fills the chain, so a capture tap survives a settings change made
+while a profile is being recorded.
+
+`StagePool::UpdateProfileBins` retunes every allocated noise stage from a
+captured profile without allocating or rebuilding the pool. A stage with no
+profile is a passthrough and does not report `NeedsSilence()`.
 
 Disabled effects are simply absent from the chain. Deleting and re-adding an
 effect produces a new id, so its stage starts from a clean state; values are not

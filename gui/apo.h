@@ -108,8 +108,8 @@ struct Change {
     ApoSettings settings;
 
     // Settings normally reach a running APO through the shared runtime file.
-    // Operations that must reload state from disk (a new noise profile) set
-    // this so Apply still restarts the audio service.
+    // Reserved for operations that must reload state from disk; noise profiles
+    // now reach the running stages through the stage capture channel.
     bool forceRestart = false;
 };
 

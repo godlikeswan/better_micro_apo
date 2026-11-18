@@ -2,9 +2,10 @@
 
 The GUI and the APO are separate processes. They share per-device settings
 through a file-backed memory mapping so effect edits can be applied to a
-running stream without restarting audio. Source: `src/runtime_settings.*`,
-`src/apo_settings.cpp`, `src/better_micro_apo.cpp`, `gui/apo_ops.cpp`, and
-`gui/main.cpp`.
+running stream without restarting audio. Noise profile capture uses a second
+mapping for the request/result handshake. Source: `src/runtime_settings.*`,
+`src/stage_capture.*`, `src/apo_settings.cpp`, `src/better_micro_apo.cpp`,
+`gui/apo_ops.cpp`, and `gui/main.cpp`.
 
 ## Files per endpoint
 
@@ -14,8 +15,9 @@ filename-safe with `apo::SafeEndpointId`.
 | File | Writer | Reader | Purpose |
 | --- | --- | --- | --- |
 | `C:\ProgramData\better_micro_apo\devices\{id}.ini` | GUI | APO at `LockForProcess` | Durable settings; authoritative on restart. |
-| `C:\ProgramData\better_micro_apo\devices\{id}.noise` | GUI | APO at `LockForProcess` | Raw room-noise capture. |
+| `C:\ProgramData\better_micro_apo\devices\{id}.noise` | GUI | APO at `LockForProcess` and after a live capture | Durable noise profile, with precomputed magnitude bins. |
 | `C:\ProgramData\better_micro_apo\runtime\{id}.dat` | GUI | APO while streaming | Live settings snapshot. |
+| `C:\ProgramData\better_micro_apo\runtime\{id}.capture` | Both | Both while streaming | One-shot stage capture control block. |
 | `C:\ProgramData\better_micro_apo\gui.ini` | GUI | GUI | `show_all_devices` and `last_device` preferences; not used by the APO. |
 
 ## Runtime snapshot layout
@@ -80,11 +82,15 @@ new snapshot is applied exactly once.
 - **Settings-only edits** are saved to the INI and published to the `.dat`
   file about 200 ms after the last edit (`kLiveApplyTimer`). The monitor keeps
   running and audio is not interrupted.
-- **Binding/unbinding, isolation changes, and noise-profile capture** require
-  `LockForProcess` to reload state, so they restart the audio service. The
-  first apply on a device without a ready runtime file also restarts once.
-  `apo::ChangesNeedRestart` computes this before the GUI decides whether to
-  stop audio; listening is resumed afterwards only when a restart happened.
+- **Noise-profile capture** uses the stage capture channel below. The selected
+  Noise effect stays enabled, all other effects keep running, settings are not
+  rewritten, and audio and Listen are not interrupted. The APO retunes the live
+  noise stages from the returned bins before the request is acknowledged.
+- **Binding/unbinding and isolation changes** require `LockForProcess` to
+  reload state, so they restart the audio service. The first apply on a device
+  without a ready runtime file also restarts once. `apo::ChangesNeedRestart`
+  computes this before the GUI decides whether to stop audio; listening is
+  resumed afterwards only when a restart happened.
 - **On restart** the INI is authoritative. The runtime file is a live overlay
   for the duration of a stream; it never replaces the durable settings.
 
@@ -122,22 +128,49 @@ not a user option.
 
 ## Noise profile format
 
-`devices\{id}.noise` starts with a packed 20-byte `BMNP` header:
+`devices\{id}.noise` starts with a packed `BMNP` header. New captures write
+version 2, which stores the analysis result instead of raw samples:
 
-| Field | Type |
-| --- | --- |
-| `magic` | 4 bytes, `"BMNP"` |
-| `version` | `uint32_t`, currently 1 |
-| `sampleRate` | `uint32_t` |
-| `channels` | `uint32_t` |
-| `frames` | `uint32_t` |
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `magic` | 4 bytes | `"BMNP"` |
+| `version` | `uint32_t` | `2` |
+| `sampleRate` | `uint32_t` | Stream rate the bins were measured at. |
+| `binCount` | `uint32_t` | Number of `double` magnitudes that follow (257 for the current FFT). |
 
-followed by raw interleaved float32 samples. Files over 64 MiB or with fewer
-than 512 frames are rejected.
+Version 1 files (20-byte header with `channels` and `frames`, followed by raw
+interleaved float32 samples) are still read for compatibility, but are not
+written any more. Files over 64 MiB are rejected, as are v1 files with fewer
+than 512 frames.
 
-`LockForProcess` analyzes the profile with the same 512-point FFT, 256-sample
-hop, and square-root Hann window as `NoiseStage`, averages the magnitude
-spectrum across channels, and resamples the bins if the profile and stream use
-different sample rates. A missing or invalid profile leaves the noise pool
-empty, so a Noise effect in the list is skipped even when enabled. The APO
-never reads the profile from the real-time path.
+`LockForProcess` loads either version and resamples the bins to the stream rate
+if needed. A missing or invalid profile leaves the stage as a passthrough. The
+APO never reads the `.noise` file from the real-time path; a captured profile is
+applied from the shared capture block instead.
+
+## Stage capture channel
+
+`StageCaptureFile` (`src/stage_capture.h`, magic `0x50414353` / `"SCAP"`,
+version 1) lives in `runtime\{id}.capture`. It holds the selected preset index
+and effect id, requested duration, sample rate, frame counters, an error code,
+an acknowledge field, and `double bins[257]`. All control fields are 32-bit and
+are read or written with `Interlocked` operations; state changes are the
+publication barriers for the bins.
+
+1. The GUI waits for `Idle`, writes the target and duration, then sets
+   `Requested`.
+2. The APO verifies that the target is an enabled Noise effect in the active
+   preset, inserts `StageCaptureTap` immediately before it, and sets
+   `Capturing`.
+3. The tap analyzes the double-precision samples it receives with the same
+   512-point FFT, 256-sample hop, and square-root Hann window as `NoiseStage`.
+   It never changes the samples. When enough frames have passed, the APO writes
+   the averaged magnitude bins and sets `Done`.
+4. The GUI saves the bins as a v2 `.noise` file and writes `resultAck`. On
+   success the APO copies the bins into the live `NoiseProfile`, calls
+   `StagePool::UpdateProfileBins`, then removes the tap and returns the block
+   to `Idle`.
+
+No effect is disabled, no settings file or runtime snapshot is rewritten, and
+`StopAudio`/`StartAudio` are not called. The selected Noise effect must already
+be enabled because the tap is placed at that point in the running chain.

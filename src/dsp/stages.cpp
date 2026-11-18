@@ -438,15 +438,54 @@ NoiseStage::NoiseStage(const NoiseProfile& profile)
 {
 }
 
+void NoiseStage::ApplyProfileBins(const std::vector<double>& magnitudes,
+                                  uint32_t sampleRate)
+{
+    constexpr size_t N = kNoiseFftSize;
+
+    std::fill(m_profileBins.begin(), m_profileBins.end(), 0.0);
+    m_hasProfile = !magnitudes.empty() && sampleRate != 0;
+    if (!m_hasProfile || m_profileBins.size() != N / 2 + 1)
+    {
+        return;
+    }
+
+    const double profileRate = static_cast<double>(sampleRate);
+    const size_t profileBins = magnitudes.size();
+    for (size_t bin = 0; bin <= N / 2; ++bin)
+    {
+        double position = static_cast<double>(bin) * m_sampleRate / profileRate;
+        position = std::max(
+            0.0, std::min(position, static_cast<double>(profileBins - 1)));
+        const size_t low = static_cast<size_t>(position);
+        const size_t high = std::min(profileBins - 1, low + 1);
+        const double fraction = position - static_cast<double>(low);
+        m_profileBins[bin] = magnitudes[low] * (1.0 - fraction) +
+                             magnitudes[high] * fraction;
+    }
+}
+
+void NoiseStage::SetProfileBins(const std::vector<double>& magnitudes,
+                                uint32_t sampleRate)
+{
+    const bool hadProfile = m_hasProfile;
+    ApplyProfileBins(magnitudes, sampleRate);
+    if (hadProfile != m_hasProfile)
+    {
+        // The stage is about to start or stop delaying the stream. Prime or
+        // drop its analysis tail so the first buffer is not stale.
+        Reset();
+    }
+}
+
 void NoiseStage::Configure(const AudioFormat& format)
 {
     constexpr size_t N = kNoiseFftSize;
-    constexpr size_t H = kNoiseHopSize;
     constexpr double kPi = 3.14159265358979323846;
 
     m_channels = format.channels;
     m_maxFrames = (format.maxFrames > 0) ? format.maxFrames : 1;
-    const double sampleRate = EffectiveSampleRate(format);
+    m_sampleRate = EffectiveSampleRate(format);
 
     m_window.resize(N);
     for (size_t index = 0; index < N; ++index)
@@ -458,32 +497,11 @@ void NoiseStage::Configure(const AudioFormat& format)
     }
 
     m_profileBins.assign(N / 2 + 1, 0.0);
-    const size_t profileBins = m_profile.magnitudes.size();
-    if (profileBins != 0)
-    {
-        const double profileRate =
-            (m_profile.sampleRate > 0)
-                ? static_cast<double>(m_profile.sampleRate)
-                : sampleRate;
-        for (size_t bin = 0; bin <= N / 2; ++bin)
-        {
-            double position =
-                static_cast<double>(bin) * sampleRate / profileRate;
-            position = std::max(
-                0.0, std::min(position,
-                              static_cast<double>(profileBins - 1)));
-            const size_t low = static_cast<size_t>(position);
-            const size_t high = std::min(profileBins - 1, low + 1);
-            const double fraction = position - static_cast<double>(low);
-            m_profileBins[bin] =
-                m_profile.magnitudes[low] * (1.0 - fraction) +
-                m_profile.magnitudes[high] * fraction;
-        }
-    }
+    ApplyProfileBins(m_profile.magnitudes, m_profile.sampleRate);
 
     m_floorGain = DecibelsToLinear(-m_settings.reductionDb);
     const double hopSeconds =
-        static_cast<double>(H) / std::max(1.0, sampleRate);
+        static_cast<double>(kNoiseHopSize) / std::max(1.0, m_sampleRate);
     m_gainAttack = 1.0 - std::exp(-hopSeconds / 0.020);
     m_gainRelease = 1.0 - std::exp(-hopSeconds / 0.150);
 
@@ -672,8 +690,8 @@ void NoiseStage::Process(double* samples, UINT32 frames, UINT32 channels)
     constexpr size_t N = kNoiseFftSize;
     constexpr size_t H = kNoiseHopSize;
 
-    if (!m_settings.enabled || samples == nullptr || frames == 0 ||
-        channels == 0 || channels != m_channels)
+    if (!m_settings.enabled || !m_hasProfile || samples == nullptr ||
+        frames == 0 || channels == 0 || channels != m_channels)
     {
         return;
     }
@@ -998,12 +1016,9 @@ void StagePool::Configure(const AudioFormat& format,
             switch (type)
             {
             case EffectType::Noise:
-                // Without a profile the noise stage is a no-op, so there is no
-                // reason to reserve its buffers.
-                if (!profile.valid)
-                {
-                    continue;
-                }
+                // Always allocate the noise stages. Without a profile they
+                // pass audio through unchanged, and a live capture can fill
+                // their bins without rebuilding the pool.
                 stage = std::make_unique<NoiseStage>(profile);
                 break;
             case EffectType::Gate:
@@ -1096,6 +1111,16 @@ void StagePool::Update(const ApoSettings& settings, const AudioFormat& format,
 
         stage->Update(effect, format);
         chain.Add(stage);
+    }
+}
+
+void StagePool::UpdateProfileBins(const NoiseProfile& profile)
+{
+    Slots& slots = m_slots[static_cast<int>(EffectType::Noise)];
+    for (const auto& stage : slots.stages)
+    {
+        static_cast<NoiseStage*>(stage.get())->SetProfileBins(
+            profile.magnitudes, profile.sampleRate);
     }
 }
 

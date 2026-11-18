@@ -241,6 +241,11 @@ bool SaveNoiseCapture(const std::wstring& endpointId, std::uint32_t sampleRate,
                       std::uint32_t channels,
                       const std::vector<float>& samples);
 
+// Writes a stage-local capture (BMNP v2 header plus double magnitude bins).
+bool SaveNoiseProfileBins(const std::wstring& endpointId,
+                          std::uint32_t sampleRate,
+                          const std::vector<double>& magnitudes);
+
 // Reads and analyzes the endpoint's noise profile. Missing or invalid files
 // leave `profile` invalid and return false.
 bool LoadNoiseProfile(const std::wstring& endpointId, NoiseProfile& profile);

@@ -48,7 +48,7 @@ the [list of effects](../effects/index.md) for each stage.
 | --- | --- |
 | `C:\Program Files\better_micro_apo\better_micro_apo.dll` | Installed APO DLL. |
 | `C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.ini` | Per-device settings and presets. |
-| `C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.noise` | Captured room-noise profile. |
+| `C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.noise` | Captured room-noise profile with precomputed magnitude bins. |
 | `C:\ProgramData\better_micro_apo\runtime\{endpoint-guid}.dat` | Live settings snapshot shared with the GUI. |
 | `C:\ProgramData\better_micro_apo\backup\FxProperties-{endpoint}.reg` | Canonical registry backup for a device. |
 | `C:\ProgramData\better_micro_apo\better_micro_apo.log` | Setup-path log (never written from `APOProcess`). |

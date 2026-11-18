@@ -7,14 +7,17 @@ recording, then reduces that sound while leaving your voice mostly alone.
 ## Try this
 
 - Put Noise reduction first in the effect list, before [Gate](gate.md) and
-  [Compressor](compressor.md), so it sees the raw microphone signal.
-- Sit in your usual spot, be quiet, and click **Capture noise profile**. It
-  records about three seconds with every effect temporarily disabled. You will
-  not hear the room played back — the capture renders silence to the output —
-  and your old settings are restored afterward.
-- Capturing briefly restarts audio and then enables the first Noise effect (or
-  adds one if there was none and the list has room). This restart is needed
-  because the profile is loaded when the audio chain is rebuilt.
+  [Compressor](compressor.md), so it sees the microphone signal before the other
+  effects shape it.
+- Select the **enabled** Noise effect you want to calibrate, sit in your usual
+  spot, be quiet, and click **Capture noise profile**. It measures about three
+  seconds at that effect's position in the chain — after any effects above it
+  and before anything below it.
+- Nothing is switched off or restarted during capture. Your settings stay
+  exactly as they are, audio keeps playing, and **Listen** keeps running.
+- The new profile goes straight into the running effect. If this was the first
+  profile, the selected Noise effect starts reducing noise as soon as the
+  capture finishes; you do not need to re-enable it or restart audio.
 - Talk normally with **Listen to this device** on. Move **Reduction** to the
   right until the steady hiss is clearly quieter. If your voice starts sounding
   chewed up or watery, move it back to the left. You do not have to remove every
@@ -38,18 +41,24 @@ recording, then reduces that sound while leaving your voice mostly alone.
 - Analysis uses a fixed 512-point FFT with a 256-sample hop and a square-root
   Hann window with 50% overlap. The fixed size keeps the captured profile and
   the running stage on the same frequency grid.
-- `LockForProcess` loads and analyzes the `.noise` file with the same window and
-  hop, averages the magnitude spectrum across channels, and resamples bins if
-  the profile and stream use different sample rates. Missing or invalid files
-  leave the pool empty, so the effect is skipped even when enabled.
+- `LockForProcess` loads the `.noise` profile, even when the effect is off, so it
+  can be enabled live. Missing or invalid files leave the stage as a pure
+  passthrough.
 - Each hop subtracts the profile magnitude and applies a gain per bin, capped
   by `reductionDb`, then smooths the gains across bins and time. One shared gain
   per frequency bin is applied to all channels, preserving the stereo image.
 - Analysis/synthesis buffers, the FFT plan, window, profile bins, gain arrays,
   and overlap-add state are allocated in `Configure`, sized from the stream and
   the FFT geometry. `Process` is allocation-free.
-- `NeedsSilence()` is true while enabled so the overlap-add tail is flushed
-  through silent buffers. The stage delays the stream by about 512 samples while
-  enabled.
-- Capture writes the raw float32 capture to `devices\{id}.noise`, then restores
-  the saved settings.
+- `NeedsSilence()` is true while enabled with a valid profile so the overlap-add
+  tail is flushed through silent buffers. The stage delays the stream by about
+  512 samples while active.
+
+Capture is handled by `StageCaptureTap` (`src/stage_capture.cpp`). The APO adds
+it just before the selected Noise stage for one request, analyzes the signal
+that reaches that stage with the same FFT geometry, and writes precomputed
+magnitude bins to `devices\{id}.noise`. The GUI saves the file and the APO
+retunes the live stages from those bins. No effect is disabled, no setting is
+rewritten, and the audio service is not restarted. See
+[DLL ↔ GUI settings sharing](../runtime-sharing.md) for the file and control
+block layouts.

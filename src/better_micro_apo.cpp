@@ -213,6 +213,7 @@ HRESULT BetterMicroApo::FinalConstruct()
 
 void BetterMicroApo::FinalRelease()
 {
+    CloseStageCapture();
     CloseRuntimeSettings();
     Log(L"FinalRelease pid=%lu", GetCurrentProcessId());
 }
@@ -293,6 +294,8 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
     UINT32 u32NumOutputConnections,
     APO_CONNECTION_DESCRIPTOR** ppOutputConnections)
 {
+    CloseStageCapture();
+
     // The base class validates connection counts, formats and registration
     // flags, caches the format information and sets m_bIsLocked.
     HRESULT hr = CBaseAudioProcessingObject::LockForProcess(
@@ -347,6 +350,9 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
         // live does not require a restart.
         apo::LoadNoiseProfile(m_endpointId, m_noiseProfile);
     }
+    // Keep a full bin array even without a profile so a live capture can fill
+    // it from the real-time path without allocating.
+    m_noiseProfile.magnitudes.resize(apo::kStageCaptureBins, 0.0);
     apo::ClampSettings(m_settings);
     OpenRuntimeSettings();
 
@@ -357,11 +363,14 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
     {
         m_scratch.assign(
             static_cast<size_t>(m_maxFrames) * info.channels, 0.0);
+        m_captureTap.Configure(m_formatInfo);
+        OpenStageCapture();
         ConfigureDsp();
     }
     catch (...)
     {
         CBaseAudioProcessingObject::UnlockForProcess();
+        CloseStageCapture();
         CloseRuntimeSettings();
         m_chain.Clear();
         m_stagePool.Clear();
@@ -385,6 +394,7 @@ STDMETHODIMP BetterMicroApo::UnlockForProcess()
 {
     const HRESULT hr = CBaseAudioProcessingObject::UnlockForProcess();
 
+    CloseStageCapture();
     CloseRuntimeSettings();
     m_chain.Clear();
     m_stagePool.Clear();
@@ -439,6 +449,7 @@ STDMETHODIMP_(void) BetterMicroApo::APOProcess(
     // Pick up settings the GUI published since the last buffer. The check is a
     // single generation load unless something actually changed.
     PollRuntimeSettings();
+    PollStageCapture();
 
     BYTE* destination = reinterpret_cast<BYTE*>(output->pBuffer);
     const BYTE* source = reinterpret_cast<const BYTE*>(input->pBuffer);
@@ -491,7 +502,7 @@ void BetterMicroApo::ConfigureDsp()
     m_chain.Clear();
     m_chain.SetFormat(m_formatInfo);
     m_stagePool.Configure(m_formatInfo, m_noiseProfile);
-    m_stagePool.Update(m_settings, m_formatInfo, m_chain);
+    RebuildChain();
     m_chain.Reset();
 }
 
@@ -620,7 +631,199 @@ void BetterMicroApo::PollRuntimeSettings()
     apo::ClampSettings(settings);
     m_runtimeGeneration = generation;
     m_settings = settings;
-    m_stagePool.Update(settings, m_formatInfo, m_chain);
+    RebuildChain();
+}
+
+void BetterMicroApo::OpenStageCapture()
+{
+    if (m_endpointId.empty())
+    {
+        return;
+    }
+    if (!m_captureView.Open(m_endpointId, true))
+    {
+        Log(L"Could not open the stage capture channel for %s",
+            m_endpointId.c_str());
+    }
+}
+
+void BetterMicroApo::CloseStageCapture()
+{
+    m_captureActive = false;
+    m_captureRequestId = 0;
+    m_capturePresetIndex = -1;
+    m_captureEffectId = -1;
+    m_captureChainIndex = 0;
+    m_captureView.Close();
+}
+
+bool BetterMicroApo::FindCaptureTarget(int presetIndex, int effectId,
+                                       size_t& chainIndex) const
+{
+    if (presetIndex != m_settings.presetIndex)
+    {
+        return false;
+    }
+
+    const apo::EffectPreset& preset = apo::ActivePreset(m_settings);
+    size_t enabledBefore = 0;
+    for (int index = 0; index < preset.effectCount; ++index)
+    {
+        const apo::EffectInstance& effect = preset.effects[index];
+        if (!apo::EffectEnabled(effect))
+        {
+            continue;
+        }
+        if (effect.id == effectId)
+        {
+            if (effect.type != apo::EffectType::Noise)
+            {
+                return false;
+            }
+            chainIndex = enabledBefore;
+            return true;
+        }
+        ++enabledBefore;
+    }
+    return false;
+}
+
+void BetterMicroApo::RebuildChain()
+{
+    m_chain.Clear();
+    m_stagePool.Update(m_settings, m_formatInfo, m_chain);
+    if (m_captureActive)
+    {
+        size_t index = m_captureChainIndex;
+        if (!FindCaptureTarget(static_cast<int>(m_capturePresetIndex),
+                               static_cast<int>(m_captureEffectId), index))
+        {
+            index = m_captureChainIndex;
+        }
+        m_captureChainIndex = index;
+        m_chain.Insert(index, &m_captureTap);
+    }
+}
+
+void BetterMicroApo::PollStageCapture()
+{
+    apo::StageCaptureFile* capture = m_captureView.Get();
+    if (capture == nullptr)
+    {
+        return;
+    }
+
+    const LONG state = InterlockedCompareExchange(
+        &capture->state, apo::StageCaptureIdle, apo::StageCaptureIdle);
+
+    if (m_captureActive)
+    {
+        // The GUI only starts a new request from idle, but a crashed client can
+        // leave a stale request behind. Drop the tap before doing anything else.
+        if (state != apo::StageCaptureCapturing &&
+            state != apo::StageCaptureDone)
+        {
+            m_captureActive = false;
+            m_captureRequestId = 0;
+            RebuildChain();
+            return;
+        }
+
+        if (state == apo::StageCaptureCapturing && m_captureTap.Complete() &&
+            InterlockedCompareExchange(
+                &capture->requestId, m_captureRequestId, m_captureRequestId) ==
+                m_captureRequestId)
+        {
+            capture->framesDone = m_captureTap.FramesDone();
+            m_captureTap.Finish(capture->bins, apo::kStageCaptureBins);
+            std::atomic_thread_fence(std::memory_order_release);
+            InterlockedExchange(&capture->state, apo::StageCaptureDone);
+            return;
+        }
+
+        if (state == apo::StageCaptureDone)
+        {
+            const LONG ack = InterlockedCompareExchange(
+                &capture->resultAck, apo::kStageCaptureAckNone,
+                apo::kStageCaptureAckNone);
+            if (ack == apo::kStageCaptureAckNone)
+            {
+                return;
+            }
+
+            if (ack == apo::kStageCaptureAckSaved &&
+                InterlockedCompareExchange(
+                    &capture->requestId, m_captureRequestId,
+                    m_captureRequestId) == m_captureRequestId &&
+                capture->sampleRate != 0 &&
+                m_noiseProfile.magnitudes.size() >= apo::kStageCaptureBins)
+            {
+                std::copy(capture->bins,
+                          capture->bins + apo::kStageCaptureBins,
+                          m_noiseProfile.magnitudes.begin());
+                m_noiseProfile.sampleRate = capture->sampleRate;
+                m_noiseProfile.valid = true;
+                m_stagePool.UpdateProfileBins(m_noiseProfile);
+            }
+
+            m_captureActive = false;
+            m_captureRequestId = 0;
+            capture->resultAck = apo::kStageCaptureAckNone;
+            RebuildChain();
+            InterlockedExchange(&capture->state, apo::StageCaptureIdle);
+            return;
+        }
+    }
+
+    if (state != apo::StageCaptureRequested)
+    {
+        return;
+    }
+
+    const LONG requestId = InterlockedCompareExchange(
+        &capture->requestId, 0, 0);
+    size_t chainIndex = 0;
+    if (!FindCaptureTarget(static_cast<int>(capture->presetIndex),
+                           static_cast<int>(capture->effectId), chainIndex))
+    {
+        capture->error = apo::StageCaptureErrorInvalidTarget;
+        InterlockedExchange(&capture->state, apo::StageCaptureFailed);
+        return;
+    }
+
+    if (capture->durationMs == 0 || capture->durationMs > 60000 ||
+        m_formatInfo.sampleRate == 0 || m_formatInfo.channels == 0)
+    {
+        capture->error = apo::StageCaptureErrorBadDuration;
+        InterlockedExchange(&capture->state, apo::StageCaptureFailed);
+        return;
+    }
+
+    const unsigned long long frames =
+        static_cast<unsigned long long>(capture->durationMs) *
+        m_formatInfo.sampleRate / 1000ull;
+    if (frames == 0 || frames > 0xFFFFFFFFull ||
+        !m_captureTap.Begin(static_cast<ULONG>(frames)))
+    {
+        capture->error = apo::StageCaptureErrorNotConfigured;
+        InterlockedExchange(&capture->state, apo::StageCaptureFailed);
+        return;
+    }
+
+    capture->sampleRate = m_formatInfo.sampleRate;
+    capture->channels = m_formatInfo.channels;
+    capture->framesTarget = static_cast<ULONG>(frames);
+    capture->framesDone = 0;
+    capture->error = apo::StageCaptureErrorNone;
+    capture->resultAck = apo::kStageCaptureAckNone;
+
+    m_capturePresetIndex = capture->presetIndex;
+    m_captureEffectId = capture->effectId;
+    m_captureChainIndex = chainIndex;
+    m_captureRequestId = requestId;
+    m_captureActive = true;
+    RebuildChain();
+    InterlockedExchange(&capture->state, apo::StageCaptureCapturing);
 }
 
 // ---------------------------------------------------------------------------

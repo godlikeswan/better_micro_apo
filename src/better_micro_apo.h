@@ -17,6 +17,7 @@
 #include "dsp/dsp.h"
 #include "dsp/stages.h"
 #include "runtime_settings.h"
+#include "stage_capture.h"
 
 // Minimal capture APO.
 //
@@ -94,12 +95,28 @@ private:
     void CloseRuntimeSettings();
     void PollRuntimeSettings();
 
+    // Stage-local noise capture. The tap is inserted only for the duration of
+    // one GUI request; no settings or bindings are changed.
+    void OpenStageCapture();
+    void CloseStageCapture();
+    void PollStageCapture();
+    void RebuildChain();
+    bool FindCaptureTarget(int presetIndex, int effectId,
+                           size_t& chainIndex) const;
+
     std::wstring m_endpointId;
     apo::ApoSettings m_settings;
     apo::NoiseProfile m_noiseProfile;
 
     apo::dsp::Chain m_chain;
     apo::dsp::StagePool m_stagePool;
+    apo::StageCaptureView m_captureView;
+    apo::StageCaptureTap m_captureTap;
+    bool m_captureActive = false;
+    size_t m_captureChainIndex = 0;
+    LONG m_capturePresetIndex = -1;
+    LONG m_captureEffectId = -1;
+    LONG m_captureRequestId = 0;
     apo::dsp::AudioFormat m_formatInfo;
     std::vector<double> m_scratch;
     UINT32 m_maxFrames = 0;

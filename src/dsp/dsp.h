@@ -114,9 +114,12 @@ public:
 class Chain
 {
 public:
-    Chain() { m_stages.reserve(kMaxEffects); }
+    Chain() { m_stages.reserve(kMaxEffects + 1); }
 
     void Add(Stage* stage);
+    // Inserts at `index`, clamped to the current end. Used by the temporary
+    // stage-local capture tap; the extra slot is reserved up front.
+    void Insert(size_t index, Stage* stage);
     void Clear();
     void SetFormat(const AudioFormat& format) { m_format = format; }
     void Reset();

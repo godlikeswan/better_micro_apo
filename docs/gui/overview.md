@@ -60,17 +60,18 @@ excluded so an automatic refresh cannot clobber unsaved edits.
 
 ## Background work
 
-Install, uninstall, binding, applying effects, and noise-profile capture run on
-a `std::thread`. `StartWork` sets `g_busy`, disables the relevant controls via
-`UpdateChromeUi`, and the worker posts `WM_APP_WORK_DONE` when finished. There
-are no confirmation dialogs; the cursor is never changed to a busy shape.
+Install, uninstall, binding, applying effects, and noise-profile capture all
+run on a worker `std::thread`. `StartWork` sets `g_busy`, disables the relevant
+controls via `UpdateChromeUi`, and the worker posts `WM_APP_WORK_DONE` when
+finished. There are no confirmation dialogs; the cursor is never changed to a
+busy shape.
 
 `g_busy` is checked by command handlers and by the list's `LVN_ITEMCHANGING`
 handler, so the effect list stays visible but read-only during work.
 
 Listening is stopped only when an operation actually restarts audio. The GUI
 remembers the endpoint and restarts the monitor afterwards. Settings-only
-applies leave it running.
+applies and noise-profile captures leave it running.
 
 ## Module ownership
 
@@ -79,7 +80,8 @@ applies leave it running.
 | App logic, messages, commands, worker, meters | `gui/main.cpp` |
 | Install, registry, binding, backup, isolation | `gui/apo_ops.cpp`, `gui/apo.h`, `gui/apo_internal.h` |
 | Endpoint enumeration and file status | `gui/apo_status.cpp` |
-| Listen monitor and noise capture | `gui/apo_monitor.cpp/.h` |
+| Listen monitor | `gui/apo_monitor.cpp/.h` |
+| Noise capture request/result channel and tap | `src/stage_capture.cpp/.h` |
 | `show_all_devices` and `last_device` preferences | `gui/preferences.cpp/.h` |
 | Control ids and shared HWNDs | `gui/ui/ui_state.*` |
 | Control tree and geometry | `gui/ui/structure.cpp/.h` |

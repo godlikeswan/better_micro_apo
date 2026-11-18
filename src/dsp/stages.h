@@ -138,15 +138,24 @@ public:
 
     void Configure(const AudioFormat& format) override;
     void Update(const EffectInstance& effect, const AudioFormat& format) override;
+    // Replaces the analysis bins from a live capture without reallocating.
+    void SetProfileBins(const std::vector<double>& magnitudes,
+                        uint32_t sampleRate);
     void Reset() override;
-    bool NeedsSilence() const override { return m_settings.enabled; }
+    bool NeedsSilence() const override
+    {
+        return m_settings.enabled && m_hasProfile;
+    }
     void Process(double* samples, UINT32 frames, UINT32 channels) override;
 
 private:
+    void ApplyProfileBins(const std::vector<double>& magnitudes,
+                          uint32_t sampleRate);
     void ProcessHop();
 
     NoiseSettings m_settings;
     NoiseProfile m_profile;
+    bool m_hasProfile = false;
     FftPlan m_fft;
     std::vector<double> m_window;
     std::vector<double> m_profileBins;
@@ -155,6 +164,7 @@ private:
     double m_floorGain = 0.25;
     double m_gainAttack = 0.5;
     double m_gainRelease = 0.1;
+    double m_sampleRate = 44100.0;
 
     UINT32 m_channels = 0;
     UINT32 m_maxFrames = 0;
@@ -276,6 +286,8 @@ public:
     void Clear();
     void Update(const ApoSettings& settings, const AudioFormat& format,
                 Chain& chain);
+    // Retunes every allocated noise stage from a live capture. No allocation.
+    void UpdateProfileBins(const NoiseProfile& profile);
 
     bool Empty() const;
 

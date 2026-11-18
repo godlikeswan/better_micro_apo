@@ -4,6 +4,7 @@
 #include "apo_monitor.h"
 #include "preferences.h"
 #include "runtime_settings.h"
+#include "stage_capture.h"
 
 #include "ui/effect_dialog.h"
 #include "ui/graph.h"
@@ -89,16 +90,6 @@ int g_effectIndex = -1;   // Selected endpoint in the device combo.
 
 constexpr unsigned kNoiseCaptureMs = 3000;
 
-
-enum class WorkKind {
-    Generic,
-    CaptureNoise,
-};
-
-WorkKind g_workKind = WorkKind::Generic;
-int g_captureIndex = -1;
-apo::ApoSettings g_captureSettings;
-bool g_captureSucceeded = false;
 
 // Apply briefly stops the audio service, which also stops the monitor stream.
 // Remember the listening state so it can be restarted once Apply finishes.
@@ -559,9 +550,9 @@ void ShowEffectForSelected()
         g_noiseNote,
         hasProfile
             ? L"Profile captured. Stay quiet for ~3 s to recapture.\r\n"
-              L"Audio stops briefly."
+              L"Audio keeps playing."
             : L"Stay quiet for ~3 s while capturing.\r\n"
-              L"Audio stops briefly.");
+              L"Audio keeps playing.");
     g_effectLoading = false;
     RefreshEffectGraph();
     Relayout();
@@ -1572,134 +1563,67 @@ void DoCaptureNoiseProfile()
         return;
     }
     if (!CommitEffectEditor()) {
+        UpdateMainUi();
         return;
     }
-    g_preserveDirtyEffects = false;
-    if (!ValidEffectIndex()) {
+    if (!ValidEffectIndex() || !HasEffectSelection()) {
         return;
     }
-    if (!apo::IsDeviceActive(g_endpoints[g_effectIndex].state)) {
+
+    apo::Endpoint& endpoint = g_endpoints[g_effectIndex];
+    if (!apo::IsDeviceActive(endpoint.state)) {
         MessageBoxW(g_window,
                     L"This device is not active. Enable it in Windows and try "
                     L"again.",
                     L"Better Micro APO", MB_ICONWARNING);
         return;
     }
-
-    const int index = g_effectIndex;
-    const std::wstring id = g_endpoints[index].id;
-    const bool bound = g_endpoints[index].Enabled();
-    const apo::ApoSettings captureBase = g_endpoints[index].settings;
-
-    // The profile must be raw room noise: disable every effect so the APO is a
-    // plain passthrough for the duration of the capture.
-    apo::ApoSettings snapshot = captureBase;
-    apo::EffectPreset& snapshotPreset = apo::ActivePreset(snapshot);
-    for (int i = 0; i < snapshotPreset.effectCount; ++i) {
-        apo::SetEffectEnabled(snapshotPreset.effects[i], false);
+    if (!endpoint.Enabled()) {
+        MessageBoxW(g_window,
+                    L"Enable Better Micro APO for this device before capturing "
+                    L"a noise profile.",
+                    L"Better Micro APO", MB_ICONWARNING);
+        return;
     }
 
-    StopListening();
+    const apo::ApoSettings snapshot = endpoint.settings;
+    const apo::EffectPreset& preset = apo::ActivePreset(snapshot);
+    if (g_effectSelection >= preset.effectCount) {
+        return;
+    }
+    const apo::EffectInstance& effect = preset.effects[g_effectSelection];
+    if (effect.type != apo::EffectType::Noise) {
+        return;
+    }
+    if (!apo::EffectEnabled(effect)) {
+        MessageBoxW(g_window,
+                    L"Turn this Noise effect on before capturing. The profile "
+                    L"is measured where this effect sits in the chain.",
+                    L"Better Micro APO", MB_ICONWARNING);
+        return;
+    }
 
-    g_workKind = WorkKind::CaptureNoise;
-    g_captureIndex = index;
-    g_captureSettings = captureBase;
-    g_captureSucceeded = false;
-    g_busy = true;
-    SetWindowTextW(g_status, L"Capturing noise profile...");
-    UpdateChromeUi();
-    UpdateEffectsUi();
+    const std::wstring id = endpoint.id;
+    const int presetIndex = snapshot.presetIndex;
+    const int effectId = effect.id;
 
-    g_worker = std::thread([id, bound, captureBase, snapshot] {
-        apo::Result result;
+    // Capture does not touch settings or bindings, so keep any pending edits
+    // and keep the audition stream running.
+    g_preserveDirtyEffects = true;
+    StartWork([id, presetIndex, effectId] {
         std::wstring error;
+        const bool ok = apo::RequestStageCapture(
+            id, presetIndex, effectId, kNoiseCaptureMs, error);
 
-        auto applySettings = [&](const apo::ApoSettings& settings) {
-            apo::Change change;
-            change.id = id;
-            change.enable = true;
-            change.settingsChanged = true;
-            change.settings = settings;
-            // The noise profile is loaded at LockForProcess, so the APO must
-            // reload it before the restored settings take effect.
-            change.forceRestart = true;
-            return apo::ApplyChanges({change});
-        };
-
-        if (bound) {
-            const apo::Result prepared = applySettings(snapshot);
-            if (!prepared.ok) {
-                // The snapshot may have been saved before the failure, so put
-                // the real settings back before reporting the error.
-                applySettings(captureBase);
-                result = prepared;
-                result.summary =
-                    L"Could not prepare the device for noise capture.";
-                g_captureSettings = captureBase;
-                g_result = result;
-                PostMessageW(g_window, WM_APP_WORK_DONE, 0, 0);
-                return;
-            }
-        }
-
-        std::vector<float> samples;
-        unsigned sampleRate = 0;
-        unsigned channels = 0;
-        error = apo::CaptureNoise(id, kNoiseCaptureMs, samples, sampleRate,
-                                  channels);
-        bool captured = error.empty();
-        if (captured &&
-            !apo::SaveNoiseCapture(id, sampleRate, channels, samples)) {
-            error = L"Could not save the noise profile file.";
-            captured = false;
-        }
-
-        apo::ApoSettings final = captureBase;
-        apo::EffectPreset& finalPreset = apo::ActivePreset(final);
-        if (captured) {
-            // Turn on the first Noise effect, or append one when the list has
-            // no noise stage yet and still has room.
-            bool enabledNoise = false;
-            for (int i = 0; i < finalPreset.effectCount; ++i) {
-                if (finalPreset.effects[i].type == apo::EffectType::Noise) {
-                    apo::SetEffectEnabled(finalPreset.effects[i], true);
-                    enabledNoise = true;
-                    break;
-                }
-            }
-            if (!enabledNoise &&
-                finalPreset.effectCount < apo::kMaxEffects) {
-                finalPreset.effects[finalPreset.effectCount] =
-                    apo::MakeEffect(apo::EffectType::Noise,
-                                    finalPreset.nextEffectId++);
-                ++finalPreset.effectCount;
-            }
-        }
-
-        if (bound) {
-            const apo::Result restored = applySettings(final);
-            if (!restored.ok) {
-                if (error.empty()) {
-                    error = L"Profile saved, but applying the settings failed.";
-                    result = restored;
-                }
-            }
-        } else if (!apo::SaveSettings(id, final) && error.empty()) {
-            error = L"Could not save the settings file.";
-        }
-
-        g_captureSettings = final;
-        g_captureSucceeded = error.empty();
-        result.ok = error.empty();
-        result.summary =
-            error.empty() ? L"Noise profile captured."
-                          : L"Noise profile capture failed.";
-        if (!error.empty()) {
+        apo::Result result;
+        result.ok = ok;
+        result.summary = ok ? L"Noise profile captured."
+                            : L"Noise profile capture failed.";
+        if (!ok) {
             result.details = error;
         }
-        g_result = result;
-        PostMessageW(g_window, WM_APP_WORK_DONE, 0, 0);
-    });
+        return result;
+    }, L"Capturing noise profile...");
 }
 
 void DoOpenLog()
@@ -2229,49 +2153,28 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         }
         g_busy = false;
 
-        const WorkKind kind = g_workKind;
-        const int captureIndex = g_captureIndex;
-        const bool captureOk = g_captureSucceeded;
-        g_workKind = WorkKind::Generic;
-        g_captureIndex = -1;
-        g_captureSucceeded = false;
+        // A failed operation may have changed nothing, so keep unsaved effect
+        // edits instead of reloading over them. Noise capture sets this before
+        // starting because it never changes settings.
+        if (!g_result.ok) {
+            g_preserveDirtyEffects = true;
+        }
+        Refresh();
 
-        if (kind == WorkKind::CaptureNoise && captureOk &&
-            captureIndex >= 0 &&
-            captureIndex < static_cast<int>(g_endpoints.size())) {
-            // The captured device was saved by the worker, so its effect edits
-            // are no longer dirty.
-            apo::Endpoint& endpoint = g_endpoints[captureIndex];
-            endpoint.settings = g_captureSettings;
-            endpoint.settingsDirty = false;
-            RebuildEffectList();
-            ShowEffectForSelected();
-            UpdateChromeUi();
-            UpdateEffectsUi();
-            Relayout();
-        } else {
-            // A failed operation may have changed nothing, so keep unsaved
-            // effect edits instead of reloading over them.
-            if (!g_result.ok) {
-                g_preserveDirtyEffects = true;
-            }
-            Refresh();
-
-            // A settings edit can arrive while an apply is running. Resume the
-            // live save now that the worker is done; if the live channel is
-            // missing, the edit stays pending for the normal Apply path.
-            if (kind == WorkKind::Generic && ValidEffectIndex() &&
-                g_endpoints[g_effectIndex].settingsDirty) {
-                g_liveApplyPending =
-                    SetTimer(g_window, kLiveApplyTimer, kLiveApplyDelayMs,
-                             nullptr) != 0;
-            }
+        // A settings edit can arrive while an apply is running. Resume the
+        // live save now that the worker is done; if the live channel is
+        // missing, the edit stays pending for the normal Apply path.
+        if (ValidEffectIndex() &&
+            g_endpoints[g_effectIndex].settingsDirty) {
+            g_liveApplyPending =
+                SetTimer(g_window, kLiveApplyTimer, kLiveApplyDelayMs,
+                         nullptr) != 0;
         }
 
         // Restart the audition stream if it was active before Apply. The
         // endpoint id is checked so a disabled or removed device does not
         // spring back to life.
-        if (kind == WorkKind::Generic && g_resumeListen) {
+        if (g_resumeListen) {
             const std::wstring listenId = g_resumeListenId;
             g_resumeListen = false;
             g_resumeListenId.clear();

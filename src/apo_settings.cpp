@@ -815,10 +815,20 @@ struct NoiseFileHeader
     std::uint32_t channels;
     std::uint32_t frames;
 };
+
+struct NoiseBinsHeader
+{
+    char magic[4];
+    std::uint32_t version;
+    std::uint32_t sampleRate;
+    std::uint32_t binCount;
+};
 #pragma pack(pop)
 
 constexpr std::uint32_t kNoiseFileVersion = 1;
+constexpr std::uint32_t kNoiseBinsVersion = 2;
 constexpr std::uint64_t kNoiseFileLimit = 64ull * 1024 * 1024;
+constexpr std::uint32_t kNoiseMaxBins = 4096;
 
 bool ValidNoiseHeader(const NoiseFileHeader& header)
 {
@@ -889,6 +899,53 @@ bool SaveNoiseCapture(const std::wstring& endpointId, std::uint32_t sampleRate,
     return ok;
 }
 
+bool SaveNoiseProfileBins(const std::wstring& endpointId,
+                          std::uint32_t sampleRate,
+                          const std::vector<double>& magnitudes)
+{
+    if (sampleRate == 0 || magnitudes.empty() ||
+        magnitudes.size() > kNoiseMaxBins)
+    {
+        return false;
+    }
+
+    CreateDirectoryW(kDataDirectory, nullptr);
+    CreateDirectoryW(kDevicesDirectory, nullptr);
+
+    NoiseBinsHeader header{};
+    std::memcpy(header.magic, "BMNP", 4);
+    header.version = kNoiseBinsVersion;
+    header.sampleRate = sampleRate;
+    header.binCount = static_cast<std::uint32_t>(magnitudes.size());
+
+    const std::wstring path = NoiseProfilePath(endpointId);
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+    {
+        return false;
+    }
+
+    DWORD written = 0;
+    bool ok = WriteFile(file, &header, sizeof(header), &written, nullptr) &&
+              written == sizeof(header);
+    if (ok)
+    {
+        const DWORD bytes = static_cast<DWORD>(magnitudes.size() *
+                                               sizeof(double));
+        ok = WriteFile(file, magnitudes.data(), bytes, &written, nullptr) &&
+             written == bytes;
+    }
+    CloseHandle(file);
+
+    if (!ok)
+    {
+        DeleteFileW(path.c_str());
+    }
+    return ok;
+}
+
 bool LoadNoiseProfile(const std::wstring& endpointId, NoiseProfile& profile)
 {
     profile = NoiseProfile{};
@@ -903,32 +960,77 @@ bool LoadNoiseProfile(const std::wstring& endpointId, NoiseProfile& profile)
         return false;
     }
 
-    NoiseFileHeader header{};
-    DWORD read = 0;
-    bool ok = ReadFile(file, &header, sizeof(header), &read, nullptr) &&
-              read == sizeof(header) && ValidNoiseHeader(header);
+    auto readExact = [file](void* data, DWORD bytes) {
+        DWORD read = 0;
+        return ReadFile(file, data, bytes, &read, nullptr) && read == bytes;
+    };
+
+    BYTE prefix[8]{};
+    bool ok = readExact(prefix, sizeof(prefix)) &&
+              std::memcmp(prefix, "BMNP", 4) == 0;
 
     if (ok)
     {
-        const std::uint64_t bytes64 =
-            static_cast<std::uint64_t>(header.frames) * header.channels *
-            sizeof(float);
-        ok = bytes64 <= kNoiseFileLimit;
-        if (ok)
+        std::uint32_t version = 0;
+        std::memcpy(&version, prefix + 4, sizeof(version));
+
+        if (version == kNoiseBinsVersion)
         {
-            std::vector<float> samples(
-                static_cast<size_t>(header.frames) * header.channels);
-            const DWORD bytes = static_cast<DWORD>(bytes64);
-            ok = ReadFile(file, samples.data(), bytes, &read, nullptr) &&
-                 read == bytes;
+            NoiseBinsHeader bins{};
+            std::memcpy(&bins, prefix, sizeof(prefix));
+            ok = readExact(reinterpret_cast<BYTE*>(&bins) + sizeof(prefix),
+                           sizeof(bins) - sizeof(prefix));
+            const std::uint64_t bytes64 =
+                static_cast<std::uint64_t>(bins.binCount) * sizeof(double);
+            ok = ok && bins.sampleRate != 0 && bins.binCount != 0 &&
+                 bins.binCount <= kNoiseMaxBins &&
+                 bytes64 <= kNoiseFileLimit;
             if (ok)
             {
-                profile.magnitudes = apo::dsp::AverageMagnitudeSpectrum(
-                    samples.data(), header.frames, header.channels);
-                profile.sampleRate = header.sampleRate;
-                profile.valid = !profile.magnitudes.empty();
-                ok = profile.valid;
+                std::vector<double> magnitudes(bins.binCount);
+                ok = readExact(magnitudes.data(),
+                               static_cast<DWORD>(bytes64));
+                if (ok)
+                {
+                    profile.magnitudes = std::move(magnitudes);
+                    profile.sampleRate = bins.sampleRate;
+                    profile.valid = true;
+                }
             }
+        }
+        else if (version == kNoiseFileVersion)
+        {
+            NoiseFileHeader header{};
+            std::memcpy(&header, prefix, sizeof(prefix));
+            ok = readExact(reinterpret_cast<BYTE*>(&header) + sizeof(prefix),
+                           sizeof(header) - sizeof(prefix)) &&
+                 ValidNoiseHeader(header);
+            if (ok)
+            {
+                const std::uint64_t bytes64 =
+                    static_cast<std::uint64_t>(header.frames) *
+                    header.channels * sizeof(float);
+                ok = bytes64 <= kNoiseFileLimit;
+                if (ok)
+                {
+                    std::vector<float> samples(
+                        static_cast<size_t>(header.frames) * header.channels);
+                    ok = readExact(samples.data(),
+                                   static_cast<DWORD>(bytes64));
+                    if (ok)
+                    {
+                        profile.magnitudes = apo::dsp::AverageMagnitudeSpectrum(
+                            samples.data(), header.frames, header.channels);
+                        profile.sampleRate = header.sampleRate;
+                        profile.valid = !profile.magnitudes.empty();
+                        ok = profile.valid;
+                    }
+                }
+            }
+        }
+        else
+        {
+            ok = false;
         }
     }
 

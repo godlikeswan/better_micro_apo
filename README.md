@@ -37,9 +37,9 @@ To uninstall, uncheck **Enable** on every device, or use **File → Uninstall**.
   a small ↺ button that resets only that setting.
 - If your device is missing from the list, turn on **View → Show all devices**
   to see inactive inputs too.
-- Windows briefly stops audio when effects are installed, attached to a device,
-  or when a noise profile is captured. That is Windows reloading the audio
-  chain; later settings changes apply without stopping audio.
+- Windows briefly stops audio when effects are installed or attached to a
+  device. That is Windows reloading the audio chain. Settings changes and noise
+  profile captures apply to the running chain without stopping audio.
 - Gate lookahead and noise reduction need to buffer a little audio to do their
   job, so they add a small delay. Those controls are marked with ⏱.
 - Supported input formats are float32, PCM16, PCM24, and PCM32. 24-bit samples
