@@ -13,6 +13,13 @@ namespace {
 
 constexpr wchar_t kPreferencesFile[] =
     L"C:\\ProgramData\\better_micro_apo\\gui.ini";
+constexpr wchar_t kShowAllKey[] = L"show_all_devices";
+constexpr wchar_t kLastDeviceKey[] = L"last_device";
+
+struct Preferences {
+    bool showAllDevices = false;
+    std::wstring lastDevice;
+};
 
 std::wstring Trim(const std::wstring& text)
 {
@@ -32,12 +39,8 @@ std::wstring Trim(const std::wstring& text)
     return text.substr(begin, end - begin);
 }
 
-} // namespace
-
-bool LoadShowAllDevices()
+std::wstring ReadValue(const std::wstring& text, const wchar_t* key)
 {
-    const std::wstring text = apo::detail::ReadTextFile(kPreferencesFile);
-
     size_t position = 0;
     while (position <= text.size()) {
         const size_t newline = text.find(L'\n', position);
@@ -46,35 +49,75 @@ bool LoadShowAllDevices()
                                            ? std::wstring::npos
                                            : newline - position));
         position = (newline == std::wstring::npos) ? text.size() + 1
-                                                   : newline + 1;
+                                                  : newline + 1;
 
         const size_t equals = line.find(L'=');
         if (equals == std::wstring::npos) {
             continue;
         }
-        if (_wcsicmp(Trim(line.substr(0, equals)).c_str(),
-                     L"show_all_devices") != 0) {
-            continue;
+        if (_wcsicmp(Trim(line.substr(0, equals)).c_str(), key) == 0) {
+            return Trim(line.substr(equals + 1));
         }
-
-        const std::wstring value = Trim(line.substr(equals + 1));
-        return value == L"1" || _wcsicmp(value.c_str(), L"true") == 0 ||
-               _wcsicmp(value.c_str(), L"yes") == 0;
     }
-
-    return false;
+    return {};
 }
 
-void SaveShowAllDevices(bool showAll)
+bool ParseBool(const std::wstring& value)
+{
+    return value == L"1" || _wcsicmp(value.c_str(), L"true") == 0 ||
+           _wcsicmp(value.c_str(), L"yes") == 0;
+}
+
+Preferences LoadPreferences()
+{
+    const std::wstring text = apo::detail::ReadTextFile(kPreferencesFile);
+    Preferences preferences;
+    preferences.showAllDevices = ParseBool(ReadValue(text, kShowAllKey));
+    preferences.lastDevice = ReadValue(text, kLastDeviceKey);
+    return preferences;
+}
+
+void SavePreferences(const Preferences& preferences)
 {
     CreateDirectoryW(apo::kDataDir, nullptr);
 
     std::wstring text;
     text += L"[gui]\n";
-    text += L"show_all_devices=";
-    text += showAll ? L"1" : L"0";
+    text += kShowAllKey;
+    text += L"=";
+    text += preferences.showAllDevices ? L"1" : L"0";
+    text += L"\n";
+    text += kLastDeviceKey;
+    text += L"=";
+    text += preferences.lastDevice;
     text += L"\n";
     apo::detail::WriteTextFile(kPreferencesFile, text);
+}
+
+} // namespace
+
+bool LoadShowAllDevices()
+{
+    return LoadPreferences().showAllDevices;
+}
+
+void SaveShowAllDevices(bool showAll)
+{
+    Preferences preferences = LoadPreferences();
+    preferences.showAllDevices = showAll;
+    SavePreferences(preferences);
+}
+
+std::wstring LoadLastDevice()
+{
+    return LoadPreferences().lastDevice;
+}
+
+void SaveLastDevice(const std::wstring& id)
+{
+    Preferences preferences = LoadPreferences();
+    preferences.lastDevice = id;
+    SavePreferences(preferences);
 }
 
 } // namespace gui

@@ -52,7 +52,7 @@ the [list of effects](../effects/index.md) for each stage.
 | `C:\ProgramData\better_micro_apo\runtime\{endpoint-guid}.dat` | Live settings snapshot shared with the GUI. |
 | `C:\ProgramData\better_micro_apo\backup\FxProperties-{endpoint}.reg` | Canonical registry backup for a device. |
 | `C:\ProgramData\better_micro_apo\better_micro_apo.log` | Setup-path log (never written from `APOProcess`). |
-| `C:\ProgramData\better_micro_apo\gui.ini` | GUI preference `show_all_devices`. |
+| `C:\ProgramData\better_micro_apo\gui.ini` | GUI preferences `show_all_devices` and `last_device`. |
 
 The INI is authoritative on restart; the runtime snapshot only overrides it
 for the life of a stream. The sharing mechanics are described in

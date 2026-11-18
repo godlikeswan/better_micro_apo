@@ -1252,7 +1252,7 @@ void RebuildEffectCombo(const std::wstring& selectedId)
     g_comboLoading = false;
 }
 
-void Refresh()
+void Refresh(const std::wstring& preferredDeviceId = std::wstring())
 {
     // Refresh also runs after Apply. Keep the audition stream when the same
     // endpoint is still selected; StopListening handles the cases where audio
@@ -1264,7 +1264,9 @@ void Refresh()
     }
 
     std::wstring effectId;
-    if (ValidEffectIndex()) {
+    if (!preferredDeviceId.empty()) {
+        effectId = preferredDeviceId;
+    } else if (ValidEffectIndex()) {
         effectId = g_endpoints[g_effectIndex].id;
     }
 
@@ -1787,6 +1789,9 @@ void OnEffectComboChanged()
         g_effectSelection = 0;
     }
     g_effectIndex = selected;
+    if (ValidEffectIndex()) {
+        gui::SaveLastDevice(g_endpoints[g_effectIndex].id);
+    }
 
     RebuildEffectList();
     ShowEffectForSelected();
@@ -1979,11 +1984,12 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         g_window = window;
         ui::CreateFonts();
         g_showAllDevices = gui::LoadShowAllDevices();
+        const std::wstring startupDeviceId = gui::LoadLastDevice();
         ui::CreateMenuBar(window, g_showAllDevices);
         CreateControls(window);
         ui::ApplyNativeThemeToChildren(window);
         ui::ApplyListStateImages(g_effectList);
-        Refresh();
+        Refresh(startupDeviceId);
         RepaintAll();
         SetTimer(window, kRefreshTimer, kRefreshPollMs, nullptr);
         return 0;

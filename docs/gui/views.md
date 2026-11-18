@@ -3,7 +3,9 @@
 All main-screen controls are created in `ui::CreateControls` in
 `gui/ui/structure.cpp`. IDs and shared `HWND`s live in `gui/ui/ui_state.*`;
 `ShowEffectControls` and `EnableEffectControls` in `gui/main.cpp` decide which
-parameter controls are visible and editable.
+parameter controls are visible and editable. The device combo remembers the last
+user-selected endpoint as `last_device` in `gui.ini` and selects it again on
+launch when it is still in the visible list.
 
 ## Control tree
 

@@ -16,7 +16,7 @@ filename-safe with `apo::SafeEndpointId`.
 | `C:\ProgramData\better_micro_apo\devices\{id}.ini` | GUI | APO at `LockForProcess` | Durable settings; authoritative on restart. |
 | `C:\ProgramData\better_micro_apo\devices\{id}.noise` | GUI | APO at `LockForProcess` | Raw room-noise capture. |
 | `C:\ProgramData\better_micro_apo\runtime\{id}.dat` | GUI | APO while streaming | Live settings snapshot. |
-| `C:\ProgramData\better_micro_apo\gui.ini` | GUI | GUI | `show_all_devices` preference; not used by the APO. |
+| `C:\ProgramData\better_micro_apo\gui.ini` | GUI | GUI | `show_all_devices` and `last_device` preferences; not used by the APO. |
 
 ## Runtime snapshot layout
 

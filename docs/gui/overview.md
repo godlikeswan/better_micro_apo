@@ -20,9 +20,10 @@ Two window classes are registered:
   main-screen controls. Keeping controls on a child panel gives them a stable
   background and makes repaints a single pass.
 
-`WM_CREATE` creates the fonts, loads `show_all_devices`, builds the menu, calls
-`CreateControls`, applies native theming to children, sets up the list's state
-images, refreshes state, repaints, and starts the 1200 ms refresh timer.
+`WM_CREATE` creates the fonts, loads `show_all_devices` and `last_device`, builds
+the menu, calls `CreateControls`, applies native theming to children, sets up the
+list's state images, refreshes state with the remembered device as the preferred
+selection, repaints, and starts the 1200 ms refresh timer.
 
 ## Message handling
 
@@ -41,7 +42,7 @@ messages and `HandleNotify` handles list-view notifications.
 | `WM_NCPAINT` / `WM_NCACTIVATE` | Repaint the menu divider that Windows paints with an inactive color. |
 | `WM_GETMINMAXINFO` | Minimum window size. |
 | `WM_CLOSE` | Blocked while busy (beep), otherwise `DestroyWindow`. |
-| `WM_DESTROY` | Save preference, stop monitor, join worker, destroy fonts/subclasses, shut down theme, `PostQuitMessage`. |
+| `WM_DESTROY` | Save preferences, stop monitor, join worker, destroy fonts/subclasses, shut down theme, `PostQuitMessage`. |
 | `WM_APP_WORK_DONE` | Join the worker, clear busy state, apply the result, refresh UI, possibly resume listening. |
 
 Timer ids and intervals (`gui/main.cpp`):
@@ -79,7 +80,7 @@ applies leave it running.
 | Install, registry, binding, backup, isolation | `gui/apo_ops.cpp`, `gui/apo.h`, `gui/apo_internal.h` |
 | Endpoint enumeration and file status | `gui/apo_status.cpp` |
 | Listen monitor and noise capture | `gui/apo_monitor.cpp/.h` |
-| `show_all_devices` preference | `gui/preferences.cpp/.h` |
+| `show_all_devices` and `last_device` preferences | `gui/preferences.cpp/.h` |
 | Control ids and shared HWNDs | `gui/ui/ui_state.*` |
 | Control tree and geometry | `gui/ui/structure.cpp/.h` |
 | Widget factories and custom drawing | `gui/ui/widgets.cpp/.h` |
