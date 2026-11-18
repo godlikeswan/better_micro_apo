@@ -79,39 +79,42 @@ bool StageCaptureView::Open(const std::wstring& endpointId, bool create)
     }
 
     auto* capture = static_cast<StageCaptureFile*>(view);
-    const LONG initializing = InterlockedCompareExchange(
-        &capture->initialized, 1, 0);
-    if (initializing == 0) {
-        capture->magic = kStageCaptureMagic;
-        capture->version = kStageCaptureVersion;
-        capture->structSize = static_cast<ULONG>(sizeof(StageCaptureFile));
-        capture->state = StageCaptureIdle;
-        capture->requestId = 0;
-        capture->presetIndex = -1;
-        capture->effectId = -1;
-        capture->durationMs = 0;
-        capture->sampleRate = 0;
-        capture->channels = 0;
-        capture->framesTarget = 0;
-        capture->framesDone = 0;
-        capture->error = StageCaptureErrorNone;
-        capture->resultAck = kStageCaptureAckNone;
-        std::fill(std::begin(capture->bins), std::end(capture->bins), 0.0);
-        InterlockedExchange(&capture->initialized, 2);
-    } else {
-        while (InterlockedCompareExchange(
-                   &capture->initialized, 2, 2) != 2) {
+    for (;;) {
+        const LONG value =
+            InterlockedCompareExchange(&capture->initialized, 1, 0);
+        if (value == 0) {
+            capture->magic = kStageCaptureMagic;
+            capture->version = kStageCaptureVersion;
+            capture->structSize = static_cast<ULONG>(sizeof(StageCaptureFile));
+            capture->state = StageCaptureIdle;
+            capture->requestId = 0;
+            capture->presetIndex = -1;
+            capture->effectId = -1;
+            capture->durationMs = 0;
+            capture->sampleRate = 0;
+            capture->channels = 0;
+            capture->binCount = 0;
+            capture->framesTarget = 0;
+            capture->framesDone = 0;
+            capture->error = StageCaptureErrorNone;
+            capture->resultAck = kStageCaptureAckNone;
+            std::fill(std::begin(capture->bins), std::end(capture->bins), 0.0);
+            InterlockedExchange(&capture->initialized, 2);
+            break;
+        }
+
+        while (InterlockedCompareExchange(&capture->initialized, 2, 2) != 2) {
             Sleep(1);
         }
-    }
+        if (capture->magic == kStageCaptureMagic &&
+            capture->version == kStageCaptureVersion &&
+            capture->structSize == sizeof(StageCaptureFile)) {
+            break;
+        }
 
-    if (capture->magic != kStageCaptureMagic ||
-        capture->version != kStageCaptureVersion ||
-        capture->structSize != sizeof(StageCaptureFile)) {
-        UnmapViewOfFile(view);
-        CloseHandle(mapping);
-        CloseHandle(file);
-        return false;
+        // A stale file from an older build cannot be read; let either side
+        // claim it again and write the current layout.
+        InterlockedExchange(&capture->initialized, 0);
     }
 
     m_file = file;
@@ -175,6 +178,7 @@ bool RequestStageCapture(const std::wstring& endpointId, int presetIndex,
     capture->effectId = effectId;
     capture->durationMs = durationMs;
     capture->error = StageCaptureErrorNone;
+    capture->binCount = 0;
     capture->framesTarget = 0;
     capture->framesDone = 0;
     capture->sampleRate = 0;
@@ -206,8 +210,16 @@ bool RequestStageCapture(const std::wstring& endpointId, int presetIndex,
     }
 
     const std::uint32_t sampleRate = capture->sampleRate;
-    const std::vector<double> bins(std::begin(capture->bins),
-                                   std::end(capture->bins));
+    const ULONG binCount = capture->binCount;
+    const int profileFft = (binCount >= 2)
+        ? static_cast<int>((binCount - 1) * 2)
+        : 0;
+    const bool validBins = binCount > 1 && binCount <= dsp::kNoiseMaxBins &&
+                           profileFft > 0 &&
+                           ValidNoiseFftSize(profileFft) == profileFft;
+    const std::vector<double> bins = validBins
+        ? std::vector<double>(capture->bins, capture->bins + binCount)
+        : std::vector<double>{};
     const bool saved = sampleRate != 0 && capture->framesDone != 0 &&
                        SaveNoiseProfileBins(endpointId, sampleRate, bins);
     if (!saved) {
@@ -232,21 +244,30 @@ bool RequestStageCapture(const std::wstring& endpointId, int presetIndex,
 
 void StageCaptureTap::Configure(const apo::dsp::AudioFormat& format)
 {
-    constexpr size_t N = apo::dsp::kNoiseFftSize;
-
     m_channels = format.channels;
-    m_window.resize(N);
-    for (size_t index = 0; index < N; ++index) {
-        const double hann = 0.5 - 0.5 * std::cos(
-                                       2.0 * kPi * static_cast<double>(index) /
-                                       static_cast<double>(N));
-        m_window[index] = std::sqrt(std::max(0.0, hann));
+
+    const size_t planCount = kNoiseFftSizes.size();
+    m_fftPlans.clear();
+    m_fftPlans.reserve(planCount);
+    m_windows.assign(planCount, {});
+    for (size_t index = 0; index < planCount; ++index) {
+        const size_t size = static_cast<size_t>(kNoiseFftSizes[index]);
+        m_fftPlans.emplace_back(size);
+        m_windows[index].resize(size);
+        for (size_t sample = 0; sample < size; ++sample) {
+            const double hann =
+                0.5 - 0.5 * std::cos(2.0 * kPi *
+                                     static_cast<double>(sample) /
+                                     static_cast<double>(size));
+            m_windows[index][sample] = std::sqrt(std::max(0.0, hann));
+        }
     }
 
-    m_history.assign(static_cast<size_t>(N) * m_channels, 0.0);
-    m_frameReal.assign(N, 0.0);
-    m_frameImag.assign(N, 0.0);
-    m_sum.assign(N / 2 + 1, 0.0);
+    const size_t maxSize = static_cast<size_t>(kNoiseFftSizes.back());
+    m_history.assign(maxSize * m_channels, 0.0);
+    m_frameReal.assign(maxSize, 0.0);
+    m_frameImag.assign(maxSize, 0.0);
+    m_sum.assign(dsp::kNoiseMaxBins, 0.0);
     Reset();
 }
 
@@ -262,12 +283,18 @@ void StageCaptureTap::Reset()
     m_complete = false;
 }
 
-bool StageCaptureTap::Begin(ULONG framesTarget)
+bool StageCaptureTap::Begin(ULONG framesTarget, int fftSize)
 {
-    if (m_channels == 0 || m_sum.empty() || framesTarget == 0) {
+    const int size = ValidNoiseFftSize(fftSize);
+    if (m_channels == 0 || m_sum.empty() || framesTarget == 0 ||
+        size != fftSize) {
         return false;
     }
 
+    m_sizeIndex = static_cast<std::size_t>(NoiseFftSizeIndex(size));
+    m_fftSize = static_cast<size_t>(size);
+    m_hopSize = m_fftSize / 2;
+    m_binCount = static_cast<ULONG>(m_fftSize / 2 + 1);
     Reset();
     m_framesTarget = framesTarget;
     m_active = true;
@@ -276,10 +303,10 @@ bool StageCaptureTap::Begin(ULONG framesTarget)
 
 void StageCaptureTap::AnalyzeHop()
 {
-    constexpr size_t N = apo::dsp::kNoiseFftSize;
-    constexpr size_t H = apo::dsp::kNoiseHopSize;
+    const size_t N = m_fftSize;
+    const size_t H = m_hopSize;
 
-    if (m_channels == 0 || m_sum.size() != N / 2 + 1) {
+    if (m_channels == 0 || m_sum.size() < N / 2 + 1) {
         return;
     }
 
@@ -287,10 +314,11 @@ void StageCaptureTap::AnalyzeHop()
         const double* history = m_history.data() +
                                 static_cast<size_t>(channel) * N;
         for (size_t index = 0; index < N; ++index) {
-            m_frameReal[index] = history[index] * m_window[index];
+            m_frameReal[index] = history[index] * m_windows[m_sizeIndex][index];
             m_frameImag[index] = 0.0;
         }
-        m_fft.Forward(m_frameReal.data(), m_frameImag.data());
+        m_fftPlans[m_sizeIndex].Forward(m_frameReal.data(),
+                                        m_frameImag.data());
         for (size_t bin = 0; bin <= N / 2; ++bin) {
             m_sum[bin] += std::sqrt(m_frameReal[bin] * m_frameReal[bin] +
                                     m_frameImag[bin] * m_frameImag[bin]);
@@ -312,7 +340,8 @@ void StageCaptureTap::Finish(double* bins, size_t count) const
     if (bins == nullptr || m_measured == 0) {
         return;
     }
-    const size_t available = std::min(count, m_sum.size());
+    const size_t available =
+        std::min({count, m_sum.size(), static_cast<size_t>(m_binCount)});
     for (size_t index = 0; index < available; ++index) {
         bins[index] = m_sum[index] / static_cast<double>(m_measured);
     }
@@ -320,7 +349,7 @@ void StageCaptureTap::Finish(double* bins, size_t count) const
 
 void StageCaptureTap::Process(double* samples, UINT32 frames, UINT32 channels)
 {
-    constexpr size_t N = apo::dsp::kNoiseFftSize;
+    const size_t N = m_fftSize;
 
     if (samples == nullptr || frames == 0 || channels == 0 ||
         channels != m_channels || m_history.empty()) {

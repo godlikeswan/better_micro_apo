@@ -1,4 +1,4 @@
-#include "dsp/stages.h"
+﻿#include "dsp/stages.h"
 
 #include <algorithm>
 #include <cmath>
@@ -434,31 +434,40 @@ void GainStage::Process(double* samples, UINT32 frames, UINT32 channels)
 }
 
 NoiseStage::NoiseStage(const NoiseProfile& profile)
-    : m_profile(profile), m_fft(kNoiseFftSize)
+    : m_profile(profile)
 {
 }
 
 void NoiseStage::ApplyProfileBins(const std::vector<double>& magnitudes,
-                                  uint32_t sampleRate)
+                                  std::size_t binCount, uint32_t sampleRate)
 {
-    constexpr size_t N = kNoiseFftSize;
-
     std::fill(m_profileBins.begin(), m_profileBins.end(), 0.0);
-    m_hasProfile = !magnitudes.empty() && sampleRate != 0;
-    if (!m_hasProfile || m_profileBins.size() != N / 2 + 1)
+    m_hasProfile = !magnitudes.empty() && binCount != 0 && sampleRate != 0;
+    if (!m_hasProfile || m_profileBins.size() != kNoiseMaxBins)
     {
         return;
     }
 
-    const double profileRate = static_cast<double>(sampleRate);
-    const size_t profileBins = magnitudes.size();
-    for (size_t bin = 0; bin <= N / 2; ++bin)
+    const size_t count = std::min(binCount, magnitudes.size());
+    const int profileFft =
+        (count >= 2) ? static_cast<int>((count - 1) * 2) : 0;
+    if (profileFft <= 0 || ValidNoiseFftSize(profileFft) != profileFft)
     {
-        double position = static_cast<double>(bin) * m_sampleRate / profileRate;
+        m_hasProfile = false;
+        return;
+    }
+
+    const double profileRate = static_cast<double>(sampleRate);
+    for (size_t bin = 0; bin <= m_fftSize / 2; ++bin)
+    {
+        const double frequency = static_cast<double>(bin) * m_sampleRate /
+                                 static_cast<double>(m_fftSize);
+        double position =
+            frequency * static_cast<double>(profileFft) / profileRate;
         position = std::max(
-            0.0, std::min(position, static_cast<double>(profileBins - 1)));
+            0.0, std::min(position, static_cast<double>(count - 1)));
         const size_t low = static_cast<size_t>(position);
-        const size_t high = std::min(profileBins - 1, low + 1);
+        const size_t high = std::min(count - 1, low + 1);
         const double fraction = position - static_cast<double>(low);
         m_profileBins[bin] = magnitudes[low] * (1.0 - fraction) +
                              magnitudes[high] * fraction;
@@ -466,10 +475,10 @@ void NoiseStage::ApplyProfileBins(const std::vector<double>& magnitudes,
 }
 
 void NoiseStage::SetProfileBins(const std::vector<double>& magnitudes,
-                                uint32_t sampleRate)
+                                std::size_t binCount, uint32_t sampleRate)
 {
     const bool hadProfile = m_hasProfile;
-    ApplyProfileBins(magnitudes, sampleRate);
+    ApplyProfileBins(magnitudes, binCount, sampleRate);
     if (hadProfile != m_hasProfile)
     {
         // The stage is about to start or stop delaying the stream. Prime or
@@ -480,43 +489,60 @@ void NoiseStage::SetProfileBins(const std::vector<double>& magnitudes,
 
 void NoiseStage::Configure(const AudioFormat& format)
 {
-    constexpr size_t N = kNoiseFftSize;
     constexpr double kPi = 3.14159265358979323846;
 
     m_channels = format.channels;
     m_maxFrames = (format.maxFrames > 0) ? format.maxFrames : 1;
     m_sampleRate = EffectiveSampleRate(format);
 
-    m_window.resize(N);
-    for (size_t index = 0; index < N; ++index)
+    const size_t planCount = kNoiseFftSizes.size();
+    m_fftPlans.clear();
+    m_fftPlans.reserve(planCount);
+    m_windows.assign(planCount, {});
+    for (size_t index = 0; index < planCount; ++index)
     {
-        const double hann =
-            0.5 - 0.5 * std::cos(2.0 * kPi * static_cast<double>(index) /
-                                 static_cast<double>(N));
-        m_window[index] = std::sqrt(std::max(0.0, hann));
+        const size_t size = static_cast<size_t>(kNoiseFftSizes[index]);
+        m_fftPlans.emplace_back(size);
+        m_windows[index].resize(size);
+        for (size_t sample = 0; sample < size; ++sample)
+        {
+            const double hann =
+                0.5 - 0.5 * std::cos(2.0 * kPi *
+                                     static_cast<double>(sample) /
+                                     static_cast<double>(size));
+            m_windows[index][sample] = std::sqrt(std::max(0.0, hann));
+        }
     }
 
-    m_profileBins.assign(N / 2 + 1, 0.0);
-    ApplyProfileBins(m_profile.magnitudes, m_profile.sampleRate);
+    m_sizeIndex = static_cast<size_t>(
+        NoiseFftSizeIndex(ValidNoiseFftSize(m_settings.fftSize)));
+    m_fftSize = static_cast<size_t>(kNoiseFftSizes[m_sizeIndex]);
+    m_hopSize = m_fftSize / 2;
+    m_settings.fftSize = static_cast<int>(m_fftSize);
+
+    m_profileBins.assign(kNoiseMaxBins, 0.0);
+    ApplyProfileBins(m_profile.magnitudes, m_profile.binCount,
+                     m_profile.sampleRate);
 
     m_floorGain = DecibelsToLinear(-m_settings.reductionDb);
     const double hopSeconds =
-        static_cast<double>(kNoiseHopSize) / std::max(1.0, m_sampleRate);
+        static_cast<double>(m_hopSize) / std::max(1.0, m_sampleRate);
     m_gainAttack = 1.0 - std::exp(-hopSeconds / 0.020);
     m_gainRelease = 1.0 - std::exp(-hopSeconds / 0.150);
 
+    const size_t maxSize = static_cast<size_t>(kNoiseFftSizes.back());
     const size_t capacity =
-        (static_cast<size_t>(m_maxFrames) + N) * m_channels;
+        (static_cast<size_t>(m_maxFrames) + maxSize) * m_channels;
     m_input.assign(capacity, 0.0);
     m_output.assign(capacity, 0.0);
-    m_history.assign(N * m_channels, 0.0);
-    m_ola.assign(N * m_channels, 0.0);
-    m_spectraReal.assign(N * m_channels, 0.0);
-    m_spectraImag.assign(N * m_channels, 0.0);
-    m_frameReal.assign(N, 0.0);
-    m_frameImag.assign(N, 0.0);
-    m_gain.assign(N / 2 + 1, 1.0);
-    m_rawGain.assign(N / 2 + 1, 1.0);
+    m_history.assign(maxSize * m_channels, 0.0);
+    m_ola.assign(maxSize * m_channels, 0.0);
+    m_spectraReal.assign(maxSize * m_channels, 0.0);
+    m_spectraImag.assign(maxSize * m_channels, 0.0);
+    m_frameReal.assign(maxSize, 0.0);
+    m_frameImag.assign(maxSize, 0.0);
+    m_gain.assign(kNoiseMaxBins, 1.0);
+    m_rawGain.assign(kNoiseMaxBins, 1.0);
 
     Reset();
 }
@@ -526,11 +552,26 @@ void NoiseStage::Update(const EffectInstance& effect,
 {
     (void)format;
     const bool wasEnabled = m_settings.enabled;
+    const size_t oldSize = m_fftSize;
     m_settings = effect.noise;
+    m_sizeIndex = static_cast<size_t>(
+        NoiseFftSizeIndex(ValidNoiseFftSize(m_settings.fftSize)));
+    m_fftSize = static_cast<size_t>(kNoiseFftSizes[m_sizeIndex]);
+    m_hopSize = m_fftSize / 2;
+    m_settings.fftSize = static_cast<int>(m_fftSize);
+
     m_floorGain = DecibelsToLinear(-m_settings.reductionDb);
-    if (wasEnabled != m_settings.enabled)
+    const double hopSeconds =
+        static_cast<double>(m_hopSize) / std::max(1.0, m_sampleRate);
+    m_gainAttack = 1.0 - std::exp(-hopSeconds / 0.020);
+    m_gainRelease = 1.0 - std::exp(-hopSeconds / 0.150);
+    ApplyProfileBins(m_profile.magnitudes, m_profile.binCount,
+                     m_profile.sampleRate);
+
+    if (wasEnabled != m_settings.enabled || oldSize != m_fftSize)
     {
-        // Drop the buffered analysis so re-enabling does not replay stale audio.
+        // Drop the buffered analysis when the chain shape changes so stale
+        // audio from the old size is not replayed.
         Reset();
     }
 }
@@ -542,7 +583,7 @@ void NoiseStage::Reset()
     // Prime with one hop minus one frame of silence. Together with the first
     // hop of the analysis, this keeps the output queue from running dry when
     // the engine's buffer size is not a multiple of the hop.
-    m_outputFrames = static_cast<UINT32>(kNoiseHopSize - 1);
+    m_outputFrames = static_cast<UINT32>(m_hopSize - 1);
     if (!m_output.empty() && m_channels != 0)
     {
         std::fill(m_output.begin(),
@@ -561,8 +602,8 @@ void NoiseStage::Reset()
 
 void NoiseStage::ProcessHop()
 {
-    constexpr size_t N = kNoiseFftSize;
-    constexpr size_t H = kNoiseHopSize;
+    const size_t N = m_fftSize;
+    const size_t H = m_hopSize;
     const size_t channels = m_channels;
 
     for (size_t channel = 0; channel < channels; ++channel)
@@ -581,10 +622,10 @@ void NoiseStage::ProcessHop()
         const double* history = m_history.data() + channel * N;
         for (size_t index = 0; index < N; ++index)
         {
-            m_frameReal[index] = history[index] * m_window[index];
+            m_frameReal[index] = history[index] * m_windows[m_sizeIndex][index];
             m_frameImag[index] = 0.0;
         }
-        m_fft.Forward(m_frameReal.data(), m_frameImag.data());
+        m_fftPlans[m_sizeIndex].Forward(m_frameReal.data(), m_frameImag.data());
         std::memcpy(m_spectraReal.data() + channel * N, m_frameReal.data(),
                     N * sizeof(double));
         std::memcpy(m_spectraImag.data() + channel * N, m_frameImag.data(),
@@ -652,12 +693,12 @@ void NoiseStage::ProcessHop()
                     N * sizeof(double));
         std::memcpy(m_frameImag.data(), m_spectraImag.data() + channel * N,
                     N * sizeof(double));
-        m_fft.Inverse(m_frameReal.data(), m_frameImag.data());
+        m_fftPlans[m_sizeIndex].Inverse(m_frameReal.data(), m_frameImag.data());
 
         double* ola = m_ola.data() + channel * N;
         for (size_t index = 0; index < N; ++index)
         {
-            ola[index] += m_frameReal[index] * m_window[index];
+            ola[index] += m_frameReal[index] * m_windows[m_sizeIndex][index];
         }
     }
 
@@ -687,8 +728,8 @@ void NoiseStage::ProcessHop()
 
 void NoiseStage::Process(double* samples, UINT32 frames, UINT32 channels)
 {
-    constexpr size_t N = kNoiseFftSize;
-    constexpr size_t H = kNoiseHopSize;
+    const size_t N = m_fftSize;
+    const size_t H = m_hopSize;
 
     if (!m_settings.enabled || !m_hasProfile || samples == nullptr ||
         frames == 0 || channels == 0 || channels != m_channels)
@@ -1120,7 +1161,7 @@ void StagePool::UpdateProfileBins(const NoiseProfile& profile)
     for (const auto& stage : slots.stages)
     {
         static_cast<NoiseStage*>(stage.get())->SetProfileBins(
-            profile.magnitudes, profile.sampleRate);
+            profile.magnitudes, profile.binCount, profile.sampleRate);
     }
 }
 

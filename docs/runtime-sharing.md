@@ -109,6 +109,7 @@ preset_0_effect_0_id=...
 preset_0_effect_0_type=noise
 preset_0_effect_0_enabled=1
 preset_0_effect_0_noise_reduction_db=...
+preset_0_effect_0_noise_fft_size=512
 ...
 ```
 
@@ -120,8 +121,10 @@ tell whether a slot now holds a different effect. Four presets are always
 written; only `preset_index` is processed.
 
 `LoadSettings` repairs invalid values with `ClampSettings`: non-finite numbers
-fall back to defaults, every numeric field is clamped to its safe range, and
-effect ids are normalized to unique positive values. Files written by older
+fall back to defaults, every numeric field is clamped to its safe range (Noise
+reduction to 0–50 dB, unsupported `noise_fft_size` values fall back to 512), and
+effect
+ids are normalized to unique positive values. Files written by older
 versions (a single effect list) are **not migrated**: they load as four empty
 presets. `isolate_effects` is forced to `1` on every load/save/publish and is
 not a user option.
@@ -136,40 +139,44 @@ version 2, which stores the analysis result instead of raw samples:
 | `magic` | 4 bytes | `"BMNP"` |
 | `version` | `uint32_t` | `2` |
 | `sampleRate` | `uint32_t` | Stream rate the bins were measured at. |
-| `binCount` | `uint32_t` | Number of `double` magnitudes that follow (257 for the current FFT). |
+| `binCount` | `uint32_t` | Number of `double` magnitudes that follow: 129, 257, 513, 1025, or 2049 for FFT sizes 256 through 4096. |
 
 Version 1 files (20-byte header with `channels` and `frames`, followed by raw
 interleaved float32 samples) are still read for compatibility, but are not
-written any more. Files over 64 MiB are rejected, as are v1 files with fewer
-than 512 frames.
+written any more. Legacy files are analyzed with the default 512-point FFT, so
+they load as 257 bins. Files over 64 MiB are rejected, as are v1 files with
+fewer than 512 frames.
 
-`LockForProcess` loads either version and resamples the bins to the stream rate
-if needed. A missing or invalid profile leaves the stage as a passthrough. The
-APO never reads the `.noise` file from the real-time path; a captured profile is
-applied from the shared capture block instead.
+`LockForProcess` loads either version and stores the leading `binCount` bins.
+Each noise stage maps those bins onto its active FFT size using the profile and
+stream sample rates, so profiles remain usable when the FFT setting changes. A
+missing or invalid profile leaves the stage as a passthrough. The APO never
+reads the `.noise` file from the real-time path; a captured profile is applied
+from the shared capture block instead.
 
 ## Stage capture channel
 
 `StageCaptureFile` (`src/stage_capture.h`, magic `0x50414353` / `"SCAP"`,
-version 1) lives in `runtime\{id}.capture`. It holds the selected preset index
-and effect id, requested duration, sample rate, frame counters, an error code,
-an acknowledge field, and `double bins[257]`. All control fields are 32-bit and
-are read or written with `Interlocked` operations; state changes are the
-publication barriers for the bins.
+version 2) lives in `runtime\{id}.capture`. It holds the selected preset index
+and effect id, requested duration, sample rate, frame counters, `binCount`, an
+error code, an acknowledge field, and `double bins[2049]`. All control fields
+are 32-bit and are read or written with `Interlocked` operations; state changes
+are the publication barriers for the bins. A mismatched version or struct size
+is reinitialized instead of being reused.
 
 1. The GUI waits for `Idle`, writes the target and duration, then sets
    `Requested`.
 2. The APO verifies that the target is an enabled Noise effect in the active
    preset, inserts `StageCaptureTap` immediately before it, and sets
    `Capturing`.
-3. The tap analyzes the double-precision samples it receives with the same
-   512-point FFT, 256-sample hop, and square-root Hann window as `NoiseStage`.
-   It never changes the samples. When enough frames have passed, the APO writes
-   the averaged magnitude bins and sets `Done`.
-4. The GUI saves the bins as a v2 `.noise` file and writes `resultAck`. On
-   success the APO copies the bins into the live `NoiseProfile`, calls
-   `StagePool::UpdateProfileBins`, then removes the tap and returns the block
-   to `Idle`.
+3. The tap analyzes the double-precision samples it receives with the selected
+   effect's FFT size, a 50% hop, and a square-root Hann window. It never changes
+   the samples. When enough frames have passed, the APO writes the averaged
+   magnitude bins, sets `binCount`, and sets `Done`.
+4. The GUI saves the leading `binCount` bins as a v2 `.noise` file and writes
+   `resultAck`. On success the APO copies those bins into the live
+   `NoiseProfile`, sets its `binCount`, calls `StagePool::UpdateProfileBins`,
+   then removes the tap and returns the block to `Idle`.
 
 No effect is disabled, no settings file or runtime snapshot is rewritten, and
 `StopAudio`/`StartAudio` are not called. The selected Noise effect must already

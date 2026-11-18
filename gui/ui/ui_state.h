@@ -84,6 +84,8 @@ enum : int {
     IDC_REVERB_PREDELAY_ICON,
     IDC_NOISE_REDUCTION_LABEL,
     IDC_NOISE_REDUCTION_SLIDER,
+    IDC_NOISE_FFT_SIZE_LABEL,
+    IDC_NOISE_FFT_SIZE_COMBO,
     IDC_NOISE_CAPTURE,
     IDC_NOISE_NOTE,
     IDC_LISTEN,
@@ -97,6 +99,7 @@ enum : int {
 // Small ↺ button beside each editable effect parameter.
 enum ParamReset : int {
     ParamResetNoiseReduction,
+    ParamResetNoiseFftSize,
     ParamResetGateThreshold,
     ParamResetGateRange,
     ParamResetGateAttack,
@@ -220,6 +223,8 @@ extern HWND g_reverbPredelaySlider;
 extern HWND g_reverbPredelayIcon;
 extern HWND g_noiseReductionLabel;
 extern HWND g_noiseReductionSlider;
+extern HWND g_noiseFftSizeLabel;
+extern HWND g_noiseFftSizeCombo;
 extern HWND g_noiseCapture;
 extern HWND g_noiseNote;
 extern HWND g_listen;

@@ -46,10 +46,11 @@ inline double TimeCoefficient(double milliseconds, double sampleRate)
     return 1.0 - std::exp(-1.0 / (seconds * sampleRate));
 }
 
-// Noise reduction uses one fixed analysis size so the profile and the running
-// stage always share the same frequency grid.
-constexpr size_t kNoiseFftSize = 512;
-constexpr size_t kNoiseHopSize = kNoiseFftSize / 2;
+// Noise reduction offers several analysis sizes. Buffers are allocated for the
+// largest one at bind time; the active size is retuned from the effect settings
+// without allocating.
+constexpr size_t kNoiseMaxBins =
+    static_cast<size_t>(apo::kNoiseFftSizes.back()) / 2 + 1;
 
 // Precomputed radix-2 FFT. Construction allocates; the transforms themselves
 // are allocation-free and safe to call from the real-time path.
@@ -73,11 +74,12 @@ private:
     std::vector<double> m_sin;
 };
 
-// Average magnitude spectrum (bins 0..kNoiseFftSize/2) of interleaved float
+// Average magnitude spectrum (bins 0..fftSize/2) of interleaved float
 // samples, measured with the same window and hop as the noise stage. Returns
 // an empty vector for invalid input.
 std::vector<double> AverageMagnitudeSpectrum(const float* samples,
-                                             size_t frames, UINT32 channels);
+                                             size_t frames, UINT32 channels,
+                                             int fftSize);
 
 class Stage
 {

@@ -101,8 +101,8 @@ private:
     void CloseStageCapture();
     void PollStageCapture();
     void RebuildChain();
-    bool FindCaptureTarget(int presetIndex, int effectId,
-                           size_t& chainIndex) const;
+    bool FindCaptureTarget(int presetIndex, int effectId, size_t& chainIndex,
+                           int& fftSize) const;
 
     std::wstring m_endpointId;
     apo::ApoSettings m_settings;

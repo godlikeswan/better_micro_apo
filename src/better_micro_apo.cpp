@@ -352,7 +352,7 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
     }
     // Keep a full bin array even without a profile so a live capture can fill
     // it from the real-time path without allocating.
-    m_noiseProfile.magnitudes.resize(apo::kStageCaptureBins, 0.0);
+    m_noiseProfile.magnitudes.resize(apo::dsp::kNoiseMaxBins, 0.0);
     apo::ClampSettings(m_settings);
     OpenRuntimeSettings();
 
@@ -658,7 +658,7 @@ void BetterMicroApo::CloseStageCapture()
 }
 
 bool BetterMicroApo::FindCaptureTarget(int presetIndex, int effectId,
-                                       size_t& chainIndex) const
+                                       size_t& chainIndex, int& fftSize) const
 {
     if (presetIndex != m_settings.presetIndex)
     {
@@ -681,6 +681,7 @@ bool BetterMicroApo::FindCaptureTarget(int presetIndex, int effectId,
                 return false;
             }
             chainIndex = enabledBefore;
+            fftSize = apo::ValidNoiseFftSize(effect.noise.fftSize);
             return true;
         }
         ++enabledBefore;
@@ -695,8 +696,10 @@ void BetterMicroApo::RebuildChain()
     if (m_captureActive)
     {
         size_t index = m_captureChainIndex;
+        int ignoredFftSize = apo::kNoiseDefaultFftSize;
         if (!FindCaptureTarget(static_cast<int>(m_capturePresetIndex),
-                               static_cast<int>(m_captureEffectId), index))
+                               static_cast<int>(m_captureEffectId), index,
+                               ignoredFftSize))
         {
             index = m_captureChainIndex;
         }
@@ -735,7 +738,8 @@ void BetterMicroApo::PollStageCapture()
                 m_captureRequestId)
         {
             capture->framesDone = m_captureTap.FramesDone();
-            m_captureTap.Finish(capture->bins, apo::kStageCaptureBins);
+            capture->binCount = m_captureTap.BinCount();
+            m_captureTap.Finish(capture->bins, capture->binCount);
             std::atomic_thread_fence(std::memory_order_release);
             InterlockedExchange(&capture->state, apo::StageCaptureDone);
             return;
@@ -751,16 +755,24 @@ void BetterMicroApo::PollStageCapture()
                 return;
             }
 
+            const ULONG binCount = capture->binCount;
+            const bool validBins =
+                binCount > 1 && binCount <= apo::dsp::kNoiseMaxBins &&
+                apo::ValidNoiseFftSize(
+                    static_cast<int>((binCount - 1) * 2)) ==
+                    static_cast<int>((binCount - 1) * 2);
             if (ack == apo::kStageCaptureAckSaved &&
                 InterlockedCompareExchange(
                     &capture->requestId, m_captureRequestId,
                     m_captureRequestId) == m_captureRequestId &&
-                capture->sampleRate != 0 &&
-                m_noiseProfile.magnitudes.size() >= apo::kStageCaptureBins)
+                capture->sampleRate != 0 && validBins &&
+                m_noiseProfile.magnitudes.size() >= binCount)
             {
-                std::copy(capture->bins,
-                          capture->bins + apo::kStageCaptureBins,
+                std::copy(capture->bins, capture->bins + binCount,
                           m_noiseProfile.magnitudes.begin());
+                std::fill(m_noiseProfile.magnitudes.begin() + binCount,
+                          m_noiseProfile.magnitudes.end(), 0.0);
+                m_noiseProfile.binCount = binCount;
                 m_noiseProfile.sampleRate = capture->sampleRate;
                 m_noiseProfile.valid = true;
                 m_stagePool.UpdateProfileBins(m_noiseProfile);
@@ -783,8 +795,10 @@ void BetterMicroApo::PollStageCapture()
     const LONG requestId = InterlockedCompareExchange(
         &capture->requestId, 0, 0);
     size_t chainIndex = 0;
+    int fftSize = apo::kNoiseDefaultFftSize;
     if (!FindCaptureTarget(static_cast<int>(capture->presetIndex),
-                           static_cast<int>(capture->effectId), chainIndex))
+                           static_cast<int>(capture->effectId), chainIndex,
+                           fftSize))
     {
         capture->error = apo::StageCaptureErrorInvalidTarget;
         InterlockedExchange(&capture->state, apo::StageCaptureFailed);
@@ -802,8 +816,14 @@ void BetterMicroApo::PollStageCapture()
     const unsigned long long frames =
         static_cast<unsigned long long>(capture->durationMs) *
         m_formatInfo.sampleRate / 1000ull;
-    if (frames == 0 || frames > 0xFFFFFFFFull ||
-        !m_captureTap.Begin(static_cast<ULONG>(frames)))
+    if (frames < static_cast<unsigned long long>(fftSize) ||
+        frames > 0xFFFFFFFFull)
+    {
+        capture->error = apo::StageCaptureErrorBadDuration;
+        InterlockedExchange(&capture->state, apo::StageCaptureFailed);
+        return;
+    }
+    if (!m_captureTap.Begin(static_cast<ULONG>(frames), fftSize))
     {
         capture->error = apo::StageCaptureErrorNotConfigured;
         InterlockedExchange(&capture->state, apo::StageCaptureFailed);
@@ -812,6 +832,7 @@ void BetterMicroApo::PollStageCapture()
 
     capture->sampleRate = m_formatInfo.sampleRate;
     capture->channels = m_formatInfo.channels;
+    capture->binCount = m_captureTap.BinCount();
     capture->framesTarget = static_cast<ULONG>(frames);
     capture->framesDone = 0;
     capture->error = apo::StageCaptureErrorNone;

@@ -1,10 +1,52 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace apo {
+
+// Analysis sizes offered for spectral noise reduction. The buffers and FFT
+// plans for every size are created when the stream binds, so changing
+// `fftSize` is a live retune rather than a reload.
+inline constexpr int kNoiseDefaultFftSize = 512;
+inline constexpr std::array<int, 5> kNoiseFftSizes{{256, 512, 1024, 2048,
+                                                    4096}};
+
+inline int ValidNoiseFftSize(int value)
+{
+    for (int candidate : kNoiseFftSizes) {
+        if (candidate == value) {
+            return value;
+        }
+    }
+    return kNoiseDefaultFftSize;
+}
+
+inline int NoiseFftSizeAt(int index)
+{
+    if (index < 0 || index >= static_cast<int>(kNoiseFftSizes.size())) {
+        return kNoiseDefaultFftSize;
+    }
+    return kNoiseFftSizes[static_cast<std::size_t>(index)];
+}
+
+inline int NoiseFftSizeIndex(int value)
+{
+    for (std::size_t index = 0; index < kNoiseFftSizes.size(); ++index) {
+        if (kNoiseFftSizes[index] == value) {
+            return static_cast<int>(index);
+        }
+    }
+    for (std::size_t index = 0; index < kNoiseFftSizes.size(); ++index) {
+        if (kNoiseFftSizes[index] == kNoiseDefaultFftSize) {
+            return static_cast<int>(index);
+        }
+    }
+    return 0;
+}
 
 // Spectral noise reduction driven by a profile captured from the device.
 // `reductionDb` is the maximum attenuation applied to a frequency bin.
@@ -12,14 +54,17 @@ struct NoiseSettings
 {
     bool enabled = false;
     double reductionDb = 12.0;
+    int fftSize = kNoiseDefaultFftSize;
 };
 
-// Analyzed noise profile. `magnitudes` holds one value per bin from 0 through
-// kNoiseFftSize/2 at `sampleRate`, averaged across the captured channels.
+// Analyzed noise profile. `magnitudes` is always sized for the largest FFT;
+// `binCount` says how many leading entries are real data, from bin 0 through
+// binCount - 1 at `sampleRate` with an FFT size of 2 * (binCount - 1).
 struct NoiseProfile
 {
     bool valid = false;
     std::uint32_t sampleRate = 0;
+    std::size_t binCount = 0;
     std::vector<double> magnitudes;
 };
 

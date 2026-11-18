@@ -349,7 +349,8 @@ void ClampEffect(EffectInstance& effect)
     switch (effect.type)
     {
     case EffectType::Noise:
-        ClampFinite(effect.noise.reductionDb, 12.0, 0.0, 70.0);
+        ClampFinite(effect.noise.reductionDb, 12.0, 0.0, 50.0);
+        effect.noise.fftSize = ValidNoiseFftSize(effect.noise.fftSize);
         break;
 
     case EffectType::Gate:
@@ -524,6 +525,7 @@ void LoadEffectFields(const std::vector<KeyValue>& entries,
     {
     case EffectType::Noise:
         getDouble(L"noise_reduction_db", effect.noise.reductionDb);
+        getInt(L"noise_fft_size", effect.noise.fftSize);
         break;
 
     case EffectType::Gate:
@@ -718,6 +720,8 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
             case EffectType::Noise:
                 text += prefix + "noise_reduction_db=" +
                         FormatDouble(effect.noise.reductionDb) + "\n";
+                text += prefix + "noise_fft_size=" +
+                        std::to_string(effect.noise.fftSize) + "\n";
                 break;
 
             case EffectType::Gate:
@@ -828,14 +832,13 @@ struct NoiseBinsHeader
 constexpr std::uint32_t kNoiseFileVersion = 1;
 constexpr std::uint32_t kNoiseBinsVersion = 2;
 constexpr std::uint64_t kNoiseFileLimit = 64ull * 1024 * 1024;
-constexpr std::uint32_t kNoiseMaxBins = 4096;
 
 bool ValidNoiseHeader(const NoiseFileHeader& header)
 {
     return std::memcmp(header.magic, "BMNP", 4) == 0 &&
            header.version == kNoiseFileVersion && header.sampleRate > 0 &&
            header.channels > 0 &&
-           header.frames >= apo::dsp::kNoiseFftSize;
+           header.frames >= static_cast<std::uint32_t>(kNoiseDefaultFftSize);
 }
 
 } // namespace
@@ -903,8 +906,12 @@ bool SaveNoiseProfileBins(const std::wstring& endpointId,
                           std::uint32_t sampleRate,
                           const std::vector<double>& magnitudes)
 {
+    const int profileFft = (magnitudes.size() >= 2)
+        ? static_cast<int>((magnitudes.size() - 1) * 2)
+        : 0;
     if (sampleRate == 0 || magnitudes.empty() ||
-        magnitudes.size() > kNoiseMaxBins)
+        magnitudes.size() > dsp::kNoiseMaxBins || profileFft <= 0 ||
+        ValidNoiseFftSize(profileFft) != profileFft)
     {
         return false;
     }
@@ -964,6 +971,12 @@ bool LoadNoiseProfile(const std::wstring& endpointId, NoiseProfile& profile)
         DWORD read = 0;
         return ReadFile(file, data, bytes, &read, nullptr) && read == bytes;
     };
+    auto storeBins = [&](std::vector<double>& values) {
+        profile.binCount = values.size();
+        profile.magnitudes.assign(dsp::kNoiseMaxBins, 0.0);
+        std::copy(values.begin(), values.end(), profile.magnitudes.begin());
+        profile.valid = true;
+    };
 
     BYTE prefix[8]{};
     bool ok = readExact(prefix, sizeof(prefix)) &&
@@ -982,8 +995,13 @@ bool LoadNoiseProfile(const std::wstring& endpointId, NoiseProfile& profile)
                            sizeof(bins) - sizeof(prefix));
             const std::uint64_t bytes64 =
                 static_cast<std::uint64_t>(bins.binCount) * sizeof(double);
+            const int profileFft =
+                (bins.binCount >= 2)
+                    ? static_cast<int>((bins.binCount - 1) * 2)
+                    : 0;
             ok = ok && bins.sampleRate != 0 && bins.binCount != 0 &&
-                 bins.binCount <= kNoiseMaxBins &&
+                 bins.binCount <= dsp::kNoiseMaxBins &&
+                 profileFft > 0 && ValidNoiseFftSize(profileFft) == profileFft &&
                  bytes64 <= kNoiseFileLimit;
             if (ok)
             {
@@ -992,9 +1010,8 @@ bool LoadNoiseProfile(const std::wstring& endpointId, NoiseProfile& profile)
                                static_cast<DWORD>(bytes64));
                 if (ok)
                 {
-                    profile.magnitudes = std::move(magnitudes);
                     profile.sampleRate = bins.sampleRate;
-                    profile.valid = true;
+                    storeBins(magnitudes);
                 }
             }
         }
@@ -1019,11 +1036,16 @@ bool LoadNoiseProfile(const std::wstring& endpointId, NoiseProfile& profile)
                                    static_cast<DWORD>(bytes64));
                     if (ok)
                     {
-                        profile.magnitudes = apo::dsp::AverageMagnitudeSpectrum(
-                            samples.data(), header.frames, header.channels);
-                        profile.sampleRate = header.sampleRate;
-                        profile.valid = !profile.magnitudes.empty();
-                        ok = profile.valid;
+                        std::vector<double> magnitudes =
+                            apo::dsp::AverageMagnitudeSpectrum(
+                                samples.data(), header.frames, header.channels,
+                                kNoiseDefaultFftSize);
+                        ok = !magnitudes.empty();
+                        if (ok)
+                        {
+                            profile.sampleRate = header.sampleRate;
+                            storeBins(magnitudes);
+                        }
                     }
                 }
             }

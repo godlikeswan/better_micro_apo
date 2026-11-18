@@ -276,16 +276,22 @@ void LayoutEffectParams(int x, int y, int width)
     };
 
     switch (g_effectType) {
-    case apo::EffectType::Noise:
+    case apo::EffectType::Noise: {
+        const int rightX = x + columnWidth + columnGap;
         MoveWindow(g_noiseReductionLabel, x, y, labelWidth, Scale(20), TRUE);
         MoveWindow(g_noiseReductionSlider, x + labelWidth, y, sliderWidth,
                    controlHeight, TRUE);
         placeReset(ParamResetNoiseReduction, x, y);
-        MoveWindow(g_noiseCapture, x + columnWidth + columnGap, y,
-                   columnWidth, Scale(28), TRUE);
+        MoveWindow(g_noiseFftSizeLabel, rightX, y, labelWidth, Scale(20),
+                   TRUE);
+        MoveWindow(g_noiseFftSizeCombo, rightX + labelWidth, y, sliderWidth,
+                   Scale(200), TRUE);
+        placeReset(ParamResetNoiseFftSize, rightX, y);
         y += Scale(36);
-        MoveWindow(g_noiseNote, x, y, width, Scale(36), TRUE);
+        MoveWindow(g_noiseCapture, x, y, columnWidth, Scale(28), TRUE);
+        MoveWindow(g_noiseNote, rightX, y, columnWidth, Scale(36), TRUE);
         break;
+    }
     case apo::EffectType::Gate:
         placePair(g_gateThresholdLabel, g_gateThresholdSlider,
                   ParamResetGateThreshold, g_gateRangeLabel, g_gateRangeSlider,
@@ -620,7 +626,18 @@ void CreateControls(HWND root)
     g_noiseReductionLabel =
         ui::Label(window, IDC_NOISE_REDUCTION_LABEL, L"Reduction (dB)");
     g_noiseReductionSlider = ui::Slider(window, IDC_NOISE_REDUCTION_SLIDER,
-                                        {0.0, 70.0, 1.0, false, 0});
+                                        {0.0, 50.0, 1.0, false, 0});
+    g_noiseFftSizeLabel =
+        ui::Label(window, IDC_NOISE_FFT_SIZE_LABEL, L"FFT size");
+    g_noiseFftSizeCombo =
+        ui::ComboBox(window, IDC_NOISE_FFT_SIZE_COMBO, CBS_DROPDOWNLIST);
+    for (int size : apo::kNoiseFftSizes) {
+        const std::wstring text = std::to_wstring(size);
+        SendMessageW(g_noiseFftSizeCombo, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(text.c_str()));
+    }
+    SendMessageW(g_noiseFftSizeCombo, CB_SETCURSEL,
+                 apo::NoiseFftSizeIndex(apo::kNoiseDefaultFftSize), 0);
     g_noiseCapture =
         ui::Button(window, IDC_NOISE_CAPTURE, L"Capture noise profile");
     g_noiseNote = ui::Label(window, IDC_NOISE_NOTE, L"");

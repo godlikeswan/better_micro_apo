@@ -246,7 +246,8 @@ void ShowEffectControls(apo::EffectType type, bool show)
 
     switch (type) {
     case apo::EffectType::Noise:
-        showAll({g_noiseReductionLabel, g_noiseReductionSlider, g_noiseCapture,
+        showAll({g_noiseReductionLabel, g_noiseReductionSlider,
+                 g_noiseFftSizeLabel, g_noiseFftSizeCombo, g_noiseCapture,
                  g_noiseNote});
         break;
     case apo::EffectType::Gate:
@@ -321,7 +322,8 @@ void EnableEffectControls(bool enabled)
         g_reverbSizeLabel, g_reverbSizeSlider,
         g_reverbDampingLabel, g_reverbDampingSlider,
         g_reverbPredelayLabel, g_reverbPredelaySlider,
-        g_noiseReductionLabel, g_noiseReductionSlider, g_noiseCapture,
+        g_noiseReductionLabel, g_noiseReductionSlider,
+        g_noiseFftSizeLabel, g_noiseFftSizeCombo, g_noiseCapture,
         g_effectGraph,
     };
     for (HWND control : controls) {
@@ -340,6 +342,8 @@ void ClearEffectEditor()
     }
     SendMessageW(g_dynamicExtend, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessageW(g_distFunctionCombo, CB_SETCURSEL, apo::kDistortionTanh, 0);
+    SendMessageW(g_noiseFftSizeCombo, CB_SETCURSEL,
+                 apo::NoiseFftSizeIndex(apo::kNoiseDefaultFftSize), 0);
     SetWindowTextW(g_effectHeading, L"Select an effect");
     SetWindowTextW(g_noiseNote, L"");
     ShowWindow(g_effectGraph, SW_HIDE);
@@ -411,9 +415,16 @@ void RebuildEffectList()
 void ReadEffectControls(apo::EffectInstance& effect)
 {
     switch (effect.type) {
-    case apo::EffectType::Noise:
+    case apo::EffectType::Noise: {
         GetSliderValue(g_noiseReductionSlider, effect.noise.reductionDb);
+        const int index = static_cast<int>(
+            SendMessageW(g_noiseFftSizeCombo, CB_GETCURSEL, 0, 0));
+        if (index >= 0 &&
+            index < static_cast<int>(apo::kNoiseFftSizes.size())) {
+            effect.noise.fftSize = apo::NoiseFftSizeAt(index);
+        }
         break;
+    }
     case apo::EffectType::Gate:
         GetSliderValue(g_gateThresholdSlider, effect.gate.thresholdDb);
         GetSliderValue(g_gateRangeSlider, effect.gate.rangeDb);
@@ -503,6 +514,8 @@ void ShowEffectForSelected()
 
     g_effectLoading = true;
     SetSliderValue(g_noiseReductionSlider, effect.noise.reductionDb);
+    SendMessageW(g_noiseFftSizeCombo, CB_SETCURSEL,
+                 apo::NoiseFftSizeIndex(effect.noise.fftSize), 0);
     SetSliderValue(g_gateThresholdSlider, effect.gate.thresholdDb);
     SetSliderValue(g_gateRangeSlider, effect.gate.rangeDb);
     SetSliderValue(g_gateAttackSlider, effect.gate.attackMs);
@@ -652,6 +665,8 @@ bool ParameterAtDefault(const apo::EffectInstance& effect,
     switch (param) {
     case ParamResetNoiseReduction:
         return SameValue(effect.noise.reductionDb, defaults.noise.reductionDb);
+    case ParamResetNoiseFftSize:
+        return effect.noise.fftSize == defaults.noise.fftSize;
     case ParamResetGateThreshold:
         return SameValue(effect.gate.thresholdDb, defaults.gate.thresholdDb);
     case ParamResetGateRange:
@@ -756,6 +771,9 @@ void ResetParameter(int param)
     switch (param) {
     case ParamResetNoiseReduction:
         effect.noise.reductionDb = defaults.noise.reductionDb;
+        break;
+    case ParamResetNoiseFftSize:
+        effect.noise.fftSize = defaults.noise.fftSize;
         break;
     case ParamResetGateThreshold:
         effect.gate.thresholdDb = defaults.gate.thresholdDb;
@@ -2085,6 +2103,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             }
             break;
         case IDC_DIST_FUNCTION_COMBO:
+        case IDC_NOISE_FFT_SIZE_COMBO:
             if (HIWORD(wParam) == CBN_SELCHANGE) {
                 MarkSettingsDirty();
             } else if (HIWORD(wParam) == CBN_CLOSEUP) {

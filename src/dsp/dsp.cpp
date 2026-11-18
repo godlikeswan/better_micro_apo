@@ -238,35 +238,38 @@ void FftPlan::Inverse(double* real, double* imag) const
 }
 
 std::vector<double> AverageMagnitudeSpectrum(const float* samples,
-                                             size_t frames, UINT32 channels)
+                                             size_t frames, UINT32 channels,
+                                             int fftSize)
 {
-    if (samples == nullptr || frames == 0 || channels == 0)
+    const int sizeValue = apo::ValidNoiseFftSize(fftSize);
+    if (samples == nullptr || frames == 0 || channels == 0 ||
+        frames < static_cast<size_t>(sizeValue))
     {
         return {};
     }
 
-    constexpr size_t kSize = kNoiseFftSize;
-    constexpr size_t kHop = kNoiseHopSize;
+    const size_t size = static_cast<size_t>(sizeValue);
+    const size_t hop = size / 2;
     constexpr double kPi = 3.14159265358979323846;
 
-    FftPlan fft(kSize);
-    std::vector<double> window(kSize);
-    for (size_t index = 0; index < kSize; ++index)
+    FftPlan fft(size);
+    std::vector<double> window(size);
+    for (size_t index = 0; index < size; ++index)
     {
         const double hann =
             0.5 - 0.5 * std::cos(2.0 * kPi * static_cast<double>(index) /
-                                 static_cast<double>(kSize));
+                                 static_cast<double>(size));
         window[index] = std::sqrt(std::max(0.0, hann));
     }
 
-    std::vector<double> real(kSize, 0.0);
-    std::vector<double> imag(kSize, 0.0);
-    std::vector<double> sum(kSize / 2 + 1, 0.0);
+    std::vector<double> real(size, 0.0);
+    std::vector<double> imag(size, 0.0);
+    std::vector<double> sum(size / 2 + 1, 0.0);
     size_t measured = 0;
 
-    for (size_t start = 0; start < frames; start += kHop)
+    for (size_t start = 0; start < frames; start += hop)
     {
-        const size_t available = std::min(kSize, frames - start);
+        const size_t available = std::min(size, frames - start);
         for (UINT32 channel = 0; channel < channels; ++channel)
         {
             std::fill(real.begin(), real.end(), 0.0);
@@ -280,7 +283,7 @@ std::vector<double> AverageMagnitudeSpectrum(const float* samples,
             }
 
             fft.Forward(real.data(), imag.data());
-            for (size_t bin = 0; bin <= kSize / 2; ++bin)
+            for (size_t bin = 0; bin <= size / 2; ++bin)
             {
                 sum[bin] += std::sqrt(real[bin] * real[bin] +
                                       imag[bin] * imag[bin]);

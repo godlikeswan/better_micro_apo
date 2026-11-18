@@ -55,7 +55,7 @@ All of these happen once per stream bind; none happen in `APOProcess`.
 | `StagePool` | stage objects | One stage per possible slot per type, `Configure`d once. Heavy types (noise, gate, reverb) allow 4 instances; all others 16. Noise stages are always created and pass audio through until a profile is available. |
 | `GateStage` | `m_delay` | `ceil(300 ms * sampleRate) * channels` `double`s, sized for the maximum clamp so a live lookahead change never allocates. |
 | `DynamicStage` | `m_ic1`, `m_ic2`, `m_band` | Per-channel filter and band state. |
-| `NoiseStage` | FFT plan + analysis buffers | Precomputed radix-2 tables and 512-point window, profile bins, gain arrays, input/output/history/overlap-add and real/imag arrays, sized from the stream and FFT geometry. |
+| `NoiseStage` | FFT plans + analysis buffers | Radix-2 tables and windows for every supported size (256–4096), profile bins, gain arrays, input/output/history/overlap-add and real/imag arrays sized for the largest size. `Update` switches the active size without allocating. |
 | `ReverbStage` | tank buffers + predelay | Per channel: 8 damped combs and 4 allpasses (tunings scaled to the sample rate, odd channels get the classic stereo spread) plus `ceil(200 ms * sampleRate) + 1` predelay frames. |
 | `BetterMicroApo` | runtime file mapping | A read-only `MapViewOfFile` of `runtime\{endpoint-guid}.dat`, closed in `UnlockForProcess`. |
 | `BetterMicroApo` | capture mapping and tap | A read/write mapping of `runtime\{endpoint-guid}.capture` plus one configured `StageCaptureTap`, both closed in `UnlockForProcess`. |
@@ -102,9 +102,11 @@ settings changes safe from the real-time path. `RebuildChain` is the single
 place that fills the chain, so a capture tap survives a settings change made
 while a profile is being recorded.
 
-`StagePool::UpdateProfileBins` retunes every allocated noise stage from a
-captured profile without allocating or rebuilding the pool. A stage with no
-profile is a passthrough and does not report `NeedsSilence()`.
+`StagePool::UpdateProfileBins` retunes every allocated noise stage from the
+leading `NoiseProfile::binCount` bins without allocating or rebuilding the pool.
+The stage maps that profile onto its active FFT size, so the profile stays
+usable after an FFT-size change. A stage with no profile is a passthrough and
+does not report `NeedsSilence()`.
 
 Disabled effects are simply absent from the chain. Deleting and re-adding an
 effect produces a new id, so its stage starts from a clean state; values are not

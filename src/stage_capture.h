@@ -32,8 +32,7 @@ enum StageCaptureState : LONG
 };
 
 inline constexpr std::uint32_t kStageCaptureMagic = 0x50414353u; // "SCAP"
-inline constexpr std::uint32_t kStageCaptureVersion = 1u;
-inline constexpr size_t kStageCaptureBins = apo::dsp::kNoiseFftSize / 2 + 1;
+inline constexpr std::uint32_t kStageCaptureVersion = 2u;
 
 enum StageCaptureError : ULONG
 {
@@ -61,12 +60,13 @@ struct StageCaptureFile
     ULONG durationMs = 0;
     ULONG sampleRate = 0;
     ULONG channels = 0;
+    ULONG binCount = 0;
     ULONG framesTarget = 0;
     ULONG framesDone = 0;
     ULONG error = 0;
     volatile LONG resultAck = kStageCaptureAckNone;
 
-    double bins[kStageCaptureBins]{};
+    double bins[dsp::kNoiseMaxBins]{};
 };
 
 // RAII handle for the file-backed mapping. The APO keeps one open for the life
@@ -104,15 +104,17 @@ bool RequestStageCapture(const std::wstring& endpointId, int presetIndex,
 
 // A stage inserted just before the selected Noise effect. It leaves the audio
 // untouched while measuring the signal that reaches that effect. Configure()
-// allocates its FFT state; Process() is allocation-free.
+// allocates the FFT state for every supported size; Begin() and Process() are
+// allocation-free.
 class StageCaptureTap final : public apo::dsp::Stage
 {
 public:
     void Configure(const apo::dsp::AudioFormat& format) override;
 
-    bool Begin(ULONG framesTarget);
+    bool Begin(ULONG framesTarget, int fftSize);
     bool Complete() const { return m_complete; }
     ULONG FramesDone() const { return m_framesDone; }
+    ULONG BinCount() const { return m_binCount; }
     void Finish(double* bins, size_t count) const;
 
     void Reset() override;
@@ -121,18 +123,22 @@ public:
 private:
     void AnalyzeHop();
 
-    apo::dsp::FftPlan m_fft{apo::dsp::kNoiseFftSize};
-    std::vector<double> m_window;
+    std::vector<apo::dsp::FftPlan> m_fftPlans;
+    std::vector<std::vector<double>> m_windows;
     std::vector<double> m_history;
     std::vector<double> m_frameReal;
     std::vector<double> m_frameImag;
     std::vector<double> m_sum;
 
+    std::size_t m_sizeIndex = 0;
+    std::size_t m_fftSize = static_cast<std::size_t>(kNoiseDefaultFftSize);
+    std::size_t m_hopSize = m_fftSize / 2;
     UINT32 m_channels = 0;
+    ULONG m_binCount = 0;
     ULONG m_framesTarget = 0;
     ULONG m_framesDone = 0;
-    size_t m_cursor = 0;
-    size_t m_measured = 0;
+    std::size_t m_cursor = 0;
+    std::size_t m_measured = 0;
     bool m_active = false;
     bool m_complete = false;
 };

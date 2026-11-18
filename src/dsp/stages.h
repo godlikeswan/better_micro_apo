@@ -140,7 +140,7 @@ public:
     void Update(const EffectInstance& effect, const AudioFormat& format) override;
     // Replaces the analysis bins from a live capture without reallocating.
     void SetProfileBins(const std::vector<double>& magnitudes,
-                        uint32_t sampleRate);
+                        std::size_t binCount, uint32_t sampleRate);
     void Reset() override;
     bool NeedsSilence() const override
     {
@@ -150,14 +150,17 @@ public:
 
 private:
     void ApplyProfileBins(const std::vector<double>& magnitudes,
-                          uint32_t sampleRate);
+                          std::size_t binCount, uint32_t sampleRate);
     void ProcessHop();
 
     NoiseSettings m_settings;
     NoiseProfile m_profile;
     bool m_hasProfile = false;
-    FftPlan m_fft;
-    std::vector<double> m_window;
+    std::size_t m_sizeIndex = 0;
+    size_t m_fftSize = static_cast<size_t>(apo::kNoiseDefaultFftSize);
+    size_t m_hopSize = m_fftSize / 2;
+    std::vector<FftPlan> m_fftPlans;
+    std::vector<std::vector<double>> m_windows;
     std::vector<double> m_profileBins;
     std::vector<double> m_gain;
     std::vector<double> m_rawGain;
