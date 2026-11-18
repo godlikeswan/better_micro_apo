@@ -6,9 +6,9 @@ recording, then reduces that sound while leaving your voice mostly alone.
 
 ## Try this
 
-- Put Noise reduction first in the effect list, before [Gate](gate.md) and
-  [Compressor](compressor.md), so it sees the microphone signal before the other
-  effects shape it.
+- Put Noise reduction first in the effect list, before the unified
+  [Gate/Compressor/Limiter/Expander](dynamics.md), so it sees the microphone
+  signal before the other effects shape it.
 - Select the **enabled** Noise effect you want to calibrate, sit in your usual
   spot, be quiet, and click **Capture noise profile**. It measures about three
   seconds at that effect's position in the chain — after any effects above it
@@ -26,7 +26,8 @@ recording, then reduces that sound while leaving your voice mostly alone.
   detail for a steady tone; lower it when you want the effect to react faster.
   The change is applied live, with no effect restart or audio interruption.
 - This effect is for steady noise. For sounds that come and go between words,
-  use [Gate](gate.md) after it. If turning the mic up makes room noise obvious,
+  use the unified [Gate/Compressor/Limiter/Expander](dynamics.md) in
+  Expander/Gate mode after it. If turning the mic up makes room noise obvious,
   fix the noise here rather than lowering the voice level.
 - Check the bottom meters while you talk: aim for peaks around **−5 dBFS**, RMS
   around **−20 dBFS**, and no **CLIP**. At most 4 instances are supported.

@@ -26,8 +26,8 @@ APO" and the APO flags used by the base class.
 
 ## Processing at a glance
 
-- 1 input / 1 output, in place. No latency unless gate lookahead or noise
-  reduction is enabled.
+- 1 input / 1 output, in place. Noise reduction, dynamics lookahead, and reverb
+  predelay add delay when enabled.
 - Supported formats: float32, PCM16, PCM24, PCM32. The container size must
   equal the valid-bit size. 24-valid-bits-in-a-32-bit-container is not
   supported.

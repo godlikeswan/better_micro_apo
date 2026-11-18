@@ -32,9 +32,11 @@ Subclass procedures in `widgets.cpp`:
   on the page panel means hiding a control would otherwise leave its pixels
   behind.
 - `SliderProc` — handles mouse tracking, keyboard, snapping, and repaint. A
-  `SliderSpec` holds min, max, step, logarithmic flag, and decimal places;
-  `SetSliderValue` / `GetSliderValue` are the public accessors, and
-  `IsSliderChange` recognizes the custom notification.
+  `SliderSpec` holds min, max, step, logarithmic flag, decimal places, and an
+  `infiniteAtMax` flag. On an infinite slider the last finite position is a
+  stop, the right edge snaps to ∞, and the label renders ∞; `SetSliderValue` /
+  `GetSliderValue` are the public accessors, and `IsSliderChange` recognizes the
+  custom notification.
 - `ListViewProc` — dark-mode background plus the state-image workaround below.
 - `TabProc` — themed tab painting for the unused tab control.
 
@@ -48,15 +50,15 @@ functions; changing behavior is local to its subclass.
 `ui::Graph`. `SetGraphEffect` stores the current effect and invalidates the
 control. `PaintGraph` draws a grid and one of:
 
-- distortion transfer curve,
-- compressor transfer curve,
-- gate transfer curve,
-- dynamic band shape.
+- saturation transfer curve,
+- mode-aware transfer curve for Gate/Compressor/Limiter/Expander,
+- equalizer band shape.
 
-The first three call the same inline functions in `src/dsp/transfer.h` as the
-DSP stages, so the displayed curve cannot drift from what is applied. The
-dynamic graph draws the analog band-pass prototype that `DynamicStage`
-approximates. `GraphSupported` reports which effect types have a graph.
+The saturation and dynamics curves call the same inline functions in
+`src/dsp/transfer.h` as the DSP stages, so the displayed curve cannot drift from
+what is applied. The equalizer graph draws the analog band-pass prototype that
+`EqualizerStage` approximates. `GraphSupported` reports which effect types have
+a graph.
 
 ## Icons, tooltips, and reset buttons
 

@@ -1,11 +1,12 @@
-# Distortion
+# Saturation/Overdrive/Distortion
 
 Adds a gritty, overdriven edge. Use it for guitar, a deliberately rough vocal,
-or a special effect — not as a general fix for a quiet microphone.
+or a special effect — not as a general fix for a quiet microphone. Gentle
+settings add warmth and bite; higher Drive and Curvature get buzzy.
 
 ## Try this
 
-- Put Distortion near the end of the list, usually after
+- Put Saturation near the end of the list, usually after
   [Mono](mono.md) and before [Reverb](reverb.md), so the reverb tail stays
   clean.
 - Start with **Drive** at 0 dB and raise it until the signal is pushed into the
@@ -15,10 +16,10 @@ or a special effect — not as a general fix for a quiet microphone.
   panel updates as you go.
 - **Function** changes the character. **Tanh** is the smooth default; try the
   others if you want a different color.
-- **Output** sets the level after the effect. Distortion can sound much louder
+- **Output** sets the level after the effect. Saturation can sound much louder
   than the clean signal even without clipping, so turn Output down if it jumps
   out at you. If the bottom meter shows **CLIP**, lower Output first.
-- A newly added Distortion starts with Tanh, 0 dB Drive, 50% Curvature, and 0 dB
+- A newly added Saturation starts with Tanh, 0 dB Drive, 50% Curvature, and 0 dB
   Output. The small ↺ buttons reset individual controls. Up to 16 instances are
   supported.
 
@@ -33,7 +34,9 @@ or a special effect — not as a general fix for a quiet microphone.
 
 ## Under the hood
 
-`DistortionStage` (`src/dsp/stages.cpp`):
+`DistortionStage` (`src/dsp/stages.cpp`) keeps the historical C++ and INI key
+names, while the GUI, effect list, and documentation use
+"Saturation/Overdrive/Distortion":
 
 - `Update` folds the function and curvature into one coefficient pair with
   `MakeDistortionCurve` and converts Drive/Output to linear scalars. All curve

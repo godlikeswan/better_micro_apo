@@ -8,8 +8,9 @@ has signal.
 
 - Turn it on if one headphone side is silent, or if your voice only shows up on
   one channel. After this effect, both sides carry the same signal.
-- Put Mono after [Gain](gain.md) and before [Distortion](distortion.md) or
-  [Reverb](reverb.md), so a mono source still feeds a wide reverb tail.
+- Put Mono after [Gain](gain.md) and before
+  [Saturation/Overdrive/Distortion](saturation.md) or [Reverb](reverb.md), so a
+  mono source still feeds a wide reverb tail.
 - There are no sliders here. If the copied signal is too quiet, raise Gain and
   check the bottom meters: peaks around **−5 dBFS**, RMS around **−20 dBFS**, and
   no **CLIP**.

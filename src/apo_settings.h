@@ -3,10 +3,15 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
 namespace apo {
+
+// Settings files with any other version are discarded on load. There is no
+// migration path: a new schema starts from defaults.
+inline constexpr int kSettingsVersion = 5;
 
 // Analysis sizes offered for spectral noise reduction. The buffers and FFT
 // plans for every size are created when the stream binds, so changing
@@ -68,38 +73,51 @@ struct NoiseProfile
     std::vector<double> magnitudes;
 };
 
-struct GateSettings
+// The two sides of the unified dynamics effect. Compressor/Limiter acts on
+// signal above the threshold; Expander/Gate acts on signal below it.
+enum class DynamicsMode : int
+{
+    CompressorLimiter = 0,
+    ExpanderGate = 1,
+    Count,
+};
+
+const wchar_t* DynamicsModeName(DynamicsMode mode);
+
+// Ratio bounds. `kDynamicsMaxFiniteRatio` is the last finite slider position;
+// the end stop means true infinity (hard limiter / hard gate).
+inline constexpr double kDynamicsMinRatio = 0.01;
+inline constexpr double kDynamicsMaxFiniteRatio = 1000.0;
+inline constexpr double kDynamicsMaxLookaheadMs = 300.0;
+
+inline double InfiniteRatio()
+{
+    return std::numeric_limits<double>::infinity();
+}
+
+struct DynamicsSettings
 {
     bool enabled = false;
-    double thresholdDb = -50.0;
-
-    // Maximum attenuation when the gate is closed.
-    double rangeDb = 60.0;
+    DynamicsMode mode = DynamicsMode::CompressorLimiter;
+    double thresholdDb = -15.0;
+    double ratio = 5.0;
+    double inputDb = 0.0;
+    double outputDb = 0.0;
     double attackMs = 5.0;
-    double holdMs = 50.0;
     double releaseMs = 100.0;
 
-    // Detector lookahead. The audio is delayed by this much so the gate can
-    // open before a transient reaches the output. Adds the same latency to the
-    // stream while the gate is enabled.
+    // Detector lookahead. The audio is delayed by this much so the gain change
+    // can start before a transient reaches the output. Adds the same latency to
+    // the stream while the effect is enabled.
     double lookaheadMs = 0.0;
 };
 
-struct CompressorSettings
-{
-    bool enabled = true;
-    double thresholdDb = -58.0;
-    double ratio = 3.0;
-    double attackMs = 5.0;
-    double releaseMs = 100.0;
-};
-
-// Frequency-selective dynamics. The detector watches a band around
-// `frequencyHz`; `expand` selects the extend mode (boost quiet lows, which
-// strengthens a distant proximity effect) instead of the reduce mode (cut loud
-// lows, which tames a close proximity effect). A broad Q makes it behave like
-// a dynamic low shelf.
-struct DynamicSettings
+// Frequency-selective dynamics for the proximity effect. The detector watches
+// a band around `frequencyHz`; `expand` selects the extend mode (boost quiet
+// lows, which strengthens a distant proximity effect) instead of the reduce
+// mode (cut loud lows, which tames a close proximity effect). A broad Q makes
+// it behave like a dynamic low shelf.
+struct EqualizerSettings
 {
     bool enabled = false;
     bool expand = false;
@@ -114,12 +132,12 @@ struct DynamicSettings
     double releaseMs = 150.0;
 };
 
-// Flat makeup gain. New instances start at unity so adding a Gain effect is
-// safe; the legacy chain explicitly starts at +28 dB.
+// Flat gain. A newly added effect starts at +12 dB, which is the usual makeup
+// level after dynamics processing.
 struct GainSettings
 {
     bool enabled = false;
-    double gainDb = 0.0;
+    double gainDb = 12.0;
 };
 
 // Copies the first (left) channel to every other channel after processing.
@@ -167,16 +185,16 @@ struct ReverbSettings
 };
 
 // Effect types the list can hold. The list order is the DSP order, and a type
-// may appear more than once.
+// may appear more than once. Gain is first so the usual makeup step is easy to
+// find and sits at the top of the chain.
 enum class EffectType : int
 {
-    Noise = 0,
-    Gate,
-    Dynamic,
-    Compressor,
-    Gain,
+    Gain = 0,
+    Noise,
+    Dynamics,
+    Equalizer,
     Mono,
-    Distortion,
+    Saturation,
     Reverb,
     Count,
 };
@@ -214,9 +232,8 @@ struct EffectInstance
     EffectType type = EffectType::Gain;
 
     NoiseSettings noise;
-    GateSettings gate;
-    CompressorSettings compressor;
-    DynamicSettings dynamics;
+    DynamicsSettings dynamics;
+    EqualizerSettings equalizer;
     GainSettings gain;
     MonoSettings mono;
     DistortionSettings distortion;
@@ -257,8 +274,9 @@ EffectPreset& ActivePreset(ApoSettings& settings);
 const EffectPreset& ActivePreset(const ApoSettings& settings);
 
 // Clamp every field into a range the DSP can handle safely. Non-finite values
-// fall back to the defaults. Also normalizes effect ids so each instance has a
-// unique positive id.
+// fall back to the defaults except the dynamics ratio, where infinity is the
+// end of the slider. Also normalizes effect ids so each instance has a unique
+// positive id.
 void ClampSettings(ApoSettings& settings);
 
 // Filename-safe form of an endpoint GUID. Shared by the per-device settings,
@@ -271,8 +289,9 @@ std::wstring SettingsDirectory();
 // C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.ini
 std::wstring SettingsPath(const std::wstring& endpointId);
 
-// Loads the endpoint's settings. Missing or unreadable files leave the
-// defaults in place and return false.
+// Loads the endpoint's settings. Missing, unreadable, or version-mismatched
+// files leave the defaults in place and return false. A mismatched file is
+// deleted so stale schema never comes back.
 bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings);
 
 // Writes the endpoint's settings, creating the directory if needed.

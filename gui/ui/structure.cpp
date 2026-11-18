@@ -227,7 +227,7 @@ void LayoutEffectParams(int x, int y, int width)
     for (HWND button : g_paramResetButtons) {
         ShowWindow(button, SW_HIDE);
     }
-    ShowWindow(g_gateLookaheadIcon, SW_HIDE);
+    ShowWindow(g_dynamicsLookaheadIcon, SW_HIDE);
     ShowWindow(g_reverbPredelayIcon, SW_HIDE);
     if (g_effectSelection < 0) {
         return;
@@ -292,50 +292,56 @@ void LayoutEffectParams(int x, int y, int width)
         MoveWindow(g_noiseNote, rightX, y, columnWidth, Scale(36), TRUE);
         break;
     }
-    case apo::EffectType::Gate:
-        placePair(g_gateThresholdLabel, g_gateThresholdSlider,
-                  ParamResetGateThreshold, g_gateRangeLabel, g_gateRangeSlider,
-                  ParamResetGateRange);
-        placePair(g_gateAttackLabel, g_gateAttackSlider, ParamResetGateAttack,
-                  g_gateHoldLabel, g_gateHoldSlider, ParamResetGateHold);
-        placePair(g_gateReleaseLabel, g_gateReleaseSlider,
-                  ParamResetGateRelease, g_gateLookaheadLabel,
-                  g_gateLookaheadSlider, ParamResetGateLookahead);
-        placeIcon(g_gateLookaheadIcon, g_gateLookaheadLabel,
-                  x + columnWidth + columnGap, y - rowStep);
+    case apo::EffectType::Dynamics: {
+        const int rightX = x + columnWidth + columnGap;
+        MoveWindow(g_dynamicsModeLabel, x, y, labelWidth, Scale(20), TRUE);
+        MoveWindow(g_dynamicsModeCombo, x + labelWidth, y, sliderWidth,
+                   Scale(200), TRUE);
+        placeReset(ParamResetDynamicsMode, x, y);
+        MoveWindow(g_dynamicsInputLabel, rightX, y, labelWidth, Scale(20),
+                   TRUE);
+        MoveWindow(g_dynamicsInputSlider, rightX + labelWidth, y, sliderWidth,
+                   controlHeight, TRUE);
+        placeReset(ParamResetDynamicsInput, rightX, y);
+        y += rowStep;
+
+        placePair(g_dynamicsThresholdLabel, g_dynamicsThresholdSlider,
+                  ParamResetDynamicsThreshold, g_dynamicsRatioLabel,
+                  g_dynamicsRatioSlider, ParamResetDynamicsRatio);
+        placePair(g_dynamicsAttackLabel, g_dynamicsAttackSlider,
+                  ParamResetDynamicsAttack, g_dynamicsReleaseLabel,
+                  g_dynamicsReleaseSlider, ParamResetDynamicsRelease);
+        placePair(g_dynamicsOutputLabel, g_dynamicsOutputSlider,
+                  ParamResetDynamicsOutput, g_dynamicsLookaheadLabel,
+                  g_dynamicsLookaheadSlider, ParamResetDynamicsLookahead);
+        placeIcon(g_dynamicsLookaheadIcon, g_dynamicsLookaheadLabel, rightX,
+                  y - rowStep);
         break;
-    case apo::EffectType::Dynamic:
-        MoveWindow(g_dynamicExtend, x, y,
+    }
+    case apo::EffectType::Equalizer:
+        MoveWindow(g_eqExtend, x, y,
                    columnWidth - resetWidth - resetGap, Scale(22), TRUE);
         placeReset(ParamResetDynExpand, x, y);
         y += Scale(30);
-        placePair(g_dynFrequencyLabel, g_dynFrequencySlider,
-                  ParamResetDynFrequency, g_dynQLabel, g_dynQSlider,
+        placePair(g_eqFrequencyLabel, g_eqFrequencySlider,
+                  ParamResetDynFrequency, g_eqQLabel, g_eqQSlider,
                   ParamResetDynQ);
-        placePair(g_dynThresholdLabel, g_dynThresholdSlider,
-                  ParamResetDynThreshold, g_dynRatioLabel, g_dynRatioSlider,
+        placePair(g_eqThresholdLabel, g_eqThresholdSlider,
+                  ParamResetDynThreshold, g_eqRatioLabel, g_eqRatioSlider,
                   ParamResetDynRatio);
-        placePair(g_dynRangeLabel, g_dynRangeSlider, ParamResetDynRange,
-                  g_dynAttackLabel, g_dynAttackSlider, ParamResetDynAttack);
-        placePair(g_dynReleaseLabel, g_dynReleaseSlider,
+        placePair(g_eqRangeLabel, g_eqRangeSlider, ParamResetDynRange,
+                  g_eqAttackLabel, g_eqAttackSlider, ParamResetDynAttack);
+        placePair(g_eqReleaseLabel, g_eqReleaseSlider,
                   ParamResetDynRelease, nullptr, nullptr, 0);
         break;
-    case apo::EffectType::Compressor:
-        placePair(g_compThresholdLabel, g_compThresholdSlider,
-                  ParamResetCompThreshold, g_compRatioLabel, g_compRatioSlider,
-                  ParamResetCompRatio);
-        placePair(g_compAttackLabel, g_compAttackSlider, ParamResetCompAttack,
-                  g_compReleaseLabel, g_compReleaseSlider,
-                  ParamResetCompRelease);
-        break;
     case apo::EffectType::Gain:
-        placePair(g_makeupLabel, g_makeupSlider, ParamResetMakeup, nullptr,
-                  nullptr, 0);
+        placePair(g_gainLabel, g_gainSlider, ParamResetGain, nullptr, nullptr,
+                  0);
         break;
     case apo::EffectType::Mono:
         MoveWindow(g_monoNote, x, y, width, Scale(40), TRUE);
         break;
-    case apo::EffectType::Distortion:
+    case apo::EffectType::Saturation:
         MoveWindow(g_distFunctionLabel, x, y, labelWidth, Scale(20), TRUE);
         MoveWindow(g_distFunctionCombo, x + labelWidth, y, Scale(180),
                    Scale(200), TRUE);
@@ -527,81 +533,84 @@ void CreateControls(HWND root)
     g_distOutputSlider = ui::Slider(window, IDC_DIST_OUTPUT_SLIDER,
                                     {-24.0, 12.0, 0.5, false, 1});
 
-    g_gateThresholdLabel =
-        ui::Label(window, IDC_GATE_THRESHOLD_LABEL, L"Threshold (dBFS)");
-    g_gateThresholdSlider = ui::Slider(
-        window, IDC_GATE_THRESHOLD_SLIDER, {-80.0, 0.0, 1.0, false, 0});
-    g_gateRangeLabel =
-        ui::Label(window, IDC_GATE_RANGE_LABEL, L"Range (dB)");
-    g_gateRangeSlider = ui::Slider(window, IDC_GATE_RANGE_SLIDER,
-                                   {0.0, 96.0, 1.0, false, 0});
-    g_gateAttackLabel =
-        ui::Label(window, IDC_GATE_ATTACK_LABEL, L"Attack (ms)");
-    g_gateAttackSlider = ui::Slider(window, IDC_GATE_ATTACK_SLIDER,
-                                    {0.1, 1000.0, 0.0, true, 0});
-    g_gateHoldLabel = ui::Label(window, IDC_GATE_HOLD_LABEL, L"Hold (ms)");
-    g_gateHoldSlider = ui::Slider(window, IDC_GATE_HOLD_SLIDER,
-                                  {0.0, 2000.0, 1.0, false, 0});
-    g_gateReleaseLabel =
-        ui::Label(window, IDC_GATE_RELEASE_LABEL, L"Release (ms)");
-    g_gateReleaseSlider = ui::Slider(window, IDC_GATE_RELEASE_SLIDER,
-                                     {1.0, 5000.0, 0.0, true, 0});
-    g_gateLookaheadLabel =
-        ui::Label(window, IDC_GATE_LOOKAHEAD_LABEL, L"Lookahead (ms)");
-    g_gateLookaheadSlider = ui::Slider(window, IDC_GATE_LOOKAHEAD_SLIDER,
-                                       {0.0, 300.0, 1.0, false, 0});
-    g_gateLookaheadIcon =
-        InfoIcon(window, IDC_GATE_LOOKAHEAD_ICON, InfoIconKind::Latency);
-    AddTooltip(g_gateLookaheadIcon,
+    g_dynamicsModeLabel =
+        ui::Label(window, IDC_DYN_MODE_LABEL, L"Mode");
+    g_dynamicsModeCombo =
+        ui::ComboBox(window, IDC_DYN_MODE_COMBO, CBS_DROPDOWNLIST);
+    for (int mode = 0;
+         mode < static_cast<int>(apo::DynamicsMode::Count); ++mode) {
+        SendMessageW(
+            g_dynamicsModeCombo, CB_ADDSTRING, 0,
+            reinterpret_cast<LPARAM>(apo::DynamicsModeName(
+                static_cast<apo::DynamicsMode>(mode))));
+    }
+    SendMessageW(g_dynamicsModeCombo, CB_SETCURSEL,
+                 static_cast<int>(apo::DynamicsMode::CompressorLimiter), 0);
+
+    g_dynamicsInputLabel =
+        ui::Label(window, IDC_DYN_INPUT_LABEL, L"Input (dB)");
+    g_dynamicsInputSlider = ui::Slider(window, IDC_DYN_INPUT_SLIDER,
+                                       {-24.0, 24.0, 0.5, false, 1});
+    g_dynamicsThresholdLabel =
+        ui::Label(window, IDC_DYN_THRESHOLD_LABEL, L"Threshold (dBFS)");
+    g_dynamicsThresholdSlider = ui::Slider(
+        window, IDC_DYN_THRESHOLD_SLIDER, {-80.0, 0.0, 1.0, false, 0});
+    g_dynamicsRatioLabel = ui::Label(window, IDC_DYN_RATIO_LABEL, L"Ratio");
+    g_dynamicsRatioSlider = ui::Slider(
+        window, IDC_DYN_RATIO_SLIDER,
+        {apo::kDynamicsMinRatio, apo::kDynamicsMaxFiniteRatio, 0.0, true, 0,
+         true});
+    g_dynamicsAttackLabel =
+        ui::Label(window, IDC_DYN_ATTACK_LABEL, L"Attack (ms)");
+    g_dynamicsAttackSlider = ui::Slider(window, IDC_DYN_ATTACK_SLIDER,
+                                        {0.1, 1000.0, 0.0, true, 0});
+    g_dynamicsReleaseLabel =
+        ui::Label(window, IDC_DYN_RELEASE_LABEL, L"Release (ms)");
+    g_dynamicsReleaseSlider = ui::Slider(window, IDC_DYN_RELEASE_SLIDER,
+                                         {1.0, 5000.0, 0.0, true, 0});
+    g_dynamicsOutputLabel =
+        ui::Label(window, IDC_DYN_OUTPUT_LABEL, L"Output (dB)");
+    g_dynamicsOutputSlider = ui::Slider(window, IDC_DYN_OUTPUT_SLIDER,
+                                        {-24.0, 24.0, 0.5, false, 1});
+    g_dynamicsLookaheadLabel =
+        ui::Label(window, IDC_DYN_LOOKAHEAD_LABEL, L"Lookahead (ms)");
+    g_dynamicsLookaheadSlider = ui::Slider(window, IDC_DYN_LOOKAHEAD_SLIDER,
+                                           {0.0, 300.0, 1.0, false, 0});
+    g_dynamicsLookaheadIcon =
+        InfoIcon(window, IDC_DYN_LOOKAHEAD_ICON, InfoIconKind::Latency);
+    AddTooltip(g_dynamicsLookaheadIcon,
                L"Adds delay to the audio stream.");
 
-    g_compThresholdLabel =
-        ui::Label(window, IDC_COMP_THRESHOLD_LABEL, L"Threshold (dBFS)");
-    g_compThresholdSlider = ui::Slider(
-        window, IDC_COMP_THRESHOLD_SLIDER, {-60.0, 0.0, 1.0, false, 0});
-    g_compRatioLabel =
-        ui::Label(window, IDC_COMP_RATIO_LABEL, L"Ratio (:1)");
-    g_compRatioSlider = ui::Slider(window, IDC_COMP_RATIO_SLIDER,
-                                   {1.0, 20.0, 0.1, false, 1});
-    g_compAttackLabel =
-        ui::Label(window, IDC_COMP_ATTACK_LABEL, L"Attack (ms)");
-    g_compAttackSlider = ui::Slider(window, IDC_COMP_ATTACK_SLIDER,
-                                    {0.1, 1000.0, 0.0, true, 0});
-    g_compReleaseLabel =
-        ui::Label(window, IDC_COMP_RELEASE_LABEL, L"Release (ms)");
-    g_compReleaseSlider = ui::Slider(window, IDC_COMP_RELEASE_SLIDER,
-                                     {1.0, 5000.0, 0.0, true, 0});
+    g_gainLabel = ui::Label(window, IDC_GAIN_LABEL, L"Gain (dB)");
+    g_gainSlider = ui::Slider(window, IDC_GAIN_SLIDER,
+                              {-24.0, 50.0, 0.5, false, 1});
 
-    g_makeupLabel = ui::Label(window, IDC_MAKEUP_LABEL, L"Makeup (dB)");
-    g_makeupSlider = ui::Slider(window, IDC_MAKEUP_SLIDER,
-                                {-24.0, 48.0, 0.5, false, 1});
-
-    g_dynamicExtend =
-        ui::CheckBox(window, IDC_DYNAMIC_EXTEND, L"Extend quiet lows");
-    g_dynFrequencyLabel =
-        ui::Label(window, IDC_DYN_FREQUENCY_LABEL, L"Frequency (Hz)");
-    g_dynFrequencySlider = ui::Slider(window, IDC_DYN_FREQUENCY_SLIDER,
+    g_eqExtend =
+        ui::CheckBox(window, IDC_EQ_EXTEND, L"Extend quiet lows");
+    g_eqFrequencyLabel =
+        ui::Label(window, IDC_EQ_FREQUENCY_LABEL, L"Frequency (Hz)");
+    g_eqFrequencySlider = ui::Slider(window, IDC_EQ_FREQUENCY_SLIDER,
                                       {20.0, 2000.0, 0.0, true, 0});
-    g_dynQLabel = ui::Label(window, IDC_DYN_Q_LABEL, L"Q");
-    g_dynQSlider = ui::Slider(window, IDC_DYN_Q_SLIDER,
+    g_eqQLabel = ui::Label(window, IDC_EQ_Q_LABEL, L"Q");
+    g_eqQSlider = ui::Slider(window, IDC_EQ_Q_SLIDER,
                               {0.1, 10.0, 0.0, true, 0});
-    g_dynThresholdLabel =
-        ui::Label(window, IDC_DYN_THRESHOLD_LABEL, L"Threshold (dBFS)");
-    g_dynThresholdSlider = ui::Slider(
-        window, IDC_DYN_THRESHOLD_SLIDER, {-80.0, 0.0, 1.0, false, 0});
-    g_dynRatioLabel = ui::Label(window, IDC_DYN_RATIO_LABEL, L"Ratio (:1)");
-    g_dynRatioSlider = ui::Slider(window, IDC_DYN_RATIO_SLIDER,
+    g_eqThresholdLabel =
+        ui::Label(window, IDC_EQ_THRESHOLD_LABEL, L"Threshold (dBFS)");
+    g_eqThresholdSlider = ui::Slider(
+        window, IDC_EQ_THRESHOLD_SLIDER, {-80.0, 0.0, 1.0, false, 0});
+    g_eqRatioLabel = ui::Label(window, IDC_EQ_RATIO_LABEL, L"Ratio (:1)");
+    g_eqRatioSlider = ui::Slider(window, IDC_EQ_RATIO_SLIDER,
                                   {1.0, 20.0, 0.1, false, 1});
-    g_dynRangeLabel = ui::Label(window, IDC_DYN_RANGE_LABEL, L"Range (dB)");
-    g_dynRangeSlider = ui::Slider(window, IDC_DYN_RANGE_SLIDER,
+    g_eqRangeLabel = ui::Label(window, IDC_EQ_RANGE_LABEL, L"Range (dB)");
+    g_eqRangeSlider = ui::Slider(window, IDC_EQ_RANGE_SLIDER,
                                   {0.0, 36.0, 1.0, false, 0});
-    g_dynAttackLabel =
-        ui::Label(window, IDC_DYN_ATTACK_LABEL, L"Attack (ms)");
-    g_dynAttackSlider = ui::Slider(window, IDC_DYN_ATTACK_SLIDER,
+    g_eqAttackLabel =
+        ui::Label(window, IDC_EQ_ATTACK_LABEL, L"Attack (ms)");
+    g_eqAttackSlider = ui::Slider(window, IDC_EQ_ATTACK_SLIDER,
                                    {0.1, 1000.0, 0.0, true, 0});
-    g_dynReleaseLabel =
-        ui::Label(window, IDC_DYN_RELEASE_LABEL, L"Release (ms)");
-    g_dynReleaseSlider = ui::Slider(window, IDC_DYN_RELEASE_SLIDER,
+    g_eqReleaseLabel =
+        ui::Label(window, IDC_EQ_RELEASE_LABEL, L"Release (ms)");
+    g_eqReleaseSlider = ui::Slider(window, IDC_EQ_RELEASE_SLIDER,
                                     {1.0, 5000.0, 0.0, true, 0});
 
     g_reverbMixLabel = ui::Label(window, IDC_REVERB_MIX_LABEL, L"Mix (%)");
@@ -666,7 +675,7 @@ void CreateControls(HWND root)
 
 void RefreshInfoIcons()
 {
-    const HWND icons[] = {g_mainEnableIcon, g_gateLookaheadIcon,
+    const HWND icons[] = {g_mainEnableIcon, g_dynamicsLookaheadIcon,
                           g_reverbPredelayIcon};
     for (HWND icon : icons) {
         if (icon != nullptr) {
@@ -677,7 +686,7 @@ void RefreshInfoIcons()
 
 void DestroyInfoIcons()
 {
-    const HWND icons[] = {g_mainEnableIcon, g_gateLookaheadIcon,
+    const HWND icons[] = {g_mainEnableIcon, g_dynamicsLookaheadIcon,
                           g_reverbPredelayIcon};
     for (HWND icon : icons) {
         if (icon != nullptr) {

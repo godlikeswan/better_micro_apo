@@ -28,7 +28,7 @@ filename-safe with `apo::SafeEndpointId`.
 | --- | --- | --- |
 | `sequence` | `volatile uint32_t` | Seqlock: odd while writing, even when complete. |
 | `magic` | `uint32_t` | `0x50414D42` (`"BMAP"`). |
-| `version` | `uint32_t` | `6`; bump whenever `ApoSettings` changes layout. |
+| `version` | `uint32_t` | `7`; bump whenever `ApoSettings` changes layout. |
 | `structSize` | `uint32_t` | Size of the full structure. |
 | `generation` | `volatile uint64_t` | Incremented on each published snapshot; this is what the APO polls. |
 | `settings` | `ApoSettings` | The complete settings blob, copied by value. |
@@ -99,7 +99,7 @@ new snapshot is applied exactly once.
 `devices\{id}.ini` has a single `[dsp]` section:
 
 ```
-version=4
+version=5
 preset_count=4
 preset_index=0
 isolate_effects=1
@@ -114,20 +114,23 @@ preset_0_effect_0_noise_fft_size=512
 ```
 
 Each preset stores `effect_count`, `next_effect_id`, and one block per entry
-with `id`, `type`, `enabled`, and the type's parameter keys (for example
-`gate_threshold_db`, `dynamic_frequency_hz`, `distortion_function`,
-`reverb_predelay_ms`). The `id` is the stable instance id the stage pool uses to
-tell whether a slot now holds a different effect. Four presets are always
-written; only `preset_index` is processed.
+with `id`, `type`, `enabled`, and the type's parameter keys. Effect types are
+`gain`, `noise`, `dynamics`, `equalizer`, `mono`, `saturation`, and `reverb`;
+parameter keys include `dynamics_threshold_db`, `dynamics_ratio`,
+`equalizer_frequency_hz`, `saturation_function`, and `reverb_predelay_ms`.
+The `id` is the stable instance id the stage pool uses to tell whether a slot
+now holds a different effect. Four presets are always written; only
+`preset_index` is processed.
 
-`LoadSettings` repairs invalid values with `ClampSettings`: non-finite numbers
-fall back to defaults, every numeric field is clamped to its safe range (Noise
-reduction to 0–50 dB, unsupported `noise_fft_size` values fall back to 512), and
-effect
-ids are normalized to unique positive values. Files written by older
-versions (a single effect list) are **not migrated**: they load as four empty
-presets. `isolate_effects` is forced to `1` on every load/save/publish and is
-not a user option.
+`LoadSettings` starts with defaults. If `[dsp] version` is missing or is not
+**5**, it deletes the INI file and returns the defaults; there is no migration
+path for old settings. For a current file, `ClampSettings` repairs invalid
+values: non-finite numbers fall back to defaults (except `dynamics_ratio`,
+where positive infinity is valid and is written as `inf`), every numeric field
+is clamped to its safe range (Noise reduction to 0–50 dB, unsupported
+`noise_fft_size` values fall back to 512), and effect ids are normalized to
+unique positive values. `isolate_effects` is forced to `1` on every
+load/save/publish and is not a user option.
 
 ## Noise profile format
 

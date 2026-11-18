@@ -189,72 +189,50 @@ void PaintDistortion(HDC dc, const RECT& client, const RECT& plot,
     DrawYLabel(dc, client.left, plot, plot.bottom, L"-1", colors.text);
 }
 
-void PaintCompressor(HDC dc, const RECT& client, const RECT& plot,
-                     const apo::CompressorSettings& settings,
-                     const GraphColors& colors)
+void PaintDynamics(HDC dc, const RECT& client, const RECT& plot,
+                   const apo::DynamicsSettings& settings,
+                   const GraphColors& colors)
 {
-    DrawGrid(dc, plot, colors.grid, 4, 4);
-    DrawLine(dc, plot.left, plot.bottom - 1, plot.right - 1, plot.top,
-             colors.reference, PS_DOT);
+    constexpr double kMinDb = -96.0;
+    constexpr double kMaxDb = 24.0;
 
-    const double threshold = std::clamp(settings.thresholdDb, -60.0, 0.0);
-    const double ratio = std::max(settings.ratio, 1.0);
-    const int thresholdX = MapX(plot, (threshold + 60.0) / 60.0);
-    DrawLine(dc, thresholdX, plot.top, thresholdX, plot.bottom,
-             colors.reference, PS_DOT);
-
-    StrokeCurve(dc, plot, colors.curve, [&](double t) {
-        const double inputDb = -60.0 + 60.0 * t;
-        const double outputDb =
-            apo::dsp::CompressorTransferDb(inputDb, threshold, ratio);
-        return (outputDb + 60.0) / 60.0;
-    });
-    DrawDot(dc, thresholdX, MapY(plot, (threshold + 60.0) / 60.0),
-            colors.curve);
-
-    DrawCaption(dc, client, plot, L"Transfer curve (dBFS)", colors.text);
-    DrawXLeft(dc, plot, L"-60", colors.text);
-    DrawXCenter(dc, plot, (plot.left + plot.right) / 2, L"-30", colors.text);
-    DrawXRight(dc, plot, L"0", colors.text);
-    DrawYLabel(dc, client.left, plot, plot.top, L"0", colors.text);
-    DrawYLabel(dc, client.left, plot, (plot.top + plot.bottom) / 2, L"-30",
-               colors.text);
-    DrawYLabel(dc, client.left, plot, plot.bottom, L"-60", colors.text);
-}
-
-void PaintGate(HDC dc, const RECT& client, const RECT& plot,
-               const apo::GateSettings& settings, const GraphColors& colors)
-{
     DrawGrid(dc, plot, colors.grid, 4, 4);
     DrawLine(dc, plot.left, plot.bottom - 1, plot.right - 1, plot.top,
              colors.reference, PS_DOT);
 
     const double threshold = std::clamp(settings.thresholdDb, -80.0, 0.0);
-    const double range = std::max(settings.rangeDb, 0.0);
-    const int thresholdX = MapX(plot, (threshold + 80.0) / 80.0);
+    const double inputTrigger = std::clamp(
+        threshold - settings.inputDb, -80.0, 0.0);
+    const int thresholdX = MapX(plot, (inputTrigger + 80.0) / 80.0);
     DrawLine(dc, thresholdX, plot.top, thresholdX, plot.bottom,
              colors.reference, PS_DOT);
 
+    auto position = [&](double db) {
+        return std::clamp((db - kMinDb) / (kMaxDb - kMinDb), 0.0, 1.0);
+    };
+
     StrokeCurve(dc, plot, colors.curve, [&](double t) {
         const double inputDb = -80.0 + 80.0 * t;
-        const double outputDb =
-            apo::dsp::GateTransferDb(inputDb, threshold, range);
-        return (outputDb + 80.0) / 80.0;
+        const double detectedDb = inputDb + settings.inputDb;
+        const double transferredDb = apo::dsp::DynamicsTransferDb(
+            detectedDb, threshold, settings.ratio, settings.mode);
+        return position(transferredDb + settings.outputDb);
     });
 
     DrawCaption(dc, client, plot, L"Transfer curve (dBFS)", colors.text);
     DrawXLeft(dc, plot, L"-80", colors.text);
     DrawXCenter(dc, plot, (plot.left + plot.right) / 2, L"-40", colors.text);
     DrawXRight(dc, plot, L"0", colors.text);
-    DrawYLabel(dc, client.left, plot, plot.top, L"0", colors.text);
-    DrawYLabel(dc, client.left, plot, (plot.top + plot.bottom) / 2, L"-40",
+    DrawYLabel(dc, client.left, plot, MapY(plot, position(0.0)), L"0",
                colors.text);
-    DrawYLabel(dc, client.left, plot, plot.bottom, L"-80", colors.text);
+    DrawYLabel(dc, client.left, plot, MapY(plot, position(-48.0)), L"-48",
+               colors.text);
+    DrawYLabel(dc, client.left, plot, plot.bottom, L"-96", colors.text);
 }
 
-void PaintDynamic(HDC dc, const RECT& client, const RECT& plot,
-                  const apo::DynamicSettings& settings,
-                  const GraphColors& colors)
+void PaintEqualizer(HDC dc, const RECT& client, const RECT& plot,
+                    const apo::EqualizerSettings& settings,
+                    const GraphColors& colors)
 {
     constexpr double kMinHz = 20.0;
     constexpr double kMaxHz = 20000.0;
@@ -355,17 +333,14 @@ void PaintGraph(HWND window, const GraphState& state, HDC dc)
     SetBkMode(dc, TRANSPARENT);
 
     switch (state.effect.type) {
-    case apo::EffectType::Distortion:
+    case apo::EffectType::Saturation:
         PaintDistortion(dc, client, plot, state.effect.distortion, colors);
         break;
-    case apo::EffectType::Compressor:
-        PaintCompressor(dc, client, plot, state.effect.compressor, colors);
+    case apo::EffectType::Dynamics:
+        PaintDynamics(dc, client, plot, state.effect.dynamics, colors);
         break;
-    case apo::EffectType::Gate:
-        PaintGate(dc, client, plot, state.effect.gate, colors);
-        break;
-    case apo::EffectType::Dynamic:
-        PaintDynamic(dc, client, plot, state.effect.dynamics, colors);
+    case apo::EffectType::Equalizer:
+        PaintEqualizer(dc, client, plot, state.effect.equalizer, colors);
         break;
     default:
         break;
@@ -444,10 +419,9 @@ void EnsureGraphClass()
 bool GraphSupported(apo::EffectType type)
 {
     switch (type) {
-    case apo::EffectType::Distortion:
-    case apo::EffectType::Compressor:
-    case apo::EffectType::Gate:
-    case apo::EffectType::Dynamic:
+    case apo::EffectType::Saturation:
+    case apo::EffectType::Dynamics:
+    case apo::EffectType::Equalizer:
         return true;
     default:
         return false;

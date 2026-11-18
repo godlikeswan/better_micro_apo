@@ -97,23 +97,61 @@ inline double ShapeDistortion(const DistortionCurve& curve, int function,
     }
 }
 
-// Settled input/output transfer of the compressor in dBFS.
-inline double CompressorTransferDb(double inputDb, double thresholdDb,
-                                   double ratio)
+// Settled gain change of the unified dynamics effect. Compressor/Limiter acts
+// above the threshold; Expander/Gate acts below it. Ratios are the slope in
+// each region: 1 is unity, infinity is a hard limiter/gate, and values below 1
+// move the affected side toward (or past) the threshold.
+inline constexpr double kDynamicsMaxBoostDb = 24.0;
+inline constexpr double kDynamicsMaxCutDb = 96.0;
+
+inline double DynamicsGainDb(double inputDb, double thresholdDb, double ratio,
+                             apo::DynamicsMode mode)
 {
-    if (inputDb <= thresholdDb)
+    const double delta = inputDb - thresholdDb;
+    double gainDb = 0.0;
+
+    if (mode == apo::DynamicsMode::CompressorLimiter)
     {
-        return inputDb;
+        if (delta <= 0.0)
+        {
+            return 0.0;
+        }
+        if (std::isinf(ratio) && ratio > 0.0)
+        {
+            gainDb = -delta;
+        }
+        else
+        {
+            const double slope =
+                std::max(ratio, apo::kDynamicsMinRatio);
+            gainDb = delta * (1.0 / slope - 1.0);
+        }
     }
-    return thresholdDb + (inputDb - thresholdDb) / std::max(ratio, 1.0);
+    else
+    {
+        if (delta >= 0.0)
+        {
+            return 0.0;
+        }
+        if (std::isinf(ratio) && ratio > 0.0)
+        {
+            gainDb = -kDynamicsMaxCutDb;
+        }
+        else
+        {
+            const double slope =
+                std::max(ratio, apo::kDynamicsMinRatio);
+            gainDb = delta * (slope - 1.0);
+        }
+    }
+
+    return std::clamp(gainDb, -kDynamicsMaxCutDb, kDynamicsMaxBoostDb);
 }
 
-// Settled transfer of the gate in dBFS. Attack, hold, and release shape the
-// transition over time, so this is the curve the gate converges to.
-inline double GateTransferDb(double inputDb, double thresholdDb,
-                             double rangeDb)
+inline double DynamicsTransferDb(double inputDb, double thresholdDb,
+                                 double ratio, apo::DynamicsMode mode)
 {
-    return (inputDb >= thresholdDb) ? inputDb : inputDb - rangeDb;
+    return inputDb + DynamicsGainDb(inputDb, thresholdDb, ratio, mode);
 }
 
 // Magnitude of the normalized band-pass that the dynamic stage isolates. The

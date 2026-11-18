@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cwchar>
 #include <iterator>
+#include <limits>
 
 namespace ui {
 namespace {
@@ -596,6 +597,7 @@ struct SliderState {
     double step = 1.0;
     bool logarithmic = false;
     int decimals = 0;
+    bool infiniteAtMax = false;
     double value = 0.0;
     HFONT font = nullptr;
     bool tracking = false;
@@ -614,6 +616,16 @@ double ClampValue(double value, double low, double high)
 
 double SnapSliderValue(const SliderState& state, double value)
 {
+    if (state.infiniteAtMax && std::isinf(value) && value > 0.0) {
+        return value;
+    }
+    if (std::isinf(value)) {
+        // A non-infinite slider never accepts infinity; fall back to its end.
+        // On an infinite slider a finite value at or above max is still the
+        // finite end stop; infinity is selected only at the right edge.
+        value = (value > 0.0) ? state.max : state.min;
+    }
+
     if (state.logarithmic) {
         // Three significant digits keep the whole log range adjustable.
         if (value != 0.0) {
@@ -635,6 +647,9 @@ double SliderNormalized(const SliderState& state, double value)
 {
     if (state.max <= state.min) {
         return 0.0;
+    }
+    if (state.infiniteAtMax && std::isinf(value) && value > 0.0) {
+        return 1.0;
     }
     value = ClampValue(value, state.min, state.max);
     if (state.logarithmic && state.min > 0.0) {
@@ -658,6 +673,9 @@ double SliderValueAt(const SliderState& state, double normalized)
 
 std::wstring SliderText(const SliderState& state)
 {
+    if (state.infiniteAtMax && std::isinf(state.value) && state.value > 0.0) {
+        return L"\u221E";
+    }
     wchar_t text[48]{};
     if (state.logarithmic) {
         swprintf_s(text, std::size(text), L"%g", state.value);
@@ -707,8 +725,21 @@ void SliderSetFromPoint(HWND window, SliderState& state, int x)
     RECT track{};
     SliderTrackRect(window, track);
     const int span = std::max(static_cast<int>(track.right - track.left), 1);
+    if (state.infiniteAtMax && x >= track.right) {
+        // The right edge is a separate end stop for infinity. The pixel just
+        // before it is the last finite position (state.max).
+        SliderApply(window, state, std::numeric_limits<double>::infinity(),
+                    true);
+        return;
+    }
+
+    // Reserve one pixel for the infinity end stop, so the finite scale ends
+    // at exactly max one pixel before the right edge.
+    const int finiteSpan = state.infiniteAtMax ? std::max(span - 1, 1) : span;
+    const int offset =
+        std::clamp(static_cast<int>(x - track.left), 0, finiteSpan);
     const double normalized =
-        static_cast<double>(x - track.left) / static_cast<double>(span);
+        static_cast<double>(offset) / static_cast<double>(finiteSpan);
     SliderApply(window, state, SliderValueAt(state, normalized), true);
 }
 
@@ -859,6 +890,21 @@ LRESULT CALLBACK SliderProc(HWND window, UINT message, WPARAM wParam,
         const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
         const double factor =
             state->logarithmic ? 1.05 : state->step;
+        if (state->infiniteAtMax) {
+            const bool positiveInfinity =
+                std::isinf(state->value) && state->value > 0.0;
+            if (positiveInfinity) {
+                if (delta < 0) {
+                    SliderApply(window, *state, state->max, true);
+                }
+                return 0;
+            }
+            if (delta > 0 && state->value >= state->max) {
+                SliderApply(window, *state,
+                            std::numeric_limits<double>::infinity(), true);
+                return 0;
+            }
+        }
         double value = state->value;
         if (state->logarithmic) {
             value = delta > 0 ? value * factor : value / factor;
@@ -1057,6 +1103,7 @@ HWND Slider(HWND parent, int id, const SliderSpec& spec)
     state->step = spec.step;
     state->logarithmic = spec.logarithmic;
     state->decimals = spec.decimals;
+    state->infiniteAtMax = spec.infiniteAtMax;
     state->value = SnapSliderValue(*state, spec.min);
 
     HWND control = CreateWindowExW(

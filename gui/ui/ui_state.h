@@ -27,44 +27,40 @@ enum : int {
     IDC_MONO_NOTE,
 
     // Effect parameters.
-    IDC_GATE_THRESHOLD_LABEL,
-    IDC_GATE_THRESHOLD_SLIDER,
-    IDC_GATE_RANGE_LABEL,
-    IDC_GATE_RANGE_SLIDER,
-    IDC_GATE_ATTACK_LABEL,
-    IDC_GATE_ATTACK_SLIDER,
-    IDC_GATE_HOLD_LABEL,
-    IDC_GATE_HOLD_SLIDER,
-    IDC_GATE_RELEASE_LABEL,
-    IDC_GATE_RELEASE_SLIDER,
-    IDC_GATE_LOOKAHEAD_LABEL,
-    IDC_GATE_LOOKAHEAD_SLIDER,
-    IDC_GATE_LOOKAHEAD_ICON,
-    IDC_COMP_THRESHOLD_LABEL,
-    IDC_COMP_THRESHOLD_SLIDER,
-    IDC_COMP_RATIO_LABEL,
-    IDC_COMP_RATIO_SLIDER,
-    IDC_COMP_ATTACK_LABEL,
-    IDC_COMP_ATTACK_SLIDER,
-    IDC_COMP_RELEASE_LABEL,
-    IDC_COMP_RELEASE_SLIDER,
-    IDC_MAKEUP_LABEL,
-    IDC_MAKEUP_SLIDER,
-    IDC_DYNAMIC_EXTEND,
-    IDC_DYN_FREQUENCY_LABEL,
-    IDC_DYN_FREQUENCY_SLIDER,
-    IDC_DYN_Q_LABEL,
-    IDC_DYN_Q_SLIDER,
+    IDC_DYN_MODE_LABEL,
+    IDC_DYN_MODE_COMBO,
+    IDC_DYN_INPUT_LABEL,
+    IDC_DYN_INPUT_SLIDER,
     IDC_DYN_THRESHOLD_LABEL,
     IDC_DYN_THRESHOLD_SLIDER,
     IDC_DYN_RATIO_LABEL,
     IDC_DYN_RATIO_SLIDER,
-    IDC_DYN_RANGE_LABEL,
-    IDC_DYN_RANGE_SLIDER,
     IDC_DYN_ATTACK_LABEL,
     IDC_DYN_ATTACK_SLIDER,
     IDC_DYN_RELEASE_LABEL,
     IDC_DYN_RELEASE_SLIDER,
+    IDC_DYN_OUTPUT_LABEL,
+    IDC_DYN_OUTPUT_SLIDER,
+    IDC_DYN_LOOKAHEAD_LABEL,
+    IDC_DYN_LOOKAHEAD_SLIDER,
+    IDC_DYN_LOOKAHEAD_ICON,
+    IDC_GAIN_LABEL,
+    IDC_GAIN_SLIDER,
+    IDC_EQ_EXTEND,
+    IDC_EQ_FREQUENCY_LABEL,
+    IDC_EQ_FREQUENCY_SLIDER,
+    IDC_EQ_Q_LABEL,
+    IDC_EQ_Q_SLIDER,
+    IDC_EQ_THRESHOLD_LABEL,
+    IDC_EQ_THRESHOLD_SLIDER,
+    IDC_EQ_RATIO_LABEL,
+    IDC_EQ_RATIO_SLIDER,
+    IDC_EQ_RANGE_LABEL,
+    IDC_EQ_RANGE_SLIDER,
+    IDC_EQ_ATTACK_LABEL,
+    IDC_EQ_ATTACK_SLIDER,
+    IDC_EQ_RELEASE_LABEL,
+    IDC_EQ_RELEASE_SLIDER,
     IDC_DIST_FUNCTION_LABEL,
     IDC_DIST_FUNCTION_COMBO,
     IDC_DIST_DRIVE_LABEL,
@@ -100,17 +96,15 @@ enum : int {
 enum ParamReset : int {
     ParamResetNoiseReduction,
     ParamResetNoiseFftSize,
-    ParamResetGateThreshold,
-    ParamResetGateRange,
-    ParamResetGateAttack,
-    ParamResetGateHold,
-    ParamResetGateRelease,
-    ParamResetGateLookahead,
-    ParamResetCompThreshold,
-    ParamResetCompRatio,
-    ParamResetCompAttack,
-    ParamResetCompRelease,
-    ParamResetMakeup,
+    ParamResetDynamicsMode,
+    ParamResetDynamicsInput,
+    ParamResetDynamicsThreshold,
+    ParamResetDynamicsRatio,
+    ParamResetDynamicsAttack,
+    ParamResetDynamicsRelease,
+    ParamResetDynamicsOutput,
+    ParamResetDynamicsLookahead,
+    ParamResetGain,
     ParamResetDynExpand,
     ParamResetDynFrequency,
     ParamResetDynQ,
@@ -166,44 +160,40 @@ extern HWND g_mainEnableIcon;
 extern HWND g_monoNote;
 extern HWND g_paramResetButtons[ParamResetCount];
 
-extern HWND g_gateThresholdLabel;
-extern HWND g_gateThresholdSlider;
-extern HWND g_gateRangeLabel;
-extern HWND g_gateRangeSlider;
-extern HWND g_gateAttackLabel;
-extern HWND g_gateAttackSlider;
-extern HWND g_gateHoldLabel;
-extern HWND g_gateHoldSlider;
-extern HWND g_gateReleaseLabel;
-extern HWND g_gateReleaseSlider;
-extern HWND g_gateLookaheadLabel;
-extern HWND g_gateLookaheadSlider;
-extern HWND g_gateLookaheadIcon;
-extern HWND g_compThresholdLabel;
-extern HWND g_compThresholdSlider;
-extern HWND g_compRatioLabel;
-extern HWND g_compRatioSlider;
-extern HWND g_compAttackLabel;
-extern HWND g_compAttackSlider;
-extern HWND g_compReleaseLabel;
-extern HWND g_compReleaseSlider;
-extern HWND g_makeupLabel;
-extern HWND g_makeupSlider;
-extern HWND g_dynamicExtend;
-extern HWND g_dynFrequencyLabel;
-extern HWND g_dynFrequencySlider;
-extern HWND g_dynQLabel;
-extern HWND g_dynQSlider;
-extern HWND g_dynThresholdLabel;
-extern HWND g_dynThresholdSlider;
-extern HWND g_dynRatioLabel;
-extern HWND g_dynRatioSlider;
-extern HWND g_dynRangeLabel;
-extern HWND g_dynRangeSlider;
-extern HWND g_dynAttackLabel;
-extern HWND g_dynAttackSlider;
-extern HWND g_dynReleaseLabel;
-extern HWND g_dynReleaseSlider;
+extern HWND g_dynamicsModeLabel;
+extern HWND g_dynamicsModeCombo;
+extern HWND g_dynamicsInputLabel;
+extern HWND g_dynamicsInputSlider;
+extern HWND g_dynamicsThresholdLabel;
+extern HWND g_dynamicsThresholdSlider;
+extern HWND g_dynamicsRatioLabel;
+extern HWND g_dynamicsRatioSlider;
+extern HWND g_dynamicsAttackLabel;
+extern HWND g_dynamicsAttackSlider;
+extern HWND g_dynamicsReleaseLabel;
+extern HWND g_dynamicsReleaseSlider;
+extern HWND g_dynamicsOutputLabel;
+extern HWND g_dynamicsOutputSlider;
+extern HWND g_dynamicsLookaheadLabel;
+extern HWND g_dynamicsLookaheadSlider;
+extern HWND g_dynamicsLookaheadIcon;
+extern HWND g_gainLabel;
+extern HWND g_gainSlider;
+extern HWND g_eqExtend;
+extern HWND g_eqFrequencyLabel;
+extern HWND g_eqFrequencySlider;
+extern HWND g_eqQLabel;
+extern HWND g_eqQSlider;
+extern HWND g_eqThresholdLabel;
+extern HWND g_eqThresholdSlider;
+extern HWND g_eqRatioLabel;
+extern HWND g_eqRatioSlider;
+extern HWND g_eqRangeLabel;
+extern HWND g_eqRangeSlider;
+extern HWND g_eqAttackLabel;
+extern HWND g_eqAttackSlider;
+extern HWND g_eqReleaseLabel;
+extern HWND g_eqReleaseSlider;
 extern HWND g_distFunctionLabel;
 extern HWND g_distFunctionCombo;
 extern HWND g_distDriveLabel;

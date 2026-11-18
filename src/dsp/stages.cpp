@@ -29,16 +29,15 @@ double EffectiveSampleRate(const AudioFormat& format)
 
 } // namespace
 
-void GateStage::Configure(const AudioFormat& format)
+void DynamicsStage::Configure(const AudioFormat& format)
 {
     m_channels = format.channels;
 
     // Reserve the largest lookahead the settings clamp allows, so a live
     // Update can lengthen the delay without allocating.
-    constexpr double kMaxLookaheadMs = 300.0;
     const double sampleRate = EffectiveSampleRate(format);
-    m_delayCapacityFrames =
-        static_cast<UINT32>(kMaxLookaheadMs * 0.001 * sampleRate + 0.5);
+    m_delayCapacityFrames = static_cast<UINT32>(
+        apo::kDynamicsMaxLookaheadMs * 0.001 * sampleRate + 0.5);
     if (m_delayCapacityFrames > 0 && m_channels > 0)
     {
         m_delay.assign(
@@ -54,28 +53,31 @@ void GateStage::Configure(const AudioFormat& format)
     Reset();
 }
 
-void GateStage::Update(const EffectInstance& effect,
-                       const AudioFormat& format)
+void DynamicsStage::Update(const EffectInstance& effect,
+                           const AudioFormat& format)
 {
     const bool wasEnabled = m_settings.enabled;
     const double oldLookahead = m_settings.lookaheadMs;
-    m_settings = effect.gate;
+    const DynamicsMode oldMode = m_settings.mode;
+    m_settings = effect.dynamics;
     ApplyCoefficients(format);
 
-    // Changing the delay length or bypass state invalidates the buffered tail.
+    // A bypass change, a different delay length, or a mode flip invalidates the
+    // buffered tail and the smoothed gain.
     if (wasEnabled != m_settings.enabled ||
-        oldLookahead != m_settings.lookaheadMs)
+        oldLookahead != m_settings.lookaheadMs || oldMode != m_settings.mode)
     {
         Reset();
     }
 }
 
-void GateStage::ApplyCoefficients(const AudioFormat& format)
+void DynamicsStage::ApplyCoefficients(const AudioFormat& format)
 {
     const double sampleRate = EffectiveSampleRate(format);
 
-    m_thresholdLinear = DecibelsToLinear(m_settings.thresholdDb);
-    m_floorGain = DecibelsToLinear(-m_settings.rangeDb);
+    m_thresholdDb = m_settings.thresholdDb;
+    m_inputGain = DecibelsToLinear(m_settings.inputDb);
+    m_outputGain = DecibelsToLinear(m_settings.outputDb);
     m_attackCoeff = TimeCoefficient(m_settings.attackMs, sampleRate);
     m_releaseCoeff = TimeCoefficient(m_settings.releaseMs, sampleRate);
 
@@ -87,24 +89,16 @@ void GateStage::ApplyCoefficients(const AudioFormat& format)
         delayFrames = m_delayCapacityFrames;
     }
     m_delayFrames = delayFrames;
-
-    // The detector runs ahead of the delayed audio, so extend the hold by the
-    // lookahead to keep the same hold time at the output.
-    const double holdSeconds = m_settings.holdMs * 0.001;
-    m_holdFrames = static_cast<UINT32>(holdSeconds * sampleRate + 0.5) +
-                   m_delayFrames;
 }
 
-void GateStage::Reset()
+void DynamicsStage::Reset()
 {
-    m_holdCounter = 0;
-    m_open = true;
-    m_gain = 1.0;
+    m_gainDb = 0.0;
     m_delayWrite = 0;
     std::fill(m_delay.begin(), m_delay.end(), 0.0);
 }
 
-void GateStage::Process(double* samples, UINT32 frames, UINT32 channels)
+void DynamicsStage::Process(double* samples, UINT32 frames, UINT32 channels)
 {
     if (!m_settings.enabled)
     {
@@ -118,27 +112,25 @@ void GateStage::Process(double* samples, UINT32 frames, UINT32 channels)
     for (UINT32 frame = 0; frame < frames; ++frame)
     {
         double* values = samples + static_cast<size_t>(frame) * channels;
+
+        // Input gain feeds both the signal and the linked peak detector.
+        for (UINT32 channel = 0; channel < channels; ++channel)
+        {
+            values[channel] *= m_inputGain;
+        }
+
         const double peak = PeakOfFrame(values, channels);
-
-        if (peak >= m_thresholdLinear)
-        {
-            m_holdCounter = m_holdFrames;
-            m_open = true;
-        }
-        else if (m_holdCounter > 0)
-        {
-            --m_holdCounter;
-            m_open = true;
-        }
-        else
-        {
-            m_open = false;
-        }
-
-        const double target = m_open ? 1.0 : m_floorGain;
+        const double levelDb = LinearToDecibels(peak);
+        const double targetDb =
+            DynamicsGainDb(levelDb, m_thresholdDb, m_settings.ratio,
+                           m_settings.mode);
+        // Attack while the gain change deepens, release as it returns to unity.
+        // Magnitude keeps this correct in both the cutting and boosting modes.
         const double coefficient =
-            (target > m_gain) ? m_attackCoeff : m_releaseCoeff;
-        m_gain += (target - m_gain) * coefficient;
+            (std::fabs(targetDb) > std::fabs(m_gainDb)) ? m_attackCoeff
+                                                        : m_releaseCoeff;
+        m_gainDb += (targetDb - m_gainDb) * coefficient;
+        const double gain = DecibelsToLinear(m_gainDb) * m_outputGain;
 
         if (lookahead)
         {
@@ -149,7 +141,7 @@ void GateStage::Process(double* samples, UINT32 frames, UINT32 channels)
             for (UINT32 channel = 0; channel < channels; ++channel)
             {
                 const double current = values[channel];
-                values[channel] = delayed[channel] * m_gain;
+                values[channel] = delayed[channel] * gain;
                 delayed[channel] = current;
             }
 
@@ -162,84 +154,13 @@ void GateStage::Process(double* samples, UINT32 frames, UINT32 channels)
         {
             for (UINT32 channel = 0; channel < channels; ++channel)
             {
-                values[channel] *= m_gain;
+                values[channel] *= gain;
             }
         }
     }
 }
 
-void CompressorStage::Configure(const AudioFormat& format)
-{
-    ApplyCoefficients(format);
-    Reset();
-}
-
-void CompressorStage::Update(const EffectInstance& effect,
-                             const AudioFormat& format)
-{
-    const bool wasEnabled = m_settings.enabled;
-    m_settings = effect.compressor;
-    ApplyCoefficients(format);
-    if (wasEnabled != m_settings.enabled)
-    {
-        Reset();
-    }
-}
-
-void CompressorStage::ApplyCoefficients(const AudioFormat& format)
-{
-    const double sampleRate = EffectiveSampleRate(format);
-
-    m_thresholdLinear = DecibelsToLinear(m_settings.thresholdDb);
-    m_attackCoeff = TimeCoefficient(m_settings.attackMs, sampleRate);
-    m_releaseCoeff = TimeCoefficient(m_settings.releaseMs, sampleRate);
-}
-
-void CompressorStage::Reset()
-{
-    m_envelopeDb = 0.0;
-}
-
-void CompressorStage::Process(double* samples, UINT32 frames, UINT32 channels)
-{
-    if (!m_settings.enabled)
-    {
-        return;
-    }
-
-    const double ratio = (m_settings.ratio > 0.0) ? m_settings.ratio : 1.0;
-
-    for (UINT32 frame = 0; frame < frames; ++frame)
-    {
-        double* values = samples + static_cast<size_t>(frame) * channels;
-        const double peak = PeakOfFrame(values, channels);
-
-        double targetDb = 0.0;
-        if (peak > m_thresholdLinear)
-        {
-            const double levelDb = 20.0 * std::log10(peak);
-            targetDb =
-                (m_settings.thresholdDb - levelDb) * (1.0 - 1.0 / ratio);
-            if (targetDb > 0.0)
-            {
-                targetDb = 0.0;
-            }
-        }
-
-        // Attack when we need more reduction, release when we need less.
-        const double coefficient =
-            (targetDb < m_envelopeDb) ? m_attackCoeff : m_releaseCoeff;
-        m_envelopeDb += (targetDb - m_envelopeDb) * coefficient;
-
-        const double gain = DecibelsToLinear(m_envelopeDb);
-        for (UINT32 channel = 0; channel < channels; ++channel)
-        {
-            values[channel] *= gain;
-        }
-    }
-}
-
-void DynamicStage::Configure(const AudioFormat& format)
+void EqualizerStage::Configure(const AudioFormat& format)
 {
     m_channels = format.channels;
     m_ic1.assign(m_channels, 0.0);
@@ -250,14 +171,14 @@ void DynamicStage::Configure(const AudioFormat& format)
     Reset();
 }
 
-void DynamicStage::Update(const EffectInstance& effect,
+void EqualizerStage::Update(const EffectInstance& effect,
                           const AudioFormat& format)
 {
     const bool wasEnabled = m_settings.enabled;
     const double oldFrequency = m_settings.frequencyHz;
     const double oldQ = m_settings.q;
 
-    m_settings = effect.dynamics;
+    m_settings = effect.equalizer;
     ApplyCoefficients(format);
 
     // Changing the filter shape invalidates the filter state.
@@ -268,7 +189,7 @@ void DynamicStage::Update(const EffectInstance& effect,
     }
 }
 
-void DynamicStage::ApplyCoefficients(const AudioFormat& format)
+void EqualizerStage::ApplyCoefficients(const AudioFormat& format)
 {
     constexpr double kPi = 3.14159265358979323846;
     const double sampleRate = EffectiveSampleRate(format);
@@ -300,7 +221,7 @@ void DynamicStage::ApplyCoefficients(const AudioFormat& format)
     m_detectorRelease = TimeCoefficient(100.0, sampleRate);
 }
 
-void DynamicStage::Reset()
+void EqualizerStage::Reset()
 {
     m_gainDb = 0.0;
     m_detectorEnvelope = 0.0;
@@ -309,7 +230,7 @@ void DynamicStage::Reset()
     std::fill(m_band.begin(), m_band.end(), 0.0);
 }
 
-void DynamicStage::Process(double* samples, UINT32 frames, UINT32 channels)
+void EqualizerStage::Process(double* samples, UINT32 frames, UINT32 channels)
 {
     if (!m_settings.enabled)
     {
@@ -1056,28 +977,25 @@ void StagePool::Configure(const AudioFormat& format,
             std::unique_ptr<Stage> stage;
             switch (type)
             {
+            case EffectType::Gain:
+                stage = std::make_unique<GainStage>();
+                break;
             case EffectType::Noise:
                 // Always allocate the noise stages. Without a profile they
                 // pass audio through unchanged, and a live capture can fill
                 // their bins without rebuilding the pool.
                 stage = std::make_unique<NoiseStage>(profile);
                 break;
-            case EffectType::Gate:
-                stage = std::make_unique<GateStage>();
+            case EffectType::Dynamics:
+                stage = std::make_unique<DynamicsStage>();
                 break;
-            case EffectType::Dynamic:
-                stage = std::make_unique<DynamicStage>();
-                break;
-            case EffectType::Compressor:
-                stage = std::make_unique<CompressorStage>();
-                break;
-            case EffectType::Gain:
-                stage = std::make_unique<GainStage>();
+            case EffectType::Equalizer:
+                stage = std::make_unique<EqualizerStage>();
                 break;
             case EffectType::Mono:
                 stage = std::make_unique<MonoStage>();
                 break;
-            case EffectType::Distortion:
+            case EffectType::Saturation:
                 stage = std::make_unique<DistortionStage>();
                 break;
             case EffectType::Reverb:

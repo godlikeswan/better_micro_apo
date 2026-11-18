@@ -18,6 +18,9 @@ struct SliderSpec {
     double step = 1.0;
     bool logarithmic = false;
     int decimals = 0;
+    // When true, the right end stop reads as infinity. `max` is the last
+    // finite slider position.
+    bool infiniteAtMax = false;
 };
 
 int Scale(int value);

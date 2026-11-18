@@ -1,7 +1,8 @@
 # Gain
 
 Turns the microphone input up or down. If your mic is too quiet, this is the
-first effect to reach for.
+first effect to reach for. It appears first in the Add effect list and is
+enabled with a default of **+12 dB**.
 
 ## Getting a good level
 
@@ -10,21 +11,22 @@ first effect to reach for.
   what the other effects are doing. You can move it later if you like.
 - Put on headphones, check **Listen to this device**, and talk at the volume
   you normally use.
-- Move **Makeup** to the right until the voice sounds comfortable. Watch the
-  meters at the bottom: for speech, peaks around **−5 dBFS** and RMS around
-  **−20 dBFS** are a good place to land. There should be no **CLIP** — if it
-  shows up, slide the makeup down.
+- Move **Gain (dB)** until the voice sounds comfortable. Watch the meters at the
+  bottom: for speech, peaks around **−5 dBFS** and RMS around **−20 dBFS** are a
+  good place to land. There should be no **CLIP** — if it shows up, slide the
+  gain down.
 - If turning the mic up also makes room noise obvious, fix that with
-  [Noise reduction](noise-reduction.md) or [Gate](gate.md) instead of lowering
-  the voice level again.
-- A new Gain starts at **0 dB**, so adding it changes nothing until you move the
-  slider. The little ↺ button next to it goes back to 0 dB.
+  [Noise reduction](noise-reduction.md) or the unified
+  [Gate/Compressor/Limiter/Expander](dynamics.md) effect instead of lowering the
+  voice level again.
+- A newly added Gain starts at **+12 dB**, so it raises the level immediately.
+  The little ↺ button next to it goes back to +12 dB.
 
 ## Controls
 
 | Control | Default | Range | What it does |
 | --- | --- | --- | --- |
-| Makeup | 0 dB | −24 to +48 dB | Turns the whole signal up or down. |
+| Gain (dB) | +12 dB | −24 to +50 dB | Turns the whole signal up or down. |
 
 ## Under the hood
 

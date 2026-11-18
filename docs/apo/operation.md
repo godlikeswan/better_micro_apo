@@ -52,15 +52,15 @@ All of these happen once per stream bind; none happen in `APOProcess`.
 | --- | --- | --- |
 | `BetterMicroApo` | `m_scratch` | `maxFrames * channels` `double`s. The interleaved input is decoded here, stages run in place, and the result is encoded to the output. |
 | `Chain` | `m_stages` | Reserves `kMaxEffects + 1` (17) `Stage*` slots at construction so the temporary capture tap never allocates; `Clear`/refill never allocates. |
-| `StagePool` | stage objects | One stage per possible slot per type, `Configure`d once. Heavy types (noise, gate, reverb) allow 4 instances; all others 16. Noise stages are always created and pass audio through until a profile is available. |
-| `GateStage` | `m_delay` | `ceil(300 ms * sampleRate) * channels` `double`s, sized for the maximum clamp so a live lookahead change never allocates. |
-| `DynamicStage` | `m_ic1`, `m_ic2`, `m_band` | Per-channel filter and band state. |
+| `StagePool` | stage objects | One stage per possible slot per type, `Configure`d once. Heavy types (noise, dynamics, reverb) allow 4 instances; all others 16. Noise stages are always created and pass audio through until a profile is available. |
+| `DynamicsStage` | `m_delay` | `ceil(300 ms * sampleRate) * channels` `double`s, sized for the maximum clamp so a live lookahead change never allocates. |
+| `EqualizerStage` | `m_ic1`, `m_ic2`, `m_band` | Per-channel filter and band state. |
 | `NoiseStage` | FFT plans + analysis buffers | Radix-2 tables and windows for every supported size (256–4096), profile bins, gain arrays, input/output/history/overlap-add and real/imag arrays sized for the largest size. `Update` switches the active size without allocating. |
 | `ReverbStage` | tank buffers + predelay | Per channel: 8 damped combs and 4 allpasses (tunings scaled to the sample rate, odd channels get the classic stereo spread) plus `ceil(200 ms * sampleRate) + 1` predelay frames. |
 | `BetterMicroApo` | runtime file mapping | A read-only `MapViewOfFile` of `runtime\{endpoint-guid}.dat`, closed in `UnlockForProcess`. |
 | `BetterMicroApo` | capture mapping and tap | A read/write mapping of `runtime\{endpoint-guid}.capture` plus one configured `StageCaptureTap`, both closed in `UnlockForProcess`. |
 
-Gain, mono, and distortion stages allocate no buffers at bind time; their
+Gain, mono, and saturation stages allocate no buffers at bind time; their
 coefficients are derived in `Update`.
 
 `UnlockForProcess` closes the mapping, clears the chain and pool, drops the

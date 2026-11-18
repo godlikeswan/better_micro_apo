@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -118,6 +119,20 @@ std::wstring Utf8ToWide(const std::string& data)
 
 bool ParseDouble(const std::wstring& text, double& value)
 {
+    // Infinity is only meaningful for the dynamics ratio. Other fields accept
+    // it syntactically and ClampFinite replaces it with their default.
+    if (EqualsIgnoreCase(text, L"inf") || EqualsIgnoreCase(text, L"+inf") ||
+        EqualsIgnoreCase(text, L"infinity") ||
+        EqualsIgnoreCase(text, L"+infinity")) {
+        value = std::numeric_limits<double>::infinity();
+        return true;
+    }
+    if (EqualsIgnoreCase(text, L"-inf") ||
+        EqualsIgnoreCase(text, L"-infinity")) {
+        value = -std::numeric_limits<double>::infinity();
+        return true;
+    }
+
     wchar_t* end = nullptr;
     const double parsed = std::wcstod(text.c_str(), &end);
     if (end == text.c_str()) {
@@ -167,6 +182,9 @@ bool ParseInt(const std::wstring& text, int& value)
 
 std::string FormatDouble(double value)
 {
+    if (std::isinf(value)) {
+        return (value > 0.0) ? "inf" : "-inf";
+    }
     char text[64]{};
     sprintf_s(text, "%.6f", value);
     return text;
@@ -189,15 +207,24 @@ const wchar_t* EffectTypeName(EffectType type)
 {
     switch (type)
     {
-    case EffectType::Noise:      return L"Noise reduction";
-    case EffectType::Gate:       return L"Gate";
-    case EffectType::Dynamic:    return L"Dynamic";
-    case EffectType::Compressor: return L"Compressor";
     case EffectType::Gain:       return L"Gain";
+    case EffectType::Noise:      return L"Noise reduction";
+    case EffectType::Dynamics:   return L"Gate/Compressor/Limiter/Expander";
+    case EffectType::Equalizer:  return L"Equalizer";
     case EffectType::Mono:       return L"Mono";
-    case EffectType::Distortion: return L"Distortion";
+    case EffectType::Saturation: return L"Saturation/Overdrive/Distortion";
     case EffectType::Reverb:     return L"Reverb";
     default:                     return L"";
+    }
+}
+
+const wchar_t* DynamicsModeName(DynamicsMode mode)
+{
+    switch (mode)
+    {
+    case DynamicsMode::CompressorLimiter: return L"Compressor/Limiter";
+    case DynamicsMode::ExpanderGate:      return L"Expander/Gate";
+    default:                              return L"";
     }
 }
 
@@ -219,13 +246,12 @@ const char* EffectTypeKey(EffectType type)
 {
     switch (type)
     {
-    case EffectType::Noise:      return "noise";
-    case EffectType::Gate:       return "gate";
-    case EffectType::Dynamic:    return "dynamic";
-    case EffectType::Compressor: return "compressor";
     case EffectType::Gain:       return "gain";
+    case EffectType::Noise:      return "noise";
+    case EffectType::Dynamics:   return "dynamics";
+    case EffectType::Equalizer:  return "equalizer";
     case EffectType::Mono:       return "mono";
-    case EffectType::Distortion: return "distortion";
+    case EffectType::Saturation: return "saturation";
     case EffectType::Reverb:     return "reverb";
     default:                     return "gain";
     }
@@ -250,7 +276,7 @@ int EffectTypeCapacity(EffectType type)
     switch (type)
     {
     case EffectType::Noise:
-    case EffectType::Gate:
+    case EffectType::Dynamics:
     case EffectType::Reverb:
         return kMaxHeavyEffects;
     default:
@@ -262,13 +288,12 @@ bool EffectEnabled(const EffectInstance& effect)
 {
     switch (effect.type)
     {
-    case EffectType::Noise:      return effect.noise.enabled;
-    case EffectType::Gate:       return effect.gate.enabled;
-    case EffectType::Dynamic:    return effect.dynamics.enabled;
-    case EffectType::Compressor: return effect.compressor.enabled;
     case EffectType::Gain:       return effect.gain.enabled;
+    case EffectType::Noise:      return effect.noise.enabled;
+    case EffectType::Dynamics:   return effect.dynamics.enabled;
+    case EffectType::Equalizer:  return effect.equalizer.enabled;
     case EffectType::Mono:       return effect.mono.enabled;
-    case EffectType::Distortion: return effect.distortion.enabled;
+    case EffectType::Saturation: return effect.distortion.enabled;
     case EffectType::Reverb:     return effect.reverb.enabled;
     default:                     return false;
     }
@@ -278,13 +303,12 @@ void SetEffectEnabled(EffectInstance& effect, bool enabled)
 {
     switch (effect.type)
     {
-    case EffectType::Noise:      effect.noise.enabled = enabled; break;
-    case EffectType::Gate:       effect.gate.enabled = enabled; break;
-    case EffectType::Dynamic:    effect.dynamics.enabled = enabled; break;
-    case EffectType::Compressor: effect.compressor.enabled = enabled; break;
     case EffectType::Gain:       effect.gain.enabled = enabled; break;
+    case EffectType::Noise:      effect.noise.enabled = enabled; break;
+    case EffectType::Dynamics:   effect.dynamics.enabled = enabled; break;
+    case EffectType::Equalizer:  effect.equalizer.enabled = enabled; break;
     case EffectType::Mono:       effect.mono.enabled = enabled; break;
-    case EffectType::Distortion: effect.distortion.enabled = enabled; break;
+    case EffectType::Saturation: effect.distortion.enabled = enabled; break;
     case EffectType::Reverb:     effect.reverb.enabled = enabled; break;
     default:                     break;
     }
@@ -344,49 +368,59 @@ void ClampFinite(double& value, double fallback, double low, double high)
     value = Clamp(value, low, high);
 }
 
+void ClampRatio(double& value)
+{
+    if (std::isinf(value) && value > 0.0) {
+        return;
+    }
+    if (!std::isfinite(value)) {
+        value = 5.0;
+    }
+    value = Clamp(value, kDynamicsMinRatio, kDynamicsMaxFiniteRatio);
+}
+
 void ClampEffect(EffectInstance& effect)
 {
     switch (effect.type)
     {
+    case EffectType::Gain:
+        ClampFinite(effect.gain.gainDb, 12.0, -24.0, 50.0);
+        break;
+
     case EffectType::Noise:
         ClampFinite(effect.noise.reductionDb, 12.0, 0.0, 50.0);
         effect.noise.fftSize = ValidNoiseFftSize(effect.noise.fftSize);
         break;
 
-    case EffectType::Gate:
-        ClampFinite(effect.gate.thresholdDb, -50.0, -80.0, 0.0);
-        ClampFinite(effect.gate.rangeDb, 60.0, 0.0, 96.0);
-        ClampFinite(effect.gate.attackMs, 5.0, 0.1, 1000.0);
-        ClampFinite(effect.gate.holdMs, 50.0, 0.0, 2000.0);
-        ClampFinite(effect.gate.releaseMs, 100.0, 1.0, 5000.0);
-        ClampFinite(effect.gate.lookaheadMs, 0.0, 0.0, 300.0);
+    case EffectType::Dynamics:
+        if (effect.dynamics.mode < DynamicsMode::CompressorLimiter ||
+            effect.dynamics.mode >= DynamicsMode::Count) {
+            effect.dynamics.mode = DynamicsMode::CompressorLimiter;
+        }
+        ClampFinite(effect.dynamics.thresholdDb, -15.0, -80.0, 0.0);
+        ClampRatio(effect.dynamics.ratio);
+        ClampFinite(effect.dynamics.inputDb, 0.0, -24.0, 24.0);
+        ClampFinite(effect.dynamics.outputDb, 0.0, -24.0, 24.0);
+        ClampFinite(effect.dynamics.attackMs, 5.0, 0.1, 1000.0);
+        ClampFinite(effect.dynamics.releaseMs, 100.0, 1.0, 5000.0);
+        ClampFinite(effect.dynamics.lookaheadMs, 0.0, 0.0,
+                    kDynamicsMaxLookaheadMs);
         break;
 
-    case EffectType::Dynamic:
-        ClampFinite(effect.dynamics.frequencyHz, 120.0, 20.0, 2000.0);
-        ClampFinite(effect.dynamics.q, 0.7, 0.1, 10.0);
-        ClampFinite(effect.dynamics.thresholdDb, -45.0, -80.0, 0.0);
-        ClampFinite(effect.dynamics.ratio, 4.0, 1.0, 20.0);
-        ClampFinite(effect.dynamics.rangeDb, 18.0, 0.0, 36.0);
-        ClampFinite(effect.dynamics.attackMs, 10.0, 0.1, 1000.0);
-        ClampFinite(effect.dynamics.releaseMs, 150.0, 1.0, 5000.0);
-        break;
-
-    case EffectType::Compressor:
-        ClampFinite(effect.compressor.thresholdDb, -58.0, -60.0, 0.0);
-        ClampFinite(effect.compressor.ratio, 3.0, 1.0, 20.0);
-        ClampFinite(effect.compressor.attackMs, 5.0, 0.1, 1000.0);
-        ClampFinite(effect.compressor.releaseMs, 100.0, 1.0, 5000.0);
-        break;
-
-    case EffectType::Gain:
-        ClampFinite(effect.gain.gainDb, 0.0, -24.0, 48.0);
+    case EffectType::Equalizer:
+        ClampFinite(effect.equalizer.frequencyHz, 120.0, 20.0, 2000.0);
+        ClampFinite(effect.equalizer.q, 0.7, 0.1, 10.0);
+        ClampFinite(effect.equalizer.thresholdDb, -45.0, -80.0, 0.0);
+        ClampFinite(effect.equalizer.ratio, 4.0, 1.0, 20.0);
+        ClampFinite(effect.equalizer.rangeDb, 18.0, 0.0, 36.0);
+        ClampFinite(effect.equalizer.attackMs, 10.0, 0.1, 1000.0);
+        ClampFinite(effect.equalizer.releaseMs, 150.0, 1.0, 5000.0);
         break;
 
     case EffectType::Mono:
         break;
 
-    case EffectType::Distortion:
+    case EffectType::Saturation:
         if (effect.distortion.function < 0 ||
             effect.distortion.function >= kDistortionFunctionCount) {
             effect.distortion.function = kDistortionTanh;
@@ -512,61 +546,58 @@ void LoadEffectFields(const std::vector<KeyValue>& entries,
         }
     };
 
-    getBool(L"enabled", effect.noise.enabled);
-    getBool(L"enabled", effect.gate.enabled);
-    getBool(L"enabled", effect.dynamics.enabled);
-    getBool(L"enabled", effect.compressor.enabled);
     getBool(L"enabled", effect.gain.enabled);
+    getBool(L"enabled", effect.noise.enabled);
+    getBool(L"enabled", effect.dynamics.enabled);
+    getBool(L"enabled", effect.equalizer.enabled);
     getBool(L"enabled", effect.mono.enabled);
     getBool(L"enabled", effect.distortion.enabled);
     getBool(L"enabled", effect.reverb.enabled);
 
     switch (effect.type)
     {
+    case EffectType::Gain:
+        getDouble(L"gain_db", effect.gain.gainDb);
+        break;
+
     case EffectType::Noise:
         getDouble(L"noise_reduction_db", effect.noise.reductionDb);
         getInt(L"noise_fft_size", effect.noise.fftSize);
         break;
 
-    case EffectType::Gate:
-        getDouble(L"gate_threshold_db", effect.gate.thresholdDb);
-        getDouble(L"gate_range_db", effect.gate.rangeDb);
-        getDouble(L"gate_attack_ms", effect.gate.attackMs);
-        getDouble(L"gate_hold_ms", effect.gate.holdMs);
-        getDouble(L"gate_release_ms", effect.gate.releaseMs);
-        getDouble(L"gate_lookahead_ms", effect.gate.lookaheadMs);
+    case EffectType::Dynamics: {
+        int mode = static_cast<int>(DynamicsMode::CompressorLimiter);
+        getInt(L"dynamics_mode", mode);
+        effect.dynamics.mode = static_cast<DynamicsMode>(mode);
+        getDouble(L"dynamics_threshold_db", effect.dynamics.thresholdDb);
+        getDouble(L"dynamics_ratio", effect.dynamics.ratio);
+        getDouble(L"dynamics_input_db", effect.dynamics.inputDb);
+        getDouble(L"dynamics_output_db", effect.dynamics.outputDb);
+        getDouble(L"dynamics_attack_ms", effect.dynamics.attackMs);
+        getDouble(L"dynamics_release_ms", effect.dynamics.releaseMs);
+        getDouble(L"dynamics_lookahead_ms", effect.dynamics.lookaheadMs);
         break;
+    }
 
-    case EffectType::Dynamic:
-        getBool(L"dynamic_expand", effect.dynamics.expand);
-        getDouble(L"dynamic_frequency_hz", effect.dynamics.frequencyHz);
-        getDouble(L"dynamic_q", effect.dynamics.q);
-        getDouble(L"dynamic_threshold_db", effect.dynamics.thresholdDb);
-        getDouble(L"dynamic_ratio", effect.dynamics.ratio);
-        getDouble(L"dynamic_range_db", effect.dynamics.rangeDb);
-        getDouble(L"dynamic_attack_ms", effect.dynamics.attackMs);
-        getDouble(L"dynamic_release_ms", effect.dynamics.releaseMs);
-        break;
-
-    case EffectType::Compressor:
-        getDouble(L"compressor_threshold_db", effect.compressor.thresholdDb);
-        getDouble(L"compressor_ratio", effect.compressor.ratio);
-        getDouble(L"compressor_attack_ms", effect.compressor.attackMs);
-        getDouble(L"compressor_release_ms", effect.compressor.releaseMs);
-        break;
-
-    case EffectType::Gain:
-        getDouble(L"gain_db", effect.gain.gainDb);
+    case EffectType::Equalizer:
+        getBool(L"equalizer_expand", effect.equalizer.expand);
+        getDouble(L"equalizer_frequency_hz", effect.equalizer.frequencyHz);
+        getDouble(L"equalizer_q", effect.equalizer.q);
+        getDouble(L"equalizer_threshold_db", effect.equalizer.thresholdDb);
+        getDouble(L"equalizer_ratio", effect.equalizer.ratio);
+        getDouble(L"equalizer_range_db", effect.equalizer.rangeDb);
+        getDouble(L"equalizer_attack_ms", effect.equalizer.attackMs);
+        getDouble(L"equalizer_release_ms", effect.equalizer.releaseMs);
         break;
 
     case EffectType::Mono:
         break;
 
-    case EffectType::Distortion:
-        getInt(L"distortion_function", effect.distortion.function);
-        getDouble(L"distortion_drive_db", effect.distortion.driveDb);
-        getDouble(L"distortion_curvature", effect.distortion.curvature);
-        getDouble(L"distortion_output_db", effect.distortion.outputDb);
+    case EffectType::Saturation:
+        getInt(L"saturation_function", effect.distortion.function);
+        getDouble(L"saturation_drive_db", effect.distortion.driveDb);
+        getDouble(L"saturation_curvature", effect.distortion.curvature);
+        getDouble(L"saturation_output_db", effect.distortion.outputDb);
         break;
 
     case EffectType::Reverb:
@@ -627,9 +658,16 @@ bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
                      Trim(line.substr(equals + 1))});
     }
 
-    // Files older than version 4 kept a single effect list. They load as four
-    // empty presets. The old isolate_effects value is ignored: isolation is now
-    // always on for enabled devices.
+    // A schema change invalidates the whole file. Delete it instead of trying
+    // to reinterpret old fields; the endpoint starts with fresh defaults.
+    int version = 0;
+    const std::wstring* versionText = FindValue(entries, L"version");
+    if (versionText == nullptr || !ParseInt(*versionText, version) ||
+        version != kSettingsVersion)
+    {
+        DeleteFileW(SettingsPath(endpointId).c_str());
+        return false;
+    }
 
     if (const std::wstring* indexText =
             FindValue(entries, L"preset_index")) {
@@ -691,7 +729,7 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
 
     std::string text;
     text += "[dsp]\n";
-    text += "version=4\n";
+    text += "version=" + std::to_string(kSettingsVersion) + "\n";
     text += "preset_count=" + std::to_string(kPresetCount) + "\n";
     text += "preset_index=" + std::to_string(settings.presetIndex) + "\n";
     text += "isolate_effects=1\n";
@@ -717,6 +755,11 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
 
             switch (effect.type)
             {
+            case EffectType::Gain:
+                text += prefix + "gain_db=" +
+                        FormatDouble(effect.gain.gainDb) + "\n";
+                break;
+
             case EffectType::Noise:
                 text += prefix + "noise_reduction_db=" +
                         FormatDouble(effect.noise.reductionDb) + "\n";
@@ -724,67 +767,56 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
                         std::to_string(effect.noise.fftSize) + "\n";
                 break;
 
-            case EffectType::Gate:
-                text += prefix + "gate_threshold_db=" +
-                        FormatDouble(effect.gate.thresholdDb) + "\n";
-                text += prefix + "gate_range_db=" +
-                        FormatDouble(effect.gate.rangeDb) + "\n";
-                text += prefix + "gate_attack_ms=" +
-                        FormatDouble(effect.gate.attackMs) + "\n";
-                text += prefix + "gate_hold_ms=" +
-                        FormatDouble(effect.gate.holdMs) + "\n";
-                text += prefix + "gate_release_ms=" +
-                        FormatDouble(effect.gate.releaseMs) + "\n";
-                text += prefix + "gate_lookahead_ms=" +
-                        FormatDouble(effect.gate.lookaheadMs) + "\n";
-                break;
-
-            case EffectType::Dynamic:
-                text += prefix + "dynamic_expand=" +
-                        (effect.dynamics.expand ? "1" : "0") + "\n";
-                text += prefix + "dynamic_frequency_hz=" +
-                        FormatDouble(effect.dynamics.frequencyHz) + "\n";
-                text += prefix + "dynamic_q=" +
-                        FormatDouble(effect.dynamics.q) + "\n";
-                text += prefix + "dynamic_threshold_db=" +
+            case EffectType::Dynamics:
+                text += prefix + "dynamics_mode=" +
+                        std::to_string(static_cast<int>(effect.dynamics.mode)) +
+                        "\n";
+                text += prefix + "dynamics_threshold_db=" +
                         FormatDouble(effect.dynamics.thresholdDb) + "\n";
-                text += prefix + "dynamic_ratio=" +
+                text += prefix + "dynamics_ratio=" +
                         FormatDouble(effect.dynamics.ratio) + "\n";
-                text += prefix + "dynamic_range_db=" +
-                        FormatDouble(effect.dynamics.rangeDb) + "\n";
-                text += prefix + "dynamic_attack_ms=" +
+                text += prefix + "dynamics_input_db=" +
+                        FormatDouble(effect.dynamics.inputDb) + "\n";
+                text += prefix + "dynamics_output_db=" +
+                        FormatDouble(effect.dynamics.outputDb) + "\n";
+                text += prefix + "dynamics_attack_ms=" +
                         FormatDouble(effect.dynamics.attackMs) + "\n";
-                text += prefix + "dynamic_release_ms=" +
+                text += prefix + "dynamics_release_ms=" +
                         FormatDouble(effect.dynamics.releaseMs) + "\n";
+                text += prefix + "dynamics_lookahead_ms=" +
+                        FormatDouble(effect.dynamics.lookaheadMs) + "\n";
                 break;
 
-            case EffectType::Compressor:
-                text += prefix + "compressor_threshold_db=" +
-                        FormatDouble(effect.compressor.thresholdDb) + "\n";
-                text += prefix + "compressor_ratio=" +
-                        FormatDouble(effect.compressor.ratio) + "\n";
-                text += prefix + "compressor_attack_ms=" +
-                        FormatDouble(effect.compressor.attackMs) + "\n";
-                text += prefix + "compressor_release_ms=" +
-                        FormatDouble(effect.compressor.releaseMs) + "\n";
-                break;
-
-            case EffectType::Gain:
-                text += prefix + "gain_db=" +
-                        FormatDouble(effect.gain.gainDb) + "\n";
+            case EffectType::Equalizer:
+                text += prefix + "equalizer_expand=" +
+                        (effect.equalizer.expand ? "1" : "0") + "\n";
+                text += prefix + "equalizer_frequency_hz=" +
+                        FormatDouble(effect.equalizer.frequencyHz) + "\n";
+                text += prefix + "equalizer_q=" +
+                        FormatDouble(effect.equalizer.q) + "\n";
+                text += prefix + "equalizer_threshold_db=" +
+                        FormatDouble(effect.equalizer.thresholdDb) + "\n";
+                text += prefix + "equalizer_ratio=" +
+                        FormatDouble(effect.equalizer.ratio) + "\n";
+                text += prefix + "equalizer_range_db=" +
+                        FormatDouble(effect.equalizer.rangeDb) + "\n";
+                text += prefix + "equalizer_attack_ms=" +
+                        FormatDouble(effect.equalizer.attackMs) + "\n";
+                text += prefix + "equalizer_release_ms=" +
+                        FormatDouble(effect.equalizer.releaseMs) + "\n";
                 break;
 
             case EffectType::Mono:
                 break;
 
-            case EffectType::Distortion:
-                text += prefix + "distortion_function=" +
+            case EffectType::Saturation:
+                text += prefix + "saturation_function=" +
                         std::to_string(effect.distortion.function) + "\n";
-                text += prefix + "distortion_drive_db=" +
+                text += prefix + "saturation_drive_db=" +
                         FormatDouble(effect.distortion.driveDb) + "\n";
-                text += prefix + "distortion_curvature=" +
+                text += prefix + "saturation_curvature=" +
                         FormatDouble(effect.distortion.curvature) + "\n";
-                text += prefix + "distortion_output_db=" +
+                text += prefix + "saturation_output_db=" +
                         FormatDouble(effect.distortion.outputDb) + "\n";
                 break;
 

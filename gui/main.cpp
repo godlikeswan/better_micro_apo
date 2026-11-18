@@ -250,32 +250,30 @@ void ShowEffectControls(apo::EffectType type, bool show)
                  g_noiseFftSizeLabel, g_noiseFftSizeCombo, g_noiseCapture,
                  g_noiseNote});
         break;
-    case apo::EffectType::Gate:
-        showAll({g_gateThresholdLabel, g_gateThresholdSlider, g_gateRangeLabel,
-                 g_gateRangeSlider, g_gateAttackLabel, g_gateAttackSlider,
-                 g_gateHoldLabel, g_gateHoldSlider, g_gateReleaseLabel,
-                 g_gateReleaseSlider, g_gateLookaheadLabel,
-                 g_gateLookaheadSlider});
+    case apo::EffectType::Dynamics:
+        showAll({g_dynamicsModeLabel, g_dynamicsModeCombo,
+                 g_dynamicsInputLabel, g_dynamicsInputSlider,
+                 g_dynamicsThresholdLabel, g_dynamicsThresholdSlider,
+                 g_dynamicsRatioLabel, g_dynamicsRatioSlider,
+                 g_dynamicsAttackLabel, g_dynamicsAttackSlider,
+                 g_dynamicsReleaseLabel, g_dynamicsReleaseSlider,
+                 g_dynamicsOutputLabel, g_dynamicsOutputSlider,
+                 g_dynamicsLookaheadLabel, g_dynamicsLookaheadSlider});
         break;
-    case apo::EffectType::Dynamic:
-        showAll({g_dynamicExtend, g_dynFrequencyLabel, g_dynFrequencySlider,
-                 g_dynQLabel, g_dynQSlider, g_dynThresholdLabel,
-                 g_dynThresholdSlider, g_dynRatioLabel, g_dynRatioSlider,
-                 g_dynRangeLabel, g_dynRangeSlider, g_dynAttackLabel,
-                 g_dynAttackSlider, g_dynReleaseLabel, g_dynReleaseSlider});
-        break;
-    case apo::EffectType::Compressor:
-        showAll({g_compThresholdLabel, g_compThresholdSlider, g_compRatioLabel,
-                 g_compRatioSlider, g_compAttackLabel, g_compAttackSlider,
-                 g_compReleaseLabel, g_compReleaseSlider});
+    case apo::EffectType::Equalizer:
+        showAll({g_eqExtend, g_eqFrequencyLabel, g_eqFrequencySlider,
+                 g_eqQLabel, g_eqQSlider, g_eqThresholdLabel,
+                 g_eqThresholdSlider, g_eqRatioLabel, g_eqRatioSlider,
+                 g_eqRangeLabel, g_eqRangeSlider, g_eqAttackLabel,
+                 g_eqAttackSlider, g_eqReleaseLabel, g_eqReleaseSlider});
         break;
     case apo::EffectType::Gain:
-        showAll({g_makeupLabel, g_makeupSlider});
+        showAll({g_gainLabel, g_gainSlider});
         break;
     case apo::EffectType::Mono:
         showAll({g_monoNote});
         break;
-    case apo::EffectType::Distortion:
+    case apo::EffectType::Saturation:
         showAll({g_distFunctionLabel, g_distFunctionCombo,
                  g_distDriveLabel, g_distDriveSlider,
                  g_distCurvatureLabel, g_distCurvatureSlider,
@@ -295,25 +293,23 @@ void ShowEffectControls(apo::EffectType type, bool show)
 void EnableEffectControls(bool enabled)
 {
     const HWND controls[] = {
-        g_gateThresholdLabel, g_gateThresholdSlider,
-        g_gateRangeLabel, g_gateRangeSlider,
-        g_gateAttackLabel, g_gateAttackSlider,
-        g_gateHoldLabel, g_gateHoldSlider,
-        g_gateReleaseLabel, g_gateReleaseSlider,
-        g_gateLookaheadLabel, g_gateLookaheadSlider,
-        g_compThresholdLabel, g_compThresholdSlider,
-        g_compRatioLabel, g_compRatioSlider,
-        g_compAttackLabel, g_compAttackSlider,
-        g_compReleaseLabel, g_compReleaseSlider,
-        g_makeupLabel, g_makeupSlider,
-        g_dynamicExtend,
-        g_dynFrequencyLabel, g_dynFrequencySlider,
-        g_dynQLabel, g_dynQSlider,
-        g_dynThresholdLabel, g_dynThresholdSlider,
-        g_dynRatioLabel, g_dynRatioSlider,
-        g_dynRangeLabel, g_dynRangeSlider,
-        g_dynAttackLabel, g_dynAttackSlider,
-        g_dynReleaseLabel, g_dynReleaseSlider,
+        g_dynamicsModeLabel, g_dynamicsModeCombo,
+        g_dynamicsInputLabel, g_dynamicsInputSlider,
+        g_dynamicsThresholdLabel, g_dynamicsThresholdSlider,
+        g_dynamicsRatioLabel, g_dynamicsRatioSlider,
+        g_dynamicsAttackLabel, g_dynamicsAttackSlider,
+        g_dynamicsReleaseLabel, g_dynamicsReleaseSlider,
+        g_dynamicsOutputLabel, g_dynamicsOutputSlider,
+        g_dynamicsLookaheadLabel, g_dynamicsLookaheadSlider,
+        g_gainLabel, g_gainSlider,
+        g_eqExtend,
+        g_eqFrequencyLabel, g_eqFrequencySlider,
+        g_eqQLabel, g_eqQSlider,
+        g_eqThresholdLabel, g_eqThresholdSlider,
+        g_eqRatioLabel, g_eqRatioSlider,
+        g_eqRangeLabel, g_eqRangeSlider,
+        g_eqAttackLabel, g_eqAttackSlider,
+        g_eqReleaseLabel, g_eqReleaseSlider,
         g_distFunctionLabel, g_distFunctionCombo,
         g_distDriveLabel, g_distDriveSlider,
         g_distCurvatureLabel, g_distCurvatureSlider,
@@ -340,7 +336,9 @@ void ClearEffectEditor()
     for (int i = 0; i < static_cast<int>(apo::EffectType::Count); ++i) {
         ShowEffectControls(static_cast<apo::EffectType>(i), false);
     }
-    SendMessageW(g_dynamicExtend, BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessageW(g_dynamicsModeCombo, CB_SETCURSEL,
+                 static_cast<int>(apo::DynamicsMode::CompressorLimiter), 0);
+    SendMessageW(g_eqExtend, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessageW(g_distFunctionCombo, CB_SETCURSEL, apo::kDistortionTanh, 0);
     SendMessageW(g_noiseFftSizeCombo, CB_SETCURSEL,
                  apo::NoiseFftSizeIndex(apo::kNoiseDefaultFftSize), 0);
@@ -425,37 +423,40 @@ void ReadEffectControls(apo::EffectInstance& effect)
         }
         break;
     }
-    case apo::EffectType::Gate:
-        GetSliderValue(g_gateThresholdSlider, effect.gate.thresholdDb);
-        GetSliderValue(g_gateRangeSlider, effect.gate.rangeDb);
-        GetSliderValue(g_gateAttackSlider, effect.gate.attackMs);
-        GetSliderValue(g_gateHoldSlider, effect.gate.holdMs);
-        GetSliderValue(g_gateReleaseSlider, effect.gate.releaseMs);
-        GetSliderValue(g_gateLookaheadSlider, effect.gate.lookaheadMs);
+    case apo::EffectType::Dynamics: {
+        const int mode = static_cast<int>(
+            SendMessageW(g_dynamicsModeCombo, CB_GETCURSEL, 0, 0));
+        if (mode >= 0 && mode < static_cast<int>(apo::DynamicsMode::Count)) {
+            effect.dynamics.mode = static_cast<apo::DynamicsMode>(mode);
+        }
+        GetSliderValue(g_dynamicsInputSlider, effect.dynamics.inputDb);
+        GetSliderValue(g_dynamicsThresholdSlider,
+                       effect.dynamics.thresholdDb);
+        GetSliderValue(g_dynamicsRatioSlider, effect.dynamics.ratio);
+        GetSliderValue(g_dynamicsAttackSlider, effect.dynamics.attackMs);
+        GetSliderValue(g_dynamicsReleaseSlider, effect.dynamics.releaseMs);
+        GetSliderValue(g_dynamicsOutputSlider, effect.dynamics.outputDb);
+        GetSliderValue(g_dynamicsLookaheadSlider,
+                       effect.dynamics.lookaheadMs);
         break;
-    case apo::EffectType::Dynamic:
-        GetSliderValue(g_dynFrequencySlider, effect.dynamics.frequencyHz);
-        GetSliderValue(g_dynQSlider, effect.dynamics.q);
-        GetSliderValue(g_dynThresholdSlider, effect.dynamics.thresholdDb);
-        GetSliderValue(g_dynRatioSlider, effect.dynamics.ratio);
-        GetSliderValue(g_dynRangeSlider, effect.dynamics.rangeDb);
-        GetSliderValue(g_dynAttackSlider, effect.dynamics.attackMs);
-        GetSliderValue(g_dynReleaseSlider, effect.dynamics.releaseMs);
-        effect.dynamics.expand =
-            SendMessageW(g_dynamicExtend, BM_GETCHECK, 0, 0) == BST_CHECKED;
-        break;
-    case apo::EffectType::Compressor:
-        GetSliderValue(g_compThresholdSlider, effect.compressor.thresholdDb);
-        GetSliderValue(g_compRatioSlider, effect.compressor.ratio);
-        GetSliderValue(g_compAttackSlider, effect.compressor.attackMs);
-        GetSliderValue(g_compReleaseSlider, effect.compressor.releaseMs);
+    }
+    case apo::EffectType::Equalizer:
+        GetSliderValue(g_eqFrequencySlider, effect.equalizer.frequencyHz);
+        GetSliderValue(g_eqQSlider, effect.equalizer.q);
+        GetSliderValue(g_eqThresholdSlider, effect.equalizer.thresholdDb);
+        GetSliderValue(g_eqRatioSlider, effect.equalizer.ratio);
+        GetSliderValue(g_eqRangeSlider, effect.equalizer.rangeDb);
+        GetSliderValue(g_eqAttackSlider, effect.equalizer.attackMs);
+        GetSliderValue(g_eqReleaseSlider, effect.equalizer.releaseMs);
+        effect.equalizer.expand =
+            SendMessageW(g_eqExtend, BM_GETCHECK, 0, 0) == BST_CHECKED;
         break;
     case apo::EffectType::Gain:
-        GetSliderValue(g_makeupSlider, effect.gain.gainDb);
+        GetSliderValue(g_gainSlider, effect.gain.gainDb);
         break;
     case apo::EffectType::Mono:
         break;
-    case apo::EffectType::Distortion: {
+    case apo::EffectType::Saturation: {
         const int function = static_cast<int>(
             SendMessageW(g_distFunctionCombo, CB_GETCURSEL, 0, 0));
         if (function >= 0 && function < apo::kDistortionFunctionCount) {
@@ -516,24 +517,23 @@ void ShowEffectForSelected()
     SetSliderValue(g_noiseReductionSlider, effect.noise.reductionDb);
     SendMessageW(g_noiseFftSizeCombo, CB_SETCURSEL,
                  apo::NoiseFftSizeIndex(effect.noise.fftSize), 0);
-    SetSliderValue(g_gateThresholdSlider, effect.gate.thresholdDb);
-    SetSliderValue(g_gateRangeSlider, effect.gate.rangeDb);
-    SetSliderValue(g_gateAttackSlider, effect.gate.attackMs);
-    SetSliderValue(g_gateHoldSlider, effect.gate.holdMs);
-    SetSliderValue(g_gateReleaseSlider, effect.gate.releaseMs);
-    SetSliderValue(g_gateLookaheadSlider, effect.gate.lookaheadMs);
-    SetSliderValue(g_compThresholdSlider, effect.compressor.thresholdDb);
-    SetSliderValue(g_compRatioSlider, effect.compressor.ratio);
-    SetSliderValue(g_compAttackSlider, effect.compressor.attackMs);
-    SetSliderValue(g_compReleaseSlider, effect.compressor.releaseMs);
-    SetSliderValue(g_makeupSlider, effect.gain.gainDb);
-    SetSliderValue(g_dynFrequencySlider, effect.dynamics.frequencyHz);
-    SetSliderValue(g_dynQSlider, effect.dynamics.q);
-    SetSliderValue(g_dynThresholdSlider, effect.dynamics.thresholdDb);
-    SetSliderValue(g_dynRatioSlider, effect.dynamics.ratio);
-    SetSliderValue(g_dynRangeSlider, effect.dynamics.rangeDb);
-    SetSliderValue(g_dynAttackSlider, effect.dynamics.attackMs);
-    SetSliderValue(g_dynReleaseSlider, effect.dynamics.releaseMs);
+    SendMessageW(g_dynamicsModeCombo, CB_SETCURSEL,
+                 static_cast<int>(effect.dynamics.mode), 0);
+    SetSliderValue(g_dynamicsInputSlider, effect.dynamics.inputDb);
+    SetSliderValue(g_dynamicsThresholdSlider, effect.dynamics.thresholdDb);
+    SetSliderValue(g_dynamicsRatioSlider, effect.dynamics.ratio);
+    SetSliderValue(g_dynamicsAttackSlider, effect.dynamics.attackMs);
+    SetSliderValue(g_dynamicsReleaseSlider, effect.dynamics.releaseMs);
+    SetSliderValue(g_dynamicsOutputSlider, effect.dynamics.outputDb);
+    SetSliderValue(g_dynamicsLookaheadSlider, effect.dynamics.lookaheadMs);
+    SetSliderValue(g_gainSlider, effect.gain.gainDb);
+    SetSliderValue(g_eqFrequencySlider, effect.equalizer.frequencyHz);
+    SetSliderValue(g_eqQSlider, effect.equalizer.q);
+    SetSliderValue(g_eqThresholdSlider, effect.equalizer.thresholdDb);
+    SetSliderValue(g_eqRatioSlider, effect.equalizer.ratio);
+    SetSliderValue(g_eqRangeSlider, effect.equalizer.rangeDb);
+    SetSliderValue(g_eqAttackSlider, effect.equalizer.attackMs);
+    SetSliderValue(g_eqReleaseSlider, effect.equalizer.releaseMs);
     SetSliderValue(g_reverbMixSlider, effect.reverb.mix);
     SetSliderValue(g_reverbSizeSlider, effect.reverb.size);
     SetSliderValue(g_reverbDampingSlider, effect.reverb.damping);
@@ -543,8 +543,8 @@ void ShowEffectForSelected()
     SetSliderValue(g_distDriveSlider, effect.distortion.driveDb);
     SetSliderValue(g_distCurvatureSlider, effect.distortion.curvature);
     SetSliderValue(g_distOutputSlider, effect.distortion.outputDb);
-    SendMessageW(g_dynamicExtend, BM_SETCHECK,
-                 effect.dynamics.expand ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(g_eqExtend, BM_SETCHECK,
+                 effect.equalizer.expand ? BST_CHECKED : BST_UNCHECKED, 0);
 
     SetWindowTextW(g_effectHeading, apo::EffectTypeName(effect.type));
     // The parameter panel is shared: hide every type first so switching to an
@@ -600,37 +600,36 @@ bool CommitEffectEditor(bool showValues = true)
         case apo::EffectType::Noise:
             SetSliderValue(g_noiseReductionSlider, shown.noise.reductionDb);
             break;
-        case apo::EffectType::Gate:
-            SetSliderValue(g_gateThresholdSlider, shown.gate.thresholdDb);
-            SetSliderValue(g_gateRangeSlider, shown.gate.rangeDb);
-            SetSliderValue(g_gateAttackSlider, shown.gate.attackMs);
-            SetSliderValue(g_gateHoldSlider, shown.gate.holdMs);
-            SetSliderValue(g_gateReleaseSlider, shown.gate.releaseMs);
-            SetSliderValue(g_gateLookaheadSlider, shown.gate.lookaheadMs);
+        case apo::EffectType::Dynamics:
+            SendMessageW(g_dynamicsModeCombo, CB_SETCURSEL,
+                         static_cast<int>(shown.dynamics.mode), 0);
+            SetSliderValue(g_dynamicsInputSlider, shown.dynamics.inputDb);
+            SetSliderValue(g_dynamicsThresholdSlider,
+                           shown.dynamics.thresholdDb);
+            SetSliderValue(g_dynamicsRatioSlider, shown.dynamics.ratio);
+            SetSliderValue(g_dynamicsAttackSlider, shown.dynamics.attackMs);
+            SetSliderValue(g_dynamicsReleaseSlider, shown.dynamics.releaseMs);
+            SetSliderValue(g_dynamicsOutputSlider, shown.dynamics.outputDb);
+            SetSliderValue(g_dynamicsLookaheadSlider,
+                           shown.dynamics.lookaheadMs);
             break;
-        case apo::EffectType::Dynamic:
-            SetSliderValue(g_dynFrequencySlider, shown.dynamics.frequencyHz);
-            SetSliderValue(g_dynQSlider, shown.dynamics.q);
-            SetSliderValue(g_dynThresholdSlider, shown.dynamics.thresholdDb);
-            SetSliderValue(g_dynRatioSlider, shown.dynamics.ratio);
-            SetSliderValue(g_dynRangeSlider, shown.dynamics.rangeDb);
-            SetSliderValue(g_dynAttackSlider, shown.dynamics.attackMs);
-            SetSliderValue(g_dynReleaseSlider, shown.dynamics.releaseMs);
-            SendMessageW(g_dynamicExtend, BM_SETCHECK,
-                         shown.dynamics.expand ? BST_CHECKED : BST_UNCHECKED,
+        case apo::EffectType::Equalizer:
+            SetSliderValue(g_eqFrequencySlider, shown.equalizer.frequencyHz);
+            SetSliderValue(g_eqQSlider, shown.equalizer.q);
+            SetSliderValue(g_eqThresholdSlider,
+                           shown.equalizer.thresholdDb);
+            SetSliderValue(g_eqRatioSlider, shown.equalizer.ratio);
+            SetSliderValue(g_eqRangeSlider, shown.equalizer.rangeDb);
+            SetSliderValue(g_eqAttackSlider, shown.equalizer.attackMs);
+            SetSliderValue(g_eqReleaseSlider, shown.equalizer.releaseMs);
+            SendMessageW(g_eqExtend, BM_SETCHECK,
+                         shown.equalizer.expand ? BST_CHECKED : BST_UNCHECKED,
                          0);
             break;
-        case apo::EffectType::Compressor:
-            SetSliderValue(g_compThresholdSlider,
-                           shown.compressor.thresholdDb);
-            SetSliderValue(g_compRatioSlider, shown.compressor.ratio);
-            SetSliderValue(g_compAttackSlider, shown.compressor.attackMs);
-            SetSliderValue(g_compReleaseSlider, shown.compressor.releaseMs);
-            break;
         case apo::EffectType::Gain:
-            SetSliderValue(g_makeupSlider, shown.gain.gainDb);
+            SetSliderValue(g_gainSlider, shown.gain.gainDb);
             break;
-        case apo::EffectType::Distortion:
+        case apo::EffectType::Saturation:
             SendMessageW(g_distFunctionCombo, CB_SETCURSEL,
                          shown.distortion.function, 0);
             SetSliderValue(g_distDriveSlider, shown.distortion.driveDb);
@@ -656,6 +655,9 @@ namespace {
 
 bool SameValue(double left, double right)
 {
+    if (std::isinf(left) || std::isinf(right)) {
+        return left == right;
+    }
     return std::abs(left - right) < 1e-6;
 }
 
@@ -667,49 +669,47 @@ bool ParameterAtDefault(const apo::EffectInstance& effect,
         return SameValue(effect.noise.reductionDb, defaults.noise.reductionDb);
     case ParamResetNoiseFftSize:
         return effect.noise.fftSize == defaults.noise.fftSize;
-    case ParamResetGateThreshold:
-        return SameValue(effect.gate.thresholdDb, defaults.gate.thresholdDb);
-    case ParamResetGateRange:
-        return SameValue(effect.gate.rangeDb, defaults.gate.rangeDb);
-    case ParamResetGateAttack:
-        return SameValue(effect.gate.attackMs, defaults.gate.attackMs);
-    case ParamResetGateHold:
-        return SameValue(effect.gate.holdMs, defaults.gate.holdMs);
-    case ParamResetGateRelease:
-        return SameValue(effect.gate.releaseMs, defaults.gate.releaseMs);
-    case ParamResetGateLookahead:
-        return SameValue(effect.gate.lookaheadMs, defaults.gate.lookaheadMs);
-    case ParamResetCompThreshold:
-        return SameValue(effect.compressor.thresholdDb,
-                         defaults.compressor.thresholdDb);
-    case ParamResetCompRatio:
-        return SameValue(effect.compressor.ratio, defaults.compressor.ratio);
-    case ParamResetCompAttack:
-        return SameValue(effect.compressor.attackMs,
-                         defaults.compressor.attackMs);
-    case ParamResetCompRelease:
-        return SameValue(effect.compressor.releaseMs,
-                         defaults.compressor.releaseMs);
-    case ParamResetMakeup:
-        return SameValue(effect.gain.gainDb, defaults.gain.gainDb);
-    case ParamResetDynExpand:
-        return effect.dynamics.expand == defaults.dynamics.expand;
-    case ParamResetDynFrequency:
-        return SameValue(effect.dynamics.frequencyHz,
-                         defaults.dynamics.frequencyHz);
-    case ParamResetDynQ:
-        return SameValue(effect.dynamics.q, defaults.dynamics.q);
-    case ParamResetDynThreshold:
+    case ParamResetDynamicsMode:
+        return effect.dynamics.mode == defaults.dynamics.mode;
+    case ParamResetDynamicsInput:
+        return SameValue(effect.dynamics.inputDb, defaults.dynamics.inputDb);
+    case ParamResetDynamicsThreshold:
         return SameValue(effect.dynamics.thresholdDb,
                          defaults.dynamics.thresholdDb);
-    case ParamResetDynRatio:
+    case ParamResetDynamicsRatio:
         return SameValue(effect.dynamics.ratio, defaults.dynamics.ratio);
-    case ParamResetDynRange:
-        return SameValue(effect.dynamics.rangeDb, defaults.dynamics.rangeDb);
-    case ParamResetDynAttack:
+    case ParamResetDynamicsAttack:
         return SameValue(effect.dynamics.attackMs, defaults.dynamics.attackMs);
+    case ParamResetDynamicsRelease:
+        return SameValue(effect.dynamics.releaseMs,
+                         defaults.dynamics.releaseMs);
+    case ParamResetDynamicsOutput:
+        return SameValue(effect.dynamics.outputDb, defaults.dynamics.outputDb);
+    case ParamResetDynamicsLookahead:
+        return SameValue(effect.dynamics.lookaheadMs,
+                         defaults.dynamics.lookaheadMs);
+    case ParamResetGain:
+        return SameValue(effect.gain.gainDb, defaults.gain.gainDb);
+    case ParamResetDynExpand:
+        return effect.equalizer.expand == defaults.equalizer.expand;
+    case ParamResetDynFrequency:
+        return SameValue(effect.equalizer.frequencyHz,
+                         defaults.equalizer.frequencyHz);
+    case ParamResetDynQ:
+        return SameValue(effect.equalizer.q, defaults.equalizer.q);
+    case ParamResetDynThreshold:
+        return SameValue(effect.equalizer.thresholdDb,
+                         defaults.equalizer.thresholdDb);
+    case ParamResetDynRatio:
+        return SameValue(effect.equalizer.ratio, defaults.equalizer.ratio);
+    case ParamResetDynRange:
+        return SameValue(effect.equalizer.rangeDb, defaults.equalizer.rangeDb);
+    case ParamResetDynAttack:
+        return SameValue(effect.equalizer.attackMs,
+                         defaults.equalizer.attackMs);
     case ParamResetDynRelease:
-        return SameValue(effect.dynamics.releaseMs, defaults.dynamics.releaseMs);
+        return SameValue(effect.equalizer.releaseMs,
+                         defaults.equalizer.releaseMs);
     case ParamResetReverbMix:
         return SameValue(effect.reverb.mix, defaults.reverb.mix);
     case ParamResetReverbSize:
@@ -775,62 +775,56 @@ void ResetParameter(int param)
     case ParamResetNoiseFftSize:
         effect.noise.fftSize = defaults.noise.fftSize;
         break;
-    case ParamResetGateThreshold:
-        effect.gate.thresholdDb = defaults.gate.thresholdDb;
+    case ParamResetDynamicsMode:
+        effect.dynamics.mode = defaults.dynamics.mode;
         break;
-    case ParamResetGateRange:
-        effect.gate.rangeDb = defaults.gate.rangeDb;
+    case ParamResetDynamicsInput:
+        effect.dynamics.inputDb = defaults.dynamics.inputDb;
         break;
-    case ParamResetGateAttack:
-        effect.gate.attackMs = defaults.gate.attackMs;
+    case ParamResetDynamicsThreshold:
+        effect.dynamics.thresholdDb = defaults.dynamics.thresholdDb;
         break;
-    case ParamResetGateHold:
-        effect.gate.holdMs = defaults.gate.holdMs;
+    case ParamResetDynamicsRatio:
+        effect.dynamics.ratio = defaults.dynamics.ratio;
         break;
-    case ParamResetGateRelease:
-        effect.gate.releaseMs = defaults.gate.releaseMs;
+    case ParamResetDynamicsAttack:
+        effect.dynamics.attackMs = defaults.dynamics.attackMs;
         break;
-    case ParamResetGateLookahead:
-        effect.gate.lookaheadMs = defaults.gate.lookaheadMs;
+    case ParamResetDynamicsRelease:
+        effect.dynamics.releaseMs = defaults.dynamics.releaseMs;
         break;
-    case ParamResetCompThreshold:
-        effect.compressor.thresholdDb = defaults.compressor.thresholdDb;
+    case ParamResetDynamicsOutput:
+        effect.dynamics.outputDb = defaults.dynamics.outputDb;
         break;
-    case ParamResetCompRatio:
-        effect.compressor.ratio = defaults.compressor.ratio;
+    case ParamResetDynamicsLookahead:
+        effect.dynamics.lookaheadMs = defaults.dynamics.lookaheadMs;
         break;
-    case ParamResetCompAttack:
-        effect.compressor.attackMs = defaults.compressor.attackMs;
-        break;
-    case ParamResetCompRelease:
-        effect.compressor.releaseMs = defaults.compressor.releaseMs;
-        break;
-    case ParamResetMakeup:
+    case ParamResetGain:
         effect.gain.gainDb = defaults.gain.gainDb;
         break;
     case ParamResetDynExpand:
-        effect.dynamics.expand = defaults.dynamics.expand;
+        effect.equalizer.expand = defaults.equalizer.expand;
         break;
     case ParamResetDynFrequency:
-        effect.dynamics.frequencyHz = defaults.dynamics.frequencyHz;
+        effect.equalizer.frequencyHz = defaults.equalizer.frequencyHz;
         break;
     case ParamResetDynQ:
-        effect.dynamics.q = defaults.dynamics.q;
+        effect.equalizer.q = defaults.equalizer.q;
         break;
     case ParamResetDynThreshold:
-        effect.dynamics.thresholdDb = defaults.dynamics.thresholdDb;
+        effect.equalizer.thresholdDb = defaults.equalizer.thresholdDb;
         break;
     case ParamResetDynRatio:
-        effect.dynamics.ratio = defaults.dynamics.ratio;
+        effect.equalizer.ratio = defaults.equalizer.ratio;
         break;
     case ParamResetDynRange:
-        effect.dynamics.rangeDb = defaults.dynamics.rangeDb;
+        effect.equalizer.rangeDb = defaults.equalizer.rangeDb;
         break;
     case ParamResetDynAttack:
-        effect.dynamics.attackMs = defaults.dynamics.attackMs;
+        effect.equalizer.attackMs = defaults.equalizer.attackMs;
         break;
     case ParamResetDynRelease:
-        effect.dynamics.releaseMs = defaults.dynamics.releaseMs;
+        effect.equalizer.releaseMs = defaults.equalizer.releaseMs;
         break;
     case ParamResetReverbMix:
         effect.reverb.mix = defaults.reverb.mix;
@@ -2072,7 +2066,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             }
             break;
         case IDC_MAIN_ENABLE_ICON:
-        case IDC_GATE_LOOKAHEAD_ICON:
+        case IDC_DYN_LOOKAHEAD_ICON:
         case IDC_REVERB_PREDELAY_ICON:
             if (HIWORD(wParam) == STN_CLICKED) {
                 SendMessageW(g_infoTooltip, TTM_POPUP, 0, 0);
@@ -2103,6 +2097,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             }
             break;
         case IDC_DIST_FUNCTION_COMBO:
+        case IDC_DYN_MODE_COMBO:
         case IDC_NOISE_FFT_SIZE_COMBO:
             if (HIWORD(wParam) == CBN_SELCHANGE) {
                 MarkSettingsDirty();
@@ -2110,25 +2105,22 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
                 RepaintAll();
             }
             break;
-        case IDC_GATE_THRESHOLD_SLIDER:
-        case IDC_GATE_RANGE_SLIDER:
-        case IDC_GATE_ATTACK_SLIDER:
-        case IDC_GATE_HOLD_SLIDER:
-        case IDC_GATE_RELEASE_SLIDER:
-        case IDC_GATE_LOOKAHEAD_SLIDER:
-        case IDC_COMP_THRESHOLD_SLIDER:
-        case IDC_COMP_RATIO_SLIDER:
-        case IDC_COMP_ATTACK_SLIDER:
-        case IDC_COMP_RELEASE_SLIDER:
-        case IDC_MAKEUP_SLIDER:
-        case IDC_NOISE_REDUCTION_SLIDER:
-        case IDC_DYN_FREQUENCY_SLIDER:
-        case IDC_DYN_Q_SLIDER:
+        case IDC_DYN_INPUT_SLIDER:
         case IDC_DYN_THRESHOLD_SLIDER:
         case IDC_DYN_RATIO_SLIDER:
-        case IDC_DYN_RANGE_SLIDER:
         case IDC_DYN_ATTACK_SLIDER:
         case IDC_DYN_RELEASE_SLIDER:
+        case IDC_DYN_OUTPUT_SLIDER:
+        case IDC_DYN_LOOKAHEAD_SLIDER:
+        case IDC_GAIN_SLIDER:
+        case IDC_NOISE_REDUCTION_SLIDER:
+        case IDC_EQ_FREQUENCY_SLIDER:
+        case IDC_EQ_Q_SLIDER:
+        case IDC_EQ_THRESHOLD_SLIDER:
+        case IDC_EQ_RATIO_SLIDER:
+        case IDC_EQ_RANGE_SLIDER:
+        case IDC_EQ_ATTACK_SLIDER:
+        case IDC_EQ_RELEASE_SLIDER:
         case IDC_REVERB_MIX_SLIDER:
         case IDC_REVERB_SIZE_SLIDER:
         case IDC_REVERB_DAMPING_SLIDER:
@@ -2140,7 +2132,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
                 MarkSettingsDirty();
             }
             break;
-        case IDC_DYNAMIC_EXTEND:
+        case IDC_EQ_EXTEND:
             if (HIWORD(wParam) == BN_CLICKED) {
                 MarkSettingsDirty();
             }

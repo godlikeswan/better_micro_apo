@@ -1,4 +1,4 @@
-# Dynamic (proximity)
+# Equalizer
 
 Tames the boomy low end you get when a microphone is close to your mouth, or
 fills it back in when the mic is farther away. It only works on a band around a
@@ -6,7 +6,8 @@ chosen frequency, so the rest of your voice is left alone.
 
 ## Try this
 
-- Put Dynamic before [Compressor](compressor.md), while the level still has its
+- Put Equalizer before the unified
+  [Gate/Compressor/Limiter/Expander](dynamics.md), while the level still has its
   natural movement.
 - If your voice sounds chesty or boomy close to the mic, leave **Extend quiet
   lows** off (the default reduce mode). Talk normally and move **Threshold** to
@@ -19,10 +20,10 @@ chosen frequency, so the rest of your voice is left alone.
   point for a close voice. If the boom is higher up (around 200–300 Hz), move
   the slider there. **Q** controls how wide the band is. A low Q around 0.7 acts
   like a gentle shelf; a higher Q targets a narrower problem.
-- **Ratio**, **Attack**, and **Release** work like the compressor controls, but
-  only on that band. Keep **Ratio** moderate and use a slower **Release** if the
-  low end pumps between words.
-- A newly added Dynamic starts in reduce mode at 120 Hz, Q 0.7, and a −45 dBFS
+- **Ratio**, **Attack**, and **Release** work like the controls in the unified
+  dynamics effect, but only on that band. Keep **Ratio** moderate and use a
+  slower **Release** if the low end pumps between words.
+- A newly added Equalizer starts in reduce mode at 120 Hz, Q 0.7, and a −45 dBFS
   threshold. The little ↺ buttons reset individual controls. Up to 16 instances
   are supported.
 
@@ -41,7 +42,7 @@ chosen frequency, so the rest of your voice is left alone.
 
 ## Under the hood
 
-`DynamicStage` (`src/dsp/stages.cpp`):
+`EqualizerStage` (`src/dsp/stages.cpp`):
 
 - A topology-preserving state-variable bandpass (Simper) isolates the band.
   Damping `k = 1/Q`, and the bandpass output is scaled by `k` to normalize its

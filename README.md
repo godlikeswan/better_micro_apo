@@ -4,7 +4,7 @@
 
 Better Micro APO is a Windows program that adjusts the sound of input devices
 like microphones or guitars. It can turn the volume up, quiet down loud sounds,
-reduce background noise, and add effects like overdrive or echo.
+reduce background noise, and add effects like saturation or echo.
 
 ## Getting started
 
@@ -17,8 +17,8 @@ setting up the APO needs administrator rights.
    up the effect.
 3. Check **Listen to this device** and use headphones to hear the input with
    the effects applied.
-4. Click **Add effect**, choose **Gain**, and drag the slider to hear the
-   volume change.
+4. Click **Add effect**. **Gain** is first in the list and starts at **+12 dB**;
+   move the slider until the meters look comfortable.
 5. Add more effects and experiment. The [effect documentation](docs/effects/index.md)
    explains what each one does.
 
@@ -35,13 +35,19 @@ To uninstall, uncheck **Enable** on every device, or use **File → Uninstall**.
   listening stream.
 - Effects apply as you change them — there is no Apply button. Each slider has
   a small ↺ button that resets only that setting.
+- The **Gate/Compressor/Limiter/Expander** effect has two modes:
+  **Compressor/Limiter** works on signal above the threshold, and
+  **Expander/Gate** works on signal below it. Its ratio goes up to **∞**, and
+  lookahead is available when you need to catch transients.
 - If your device is missing from the list, turn on **View → Show all devices**
   to see inactive inputs too.
 - Windows briefly stops audio when effects are installed or attached to a
   device. That is Windows reloading the audio chain. Settings changes and noise
   profile captures apply to the running chain without stopping audio.
-- Gate lookahead and noise reduction need to buffer a little audio to do their
-  job, so they add a small delay. Those controls are marked with ⏱.
+- Noise reduction, dynamics lookahead, and reverb predelay/tail buffer a little
+  audio, so they add a small delay. Those controls are marked with ⏱.
+- A settings file from a different schema version is deleted when it is read;
+  the device starts from defaults rather than having old values migrated.
 - Supported input formats are float32, PCM16, PCM24, and PCM32. 24-bit samples
   in a 32-bit container are not supported.
 
