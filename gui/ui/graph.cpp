@@ -202,8 +202,9 @@ void PaintDynamics(HDC dc, const RECT& client, const RECT& plot,
 
     const double threshold = std::clamp(settings.thresholdDb, -80.0, 0.0);
     const double inputTrigger = std::clamp(
-        threshold - settings.inputDb, -80.0, 0.0);
-    const int thresholdX = MapX(plot, (inputTrigger + 80.0) / 80.0);
+        threshold - settings.inputDb, kMinDb, kMaxDb);
+    const int thresholdX =
+        MapX(plot, (inputTrigger - kMinDb) / (kMaxDb - kMinDb));
     DrawLine(dc, thresholdX, plot.top, thresholdX, plot.bottom,
              colors.reference, PS_DOT);
 
@@ -212,7 +213,7 @@ void PaintDynamics(HDC dc, const RECT& client, const RECT& plot,
     };
 
     StrokeCurve(dc, plot, colors.curve, [&](double t) {
-        const double inputDb = -80.0 + 80.0 * t;
+        const double inputDb = kMinDb + (kMaxDb - kMinDb) * t;
         const double detectedDb = inputDb + settings.inputDb;
         const double transferredDb = apo::dsp::DynamicsTransferDb(
             detectedDb, threshold, settings.ratio, settings.mode);
@@ -220,9 +221,10 @@ void PaintDynamics(HDC dc, const RECT& client, const RECT& plot,
     });
 
     DrawCaption(dc, client, plot, L"Transfer curve (dBFS)", colors.text);
-    DrawXLeft(dc, plot, L"-80", colors.text);
-    DrawXCenter(dc, plot, (plot.left + plot.right) / 2, L"-40", colors.text);
-    DrawXRight(dc, plot, L"0", colors.text);
+    DrawXLeft(dc, plot, L"-96", colors.text);
+    DrawXCenter(dc, plot, (plot.left + plot.right) / 2, L"-36", colors.text);
+    DrawXRight(dc, plot, L"+24", colors.text);
+    DrawYLabel(dc, client.left, plot, plot.top, L"+24", colors.text);
     DrawYLabel(dc, client.left, plot, MapY(plot, position(0.0)), L"0",
                colors.text);
     DrawYLabel(dc, client.left, plot, MapY(plot, position(-48.0)), L"-48",

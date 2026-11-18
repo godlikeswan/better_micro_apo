@@ -101,7 +101,7 @@ inline double ShapeDistortion(const DistortionCurve& curve, int function,
 // above the threshold; Expander/Gate acts below it. Ratios are the slope in
 // each region: 1 is unity, infinity is a hard limiter/gate, and values below 1
 // move the affected side toward (or past) the threshold.
-inline constexpr double kDynamicsMaxBoostDb = 24.0;
+inline constexpr double kDynamicsMaxBoostDb = 48.0;
 inline constexpr double kDynamicsMaxCutDb = 96.0;
 
 inline double DynamicsGainDb(double inputDb, double thresholdDb, double ratio,

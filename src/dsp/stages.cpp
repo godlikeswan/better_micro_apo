@@ -102,6 +102,8 @@ void DynamicsStage::Reset()
     m_gainDb = 0.0;
     m_heldTargetDb = 0.0;
     m_holdCounter = 0;
+    m_gateHoldActive = false;
+    m_gateHoldSpent = false;
     m_delayWrite = 0;
     std::fill(m_delay.begin(), m_delay.end(), 0.0);
 }
@@ -129,32 +131,80 @@ void DynamicsStage::Process(double* samples, UINT32 frames, UINT32 channels)
 
         const double peak = PeakOfFrame(values, channels);
         const double levelDb = LinearToDecibels(peak);
+        const double delta = levelDb - m_thresholdDb;
         double targetDb =
             DynamicsGainDb(levelDb, m_thresholdDb, m_settings.ratio,
                            m_settings.mode);
 
-        // Latch a deeper gain change so a short peak keeps its target active
-        // long enough for attack to reach it. Hold includes the lookahead, so
-        // the counter is measured from the frame that reaches the output.
-        if (std::fabs(targetDb) > std::fabs(m_heldTargetDb) + 1e-6) {
-            m_heldTargetDb = targetDb;
-            m_holdCounter = m_holdFrames;
+        bool holding = false;
+        if (m_settings.mode == DynamicsMode::CompressorLimiter)
+        {
+            // Latch a deeper gain change so a short peak keeps its target
+            // active long enough for attack to reach it. Hold includes the
+            // lookahead, so the counter is measured at the output.
+            if (std::fabs(targetDb) > std::fabs(m_heldTargetDb) + 1e-6)
+            {
+                m_heldTargetDb = targetDb;
+                m_holdCounter = m_holdFrames;
+            }
+            holding = m_holdCounter > 0;
+            if (holding)
+            {
+                --m_holdCounter;
+                targetDb = m_heldTargetDb;
+            }
+            if (!holding)
+            {
+                m_heldTargetDb = 0.0;
+            }
         }
-        const bool holding = m_holdCounter > 0;
-        if (holding) {
-            --m_holdCounter;
-            targetDb = m_heldTargetDb;
+        else
+        {
+            // Gate/Expander hold delays closing. Stay open briefly after the
+            // signal drops below the threshold, then let the closing target
+            // take over. Any signal above the threshold cancels the hold and
+            // opens immediately.
+            if (delta >= 0.0)
+            {
+                m_gateHoldActive = false;
+                m_gateHoldSpent = false;
+                m_holdCounter = 0;
+                m_heldTargetDb = 0.0;
+            }
+            else
+            {
+                if (!m_gateHoldActive && !m_gateHoldSpent)
+                {
+                    m_gateHoldActive = true;
+                    m_holdCounter = m_holdFrames;
+                    m_heldTargetDb = 0.0;
+                }
+                if (m_gateHoldActive)
+                {
+                    if (m_holdCounter > 0)
+                    {
+                        --m_holdCounter;
+                        targetDb = m_heldTargetDb;
+                        holding = true;
+                    }
+                    if (m_holdCounter == 0)
+                    {
+                        m_gateHoldActive = false;
+                        m_gateHoldSpent = true;
+                    }
+                }
+            }
         }
 
-        // Attack while the target deepens the gain change, release as it
-        // returns to unity. Magnitude keeps this correct in both modes.
-        const double coefficient =
-            (std::fabs(targetDb) > std::fabs(m_gainDb)) ? m_attackCoeff
-                                                        : m_releaseCoeff;
-        m_gainDb += (targetDb - m_gainDb) * coefficient;
-        if (!holding) {
-            m_heldTargetDb = 0.0;
-        }
+        // Compressor/Limiter: attack engages, release recovers.
+        // Expander/Gate: attack opens, release closes.
+        const bool deepening =
+            std::fabs(targetDb) > std::fabs(m_gainDb) + 1e-6;
+        const bool useAttack =
+            (m_settings.mode == DynamicsMode::CompressorLimiter) ? deepening
+                                                                 : !deepening;
+        m_gainDb += (targetDb - m_gainDb) *
+                    (useAttack ? m_attackCoeff : m_releaseCoeff);
         const double gain = DecibelsToLinear(m_gainDb) * m_outputGain;
 
         if (lookahead)

@@ -38,11 +38,16 @@ private:
     double m_releaseCoeff = 0.0;
     double m_gainDb = 0.0;
 
-    // Latched gain change. Hold keeps the target active after the signal stops
-    // demanding it, so a short peak still gets the full attack ramp.
+    // Latched gain change for Compressor/Limiter. Hold keeps the deepest
+    // reduction active so a short peak still gets the full attack ramp.
     double m_heldTargetDb = 0.0;
     UINT32 m_holdFrames = 0;
     UINT32 m_holdCounter = 0;
+
+    // Gate/Expander hold keeps the open state briefly after the signal falls
+    // below the threshold. It is cancelled as soon as the signal returns.
+    bool m_gateHoldActive = false;
+    bool m_gateHoldSpent = false;
 
     // Delay line used by the lookahead. Sized for the maximum allowed lookahead
     // at Configure time so Update never allocates.

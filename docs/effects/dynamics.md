@@ -26,13 +26,15 @@ the threshold, ratio, timing, input/output trim, and lookahead controls.
 - **Input** is applied before the detector and the signal; **Output** is applied
   after the dynamics. Use Output for makeup level instead of adding a second
   Gain when you only want to compensate this effect.
-- **Attack** and **Release** set the one-pole smoothing. Shorter attack catches
-  a transient; longer release avoids a jumpy or pumped sound between words.
-- **Hold** keeps the computed gain change active after the signal stops demanding
-  it, so a short peak still gets the full attack ramp before release. Raise it if
-  brief loud sounds still get through; lower it for a more natural, less
-  “grabby” sound. The hold includes the lookahead, so it is measured at the
-  output.
+- **Attack** and **Release** set the one-pole smoothing. In Compressor/Limiter
+  mode, Attack engages the gain change and Release recovers from it. In
+  Expander/Gate mode, Attack opens when speech returns and Release closes when
+  the level falls below the threshold.
+- **Hold** is mode-aware. In Compressor/Limiter mode it keeps a latched reduction
+  active so short peaks still get the full attack ramp. In Expander/Gate mode it
+  keeps the gate open briefly after the level drops, delaying closure; a signal
+  above the threshold cancels it immediately. The hold includes the lookahead,
+  so it is measured at the output.
 - **Lookahead** lets the detector see a transient before it reaches the output,
   which helps leading consonants stay audible. It delays the stream by the same
   amount, so keep it low or at 0 ms when latency matters. The ⏱ marker is a
@@ -50,9 +52,9 @@ the threshold, ratio, timing, input/output trim, and lookahead controls.
 | Input | 0 dB | −24 to +30 dB | Trim before the detector and the signal path. |
 | Threshold | −15 dBFS | −80 to 0 dBFS | Level where the dynamics start acting. |
 | Ratio | 5:1 | 0.01:1 to ∞ | Slope on the affected side; 1 is unity and ∞ is hard. |
-| Attack | 5 ms | 0.1 to 1000 ms | Smoothing when the gain change deepens. |
-| Release | 100 ms | 1 to 5000 ms | Smoothing when the gain change returns to unity. |
-| Hold | 50 ms | 0 to 2000 ms | Keeps the computed gain change active before releasing. |
+| Attack | 5 ms | 0.1 to 1000 ms | Engage in Compressor/Limiter; open in Expander/Gate. |
+| Release | 100 ms | 1 to 5000 ms | Recover in Compressor/Limiter; close in Expander/Gate. |
+| Hold | 50 ms | 0 to 2000 ms | Hold reduction in Compressor/Limiter; delay closing in Expander/Gate. |
 | Output | 0 dB | −24 to +24 dB | Trim after the dynamics. |
 | Lookahead | 0 ms | 0 to 300 ms | Delay before processing; adds the same latency while enabled. |
 
@@ -64,14 +66,16 @@ the threshold, ratio, timing, input/output trim, and lookahead controls.
   `DynamicsGainDb` function in `src/dsp/transfer.h`. Compressor/Limiter mode
   computes a gain from signal above the threshold; Expander/Gate mode computes
   one from signal below it. The settled gain is limited to −96 dB of cut and
-  +24 dB of boost.
+  +48 dB of boost.
 - Input gain is applied before detection; output gain is applied after the
-  dynamics. Attack and release are chosen by the magnitude of the gain change,
-  so both modes smooth correctly whether they are cutting or boosting.
-- When a deeper gain change is detected, its target is latched and kept active
-  for `holdMs` plus the lookahead. Attack ramps toward that latched target even
-  if the peak has already gone, then release returns toward the live target.
-  This lets short peaks receive the full attack ramp at the output.
+  dynamics. Attack and release are chosen by mode and by whether the gain change
+  is deepening or returning. Compressor/Limiter uses Attack to engage and
+  Release to recover; Expander/Gate uses Attack to open and Release to close.
+- Compressor/Limiter hold latches a deeper reduction for `holdMs` plus the
+  lookahead so short peaks receive the full attack ramp. Expander/Gate hold
+  instead keeps the open state for `holdMs` plus the lookahead after the signal
+  drops below the threshold, then closes with Release. A signal above the
+  threshold cancels the gate hold immediately.
 - With lookahead, the incoming frame enters a per-stage delay line while the
   detector computes the gain for the frame one lookahead behind it. The line is
   allocated in `Configure` for the 300 ms maximum, so changing lookahead live
