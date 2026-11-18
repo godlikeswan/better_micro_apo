@@ -209,10 +209,10 @@ private:
     double m_output = 1.0;
 };
 
-// Room/hall reverb built from the Freeverb comb/allpass network. It runs last
-// so a mono source copied to both channels gets a wide stereo tail. `mix`
-// crossfades dry and wet, `size` sets the decay, `damping` absorbs highs in the
-// tail, and `predelayMs` delays the excitation.
+// Digital reverb with two switchable engines: classic parallel combs into
+// series allpasses, or a feedback delay network with a mixing matrix. Both
+// share predelay, wet level, damping, and stereo output shaping. The dry path
+// always stays at unity; `level` only changes the wet return.
 class ReverbStage final : public Stage
 {
 public:
@@ -223,11 +223,13 @@ public:
     void Reset() override;
     bool NeedsSilence() const override
     {
-        return m_settings.enabled && m_settings.mix > 0.0;
+        return m_settings.enabled && m_settings.level > 0.0;
     }
     void Process(double* samples, UINT32 frames, UINT32 channels) override;
 
 private:
+    static constexpr size_t kFdnLineCount = 8;
+
     struct Comb
     {
         std::vector<double> buffer;
@@ -247,22 +249,47 @@ private:
         std::vector<Allpass> allpasses;
     };
 
+    struct FdnLine
+    {
+        std::vector<double> buffer;
+        size_t index = 0;
+        double store = 0.0;
+    };
+
     void ApplyCoefficients();
     double ProcessComb(Comb& comb, double input) const;
     double ProcessAllpass(Allpass& allpass, double input) const;
+    void ProcessFdn(double excitation, double& left, double& right);
 
     ReverbSettings m_settings;
     std::vector<Tank> m_tanks;
+    std::vector<FdnLine> m_fdnLines;
+    double m_fdnMatrix[kFdnLineCount * kFdnLineCount]{};
+    double m_fdnLeftTap[kFdnLineCount]{};
+    double m_fdnRightTap[kFdnLineCount]{};
     std::vector<double> m_predelay;
+    std::vector<double> m_wetLow;
     size_t m_predelayCapacityFrames = 0;
     size_t m_predelayFrames = 0;
     size_t m_predelayWrite = 0;
     UINT32 m_channels = 0;
     double m_sampleRate = 44100.0;
+    double m_combAverageSeconds = 0.03;
+    double m_fdnAverageSeconds = 0.04;
     double m_feedback = 0.0;
+    double m_allpassFeedback = 0.5;
     double m_damping = 0.0;
-    double m_wetGain = 0.0;
-    double m_dryGain = 1.0;
+    double m_fdnGain = 0.0;
+    double m_monoMix = 0.5;
+    double m_level = 0.0;
+    double m_size = 0.5;
+    double m_width = 0.5;
+    double m_density = 0.5;
+    double m_lowGain = 1.0;
+    double m_wetLowCoeff = 0.05;
+    double m_wetScale = 0.0;
+    double m_fdnLeft = 0.0;
+    double m_fdnRight = 0.0;
 };
 
 // Owns every stage instance the effect list can reference. Configure() runs

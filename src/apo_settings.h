@@ -11,7 +11,7 @@ namespace apo {
 
 // Settings files with any other version are discarded on load. There is no
 // migration path: a new schema starts from defaults.
-inline constexpr int kSettingsVersion = 6;
+inline constexpr int kSettingsVersion = 7;
 
 // Analysis sizes offered for spectral noise reduction. The buffers and FFT
 // plans for every size are created when the stream binds, so changing
@@ -177,15 +177,36 @@ struct DistortionSettings
     double outputDb = 0.0;
 };
 
-// Room/hall reverb. `mix` is the wet percentage, `size` sets the decay length,
-// `damping` absorbs high frequencies in the tail, and `predelayMs` adds a gap
-// before the reverb starts.
+// Digital reverb engines. Comb/allpass is the classic parallel-comb and
+// series-allpass network. The feedback delay network uses coupled delay lines
+// with a mixing matrix.
+enum class ReverbAlgorithm : int
+{
+    CombAllpass = 0,
+    FeedbackDelayNetwork = 1,
+    Count,
+};
+
+const wchar_t* ReverbAlgorithmName(ReverbAlgorithm algorithm);
+
+inline constexpr double kReverbMinMaxLengthMs = 200.0;
+inline constexpr double kReverbMaxMaxLengthMs = 8000.0;
+
+// Room/hall reverb. `level` is the wet return level; dry stays at unity.
+// `maxLengthMs` sets the decay ceiling, `size` adds room weight and low-end
+// body, `damping` absorbs highs in the loop, `width` controls stereo
+// decorrelation, `density` controls diffusion, and `predelayMs` delays the
+// excitation.
 struct ReverbSettings
 {
     bool enabled = false;
-    double mix = 20.0;
+    ReverbAlgorithm algorithm = ReverbAlgorithm::CombAllpass;
+    double level = 20.0;
+    double maxLengthMs = 2000.0;
     double size = 50.0;
     double damping = 50.0;
+    double width = 50.0;
+    double density = 50.0;
     double predelayMs = 20.0;
 };
 

@@ -27,6 +27,22 @@ double EffectiveSampleRate(const AudioFormat& format)
                                    : 48000.0;
 }
 
+// Mono excitation feeds the common mode. The stereo output taps contain a
+// strong common-mode component, so an alternating input would project almost
+// zero energy onto them once Density and Width are raised.
+constexpr int kFdnInputSigns[8] = {1, 1, 1, 1, 1, 1, 1, 1};
+constexpr int kFdnOutputSigns[8] = {1, -1, 1, -1, -1, 1, -1, 1};
+
+// Feedback needed for a roughly -60 dB decay over maxLengthMs, given the
+// average delay-line loop time in seconds.
+double FeedbackForDecay(double maxLengthMs, double loopSeconds)
+{
+    const double seconds =
+        std::max(maxLengthMs, apo::kReverbMinMaxLengthMs) / 1000.0;
+    const double loop = std::max(loopSeconds, 0.001);
+    return std::clamp(std::pow(10.0, -3.0 * loop / seconds), 0.05, 0.995);
+}
+
 } // namespace
 
 void DynamicsStage::Configure(const AudioFormat& format)
@@ -835,6 +851,8 @@ void ReverbStage::Configure(const AudioFormat& format)
     static constexpr int kCombTunings[] = {1116, 1188, 1277, 1356,
                                            1422, 1491, 1557, 1617};
     static constexpr int kAllpassTunings[] = {556, 441, 341, 225};
+    static constexpr int kFdnTunings[] = {1237, 1361, 1499, 1619,
+                                          1741, 1867, 2003, 2143};
     static constexpr int kStereoSpread = 23;
     constexpr double kMaxPredelayMs = 200.0;
 
@@ -842,6 +860,8 @@ void ReverbStage::Configure(const AudioFormat& format)
     m_sampleRate = EffectiveSampleRate(format);
     const double scale = m_sampleRate / 44100.0;
 
+    // Comb/allpass engine. Buffers are fixed for the stream; live controls
+    // only change coefficients.
     m_tanks.clear();
     m_tanks.resize(m_channels);
     for (UINT32 channel = 0; channel < m_channels; ++channel)
@@ -868,11 +888,36 @@ void ReverbStage::Configure(const AudioFormat& format)
         }
     }
 
+    double combSum = 0.0;
+    for (const Comb& comb : m_tanks[0].combs)
+    {
+        combSum += comb.buffer.size();
+    }
+    m_combAverageSeconds =
+        combSum / m_tanks[0].combs.size() / m_sampleRate;
+
+    // Feedback delay network. Eight incommensurate loops keep the resonances
+    // from piling up at one pitch.
+    m_fdnLines.resize(kFdnLineCount);
+    double fdnSum = 0.0;
+    for (size_t index = 0; index < m_fdnLines.size(); ++index)
+    {
+        const size_t length = static_cast<size_t>(
+            std::max(1.0, std::round(kFdnTunings[index] * scale)));
+        m_fdnLines[index].buffer.assign(length, 0.0);
+        m_fdnLines[index].index = 0;
+        m_fdnLines[index].store = 0.0;
+        fdnSum += length;
+    }
+    m_fdnAverageSeconds =
+        fdnSum / static_cast<double>(m_fdnLines.size()) / m_sampleRate;
+
     // Reserve the maximum predelay at Configure time so a live Update only
     // moves the read offset and never allocates.
     m_predelayCapacityFrames = static_cast<size_t>(
         std::ceil(m_sampleRate * kMaxPredelayMs / 1000.0)) + 1;
     m_predelay.assign(m_predelayCapacityFrames * m_channels, 0.0);
+    m_wetLow.assign(m_channels, 0.0);
 
     ApplyCoefficients();
     Reset();
@@ -883,11 +928,13 @@ void ReverbStage::Update(const EffectInstance& effect,
 {
     (void)format;
     const bool wasEnabled = m_settings.enabled;
+    const ReverbAlgorithm wasAlgorithm = m_settings.algorithm;
     m_settings = effect.reverb;
     ApplyCoefficients();
-    if (wasEnabled != m_settings.enabled)
+    if (wasEnabled != m_settings.enabled || wasAlgorithm != m_settings.algorithm)
     {
-        // Drop the tail so re-enabling does not replay old audio.
+        // Drop both tails so switching engine or re-enabling does not replay
+        // old audio through a different network.
         Reset();
     }
 }
@@ -897,16 +944,92 @@ void ReverbStage::ApplyCoefficients()
     const double size = std::clamp(m_settings.size / 100.0, 0.0, 1.0);
     const double damping =
         std::clamp(m_settings.damping / 100.0, 0.0, 1.0);
-    const double mix = std::clamp(m_settings.mix / 100.0, 0.0, 1.0);
+    const double width = std::clamp(m_settings.width / 100.0, 0.0, 1.0);
+    const double density =
+        std::clamp(m_settings.density / 100.0, 0.0, 1.0);
 
-    m_feedback = 0.7 + 0.28 * size;
+    m_level = std::clamp(m_settings.level / 100.0, 0.0, 1.0);
+    m_size = size;
+    m_width = width;
+    m_density = density;
     m_damping = 0.4 * damping;
+    m_lowGain = 1.0 + 0.35 * size;
+    m_wetLowCoeff = 0.05;
+    m_monoMix = 0.75 - 0.5 * width;
 
-    // The comb bank has a lot of gain, so the wet path needs its own scaling.
-    // Lower it as the room grows or the tail gets brighter so the reverb stays
-    // near the dry level instead of clipping at extreme settings.
-    m_wetGain = mix * 2.5 * (1.0 - 0.35 * size) * (0.75 + 0.25 * damping);
-    m_dryGain = 1.0 - mix;
+    if (m_settings.algorithm == ReverbAlgorithm::FeedbackDelayNetwork)
+    {
+        m_fdnGain = FeedbackForDecay(m_settings.maxLengthMs,
+                                     m_fdnAverageSeconds);
+
+        // Build an orthogonal mixing matrix from pairwise rotations. A linear
+        // blend of identity and Hadamard has a zero eigenvalue at 50%, which
+        // kills most modes and makes the tail collapse. Rotations keep every
+        // mode's magnitude, so Density changes diffusion without changing
+        // loudness.
+        double matrix[kFdnLineCount * kFdnLineCount] = {};
+        for (size_t index = 0; index < kFdnLineCount; ++index)
+        {
+            matrix[index * kFdnLineCount + index] = 1.0;
+        }
+        const double angle = density * (std::acos(-1.0) / 4.0);
+        const double cosine = std::cos(angle);
+        const double sine = std::sin(angle);
+        auto rotate = [&](size_t first, size_t second) {
+            for (size_t row = 0; row < kFdnLineCount; ++row)
+            {
+                const double a = matrix[row * kFdnLineCount + first];
+                const double b = matrix[row * kFdnLineCount + second];
+                matrix[row * kFdnLineCount + first] = a * cosine - b * sine;
+                matrix[row * kFdnLineCount + second] = a * sine + b * cosine;
+            }
+        };
+        rotate(0, 1);
+        rotate(2, 3);
+        rotate(4, 5);
+        rotate(6, 7);
+        rotate(1, 2);
+        rotate(3, 4);
+        rotate(5, 6);
+        rotate(7, 0);
+
+        for (size_t row = 0; row < kFdnLineCount; ++row)
+        {
+            for (size_t column = 0; column < kFdnLineCount; ++column)
+            {
+                m_fdnMatrix[row * kFdnLineCount + column] =
+                    matrix[row * kFdnLineCount + column] * m_fdnGain;
+            }
+        }
+
+        for (size_t index = 0; index < kFdnLineCount; ++index)
+        {
+            const double sign = kFdnOutputSigns[index];
+            const double base = 1.0 - 0.5 * width;
+            const double spread = 0.5 * width;
+            m_fdnLeftTap[index] = base + spread * sign;
+            m_fdnRightTap[index] = base - spread * sign;
+        }
+
+        // Damping is the main high-frequency control. Size mostly trades
+        // low-end body: low values cut it, high values boost it.
+        m_damping = 0.02 + 0.60 * damping + 0.15 * size;
+        m_lowGain = 0.2 + 1.8 * size;
+        m_wetLowCoeff = 0.15;
+        m_wetScale = m_level * 4.0 * (0.8 + 0.2 * damping);
+    }
+    else
+    {
+        // Size shapes resonance and low-end weight; Max Length caps decay.
+        m_feedback = std::min(
+            0.7 + 0.28 * size,
+            FeedbackForDecay(m_settings.maxLengthMs, m_combAverageSeconds));
+        m_allpassFeedback = 0.25 + 0.45 * density;
+        // Width's default mono blend halves the excitation compared with the
+        // old fixed mix, so the wet scaling is doubled to preserve its level.
+        m_wetScale = m_level * 5.0 * (1.0 - 0.35 * size) *
+                     (0.75 + 0.25 * damping);
+    }
 
     if (m_predelayCapacityFrames == 0)
     {
@@ -940,8 +1063,15 @@ void ReverbStage::Reset()
             allpass.index = 0;
         }
     }
+    for (FdnLine& line : m_fdnLines)
+    {
+        std::fill(line.buffer.begin(), line.buffer.end(), 0.0);
+        line.index = 0;
+        line.store = 0.0;
+    }
 
     std::fill(m_predelay.begin(), m_predelay.end(), 0.0);
+    std::fill(m_wetLow.begin(), m_wetLow.end(), 0.0);
     m_predelayWrite = 0;
 }
 
@@ -967,7 +1097,7 @@ double ReverbStage::ProcessComb(Comb& comb, double input) const
 double ReverbStage::ProcessAllpass(Allpass& allpass, double input) const
 {
     const double buffered = allpass.buffer[allpass.index];
-    const double next = input + buffered * 0.5;
+    const double next = input + buffered * m_allpassFeedback;
     allpass.buffer[allpass.index] = (std::fabs(next) < 1e-20) ? 0.0 : next;
 
     if (++allpass.index >= allpass.buffer.size())
@@ -977,14 +1107,71 @@ double ReverbStage::ProcessAllpass(Allpass& allpass, double input) const
     return buffered - input;
 }
 
+void ReverbStage::ProcessFdn(double excitation, double& left, double& right)
+{
+    double outputs[kFdnLineCount] = {};
+    double feedback[kFdnLineCount] = {};
+
+    for (size_t index = 0; index < kFdnLineCount; ++index)
+    {
+        FdnLine& line = m_fdnLines[index];
+        if (line.buffer.empty())
+        {
+            continue;
+        }
+        outputs[index] = line.buffer[line.index];
+        line.store = outputs[index] * (1.0 - m_damping) +
+                     line.store * m_damping;
+        if (std::fabs(line.store) < 1e-20)
+        {
+            line.store = 0.0;
+        }
+        feedback[index] = line.store;
+    }
+
+    double mixed[kFdnLineCount] = {};
+    for (size_t row = 0; row < kFdnLineCount; ++row)
+    {
+        double value = 0.0;
+        for (size_t column = 0; column < kFdnLineCount; ++column)
+        {
+            value += m_fdnMatrix[row * kFdnLineCount + column] *
+                     feedback[column];
+        }
+        mixed[row] = value;
+    }
+
+    for (size_t index = 0; index < kFdnLineCount; ++index)
+    {
+        FdnLine& line = m_fdnLines[index];
+        if (line.buffer.empty())
+        {
+            continue;
+        }
+        const double next = mixed[index] +
+                            excitation * kFdnInputSigns[index] * 0.5;
+        line.buffer[line.index] = (std::fabs(next) < 1e-20) ? 0.0 : next;
+        if (++line.index >= line.buffer.size())
+        {
+            line.index = 0;
+        }
+        left += outputs[index] * m_fdnLeftTap[index];
+        right += outputs[index] * m_fdnRightTap[index];
+    }
+}
+
 void ReverbStage::Process(double* samples, UINT32 frames, UINT32 channels)
 {
-    if (!m_settings.enabled || m_settings.mix <= 0.0 || samples == nullptr ||
-        frames == 0 || channels == 0 || channels != m_channels ||
-        m_tanks.size() != channels || m_predelayCapacityFrames == 0)
+    if (!m_settings.enabled || m_settings.level <= 0.0 ||
+        samples == nullptr || frames == 0 || channels == 0 ||
+        channels != m_channels || m_tanks.size() != channels ||
+        m_fdnLines.size() != kFdnLineCount || m_predelayCapacityFrames == 0)
     {
         return;
     }
+
+    const bool fdn =
+        m_settings.algorithm == ReverbAlgorithm::FeedbackDelayNetwork;
 
     for (UINT32 frame = 0; frame < frames; ++frame)
     {
@@ -1003,27 +1190,66 @@ void ReverbStage::Process(double* samples, UINT32 frames, UINT32 channels)
 
         for (UINT32 channel = 0; channel < channels; ++channel)
         {
-            // Feed each tank its own channel plus a little of the mono sum.
-            // A mono source therefore excites both tanks and gets a wide tail,
-            // while a true stereo source keeps its image.
-            const double excitation = (values[channel] + mono) * 0.015;
+            // Narrow settings favor the mono sum; wide settings keep more of
+            // the individual channel so the two tails decorrelate.
+            const double excitation =
+                (values[channel] * (1.0 - m_monoMix) + mono * m_monoMix) *
+                0.015;
             m_predelay[m_predelayWrite * channels + channel] = excitation;
-            const double delayed =
-                m_predelay[readIndex * channels + channel];
+        }
 
-            Tank& tank = m_tanks[channel];
+        for (UINT32 channel = 0; channel < channels; ++channel)
+        {
             double wet = 0.0;
-            for (Comb& comb : tank.combs)
+            if (fdn)
             {
-                wet += ProcessComb(comb, delayed);
+                // The network is shared. Build its stereo output once, then
+                // fold it down for mono or alternate it for multichannel.
+                if (channel == 0)
+                {
+                    double delayedMono = 0.0;
+                    for (UINT32 source = 0; source < channels; ++source)
+                    {
+                        delayedMono +=
+                            m_predelay[readIndex * channels + source];
+                    }
+                    delayedMono /= static_cast<double>(channels);
+
+                    double left = 0.0;
+                    double right = 0.0;
+                    ProcessFdn(delayedMono, left, right);
+                    m_fdnLeft = left;
+                    m_fdnRight = right;
+                }
+                wet = (channels == 1)
+                          ? (m_fdnLeft + m_fdnRight) * 0.5
+                          : ((channel % 2 == 0) ? m_fdnLeft : m_fdnRight);
             }
-            for (Allpass& allpass : tank.allpasses)
+            else
             {
-                wet = ProcessAllpass(allpass, wet);
+                const double delayed =
+                    m_predelay[readIndex * channels + channel];
+                Tank& tank = m_tanks[channel];
+                for (Comb& comb : tank.combs)
+                {
+                    wet += ProcessComb(comb, delayed);
+                }
+                for (Allpass& allpass : tank.allpasses)
+                {
+                    wet = ProcessAllpass(allpass, wet);
+                }
             }
 
-            values[channel] =
-                values[channel] * m_dryGain + wet * m_wetGain;
+            if (m_wetLow.size() > channel)
+            {
+                m_wetLow[channel] +=
+                    (wet - m_wetLow[channel]) * m_wetLowCoeff;
+                // wet = high + low. Size scales only the low band, so low
+                // settings sound tight and high settings gain body.
+                wet = (wet - m_wetLow[channel]) +
+                      m_wetLow[channel] * m_lowGain;
+            }
+            values[channel] += wet * m_wetScale;
         }
 
         if (++m_predelayWrite >= m_predelayCapacityFrames)

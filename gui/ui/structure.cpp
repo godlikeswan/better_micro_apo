@@ -355,16 +355,31 @@ void LayoutEffectParams(int x, int y, int width)
         placePair(g_distOutputLabel, g_distOutputSlider, ParamResetDistOutput,
                   nullptr, nullptr, 0);
         break;
-    case apo::EffectType::Reverb:
-        placePair(g_reverbMixLabel, g_reverbMixSlider, ParamResetReverbMix,
-                  g_reverbSizeLabel, g_reverbSizeSlider,
-                  ParamResetReverbSize);
+    case apo::EffectType::Reverb: {
+        const int rightX = x + columnWidth + columnGap;
+        MoveWindow(g_reverbAlgorithmLabel, x, y, labelWidth, Scale(20), TRUE);
+        MoveWindow(g_reverbAlgorithmCombo, x + labelWidth, y, sliderWidth,
+                   Scale(200), TRUE);
+        placeReset(ParamResetReverbAlgorithm, x, y);
+        MoveWindow(g_reverbLevelLabel, rightX, y, labelWidth, Scale(20), TRUE);
+        MoveWindow(g_reverbLevelSlider, rightX + labelWidth, y, sliderWidth,
+                   controlHeight, TRUE);
+        placeReset(ParamResetReverbLevel, rightX, y);
+        y += rowStep;
+
+        placePair(g_reverbMaxLengthLabel, g_reverbMaxLengthSlider,
+                  ParamResetReverbMaxLength, g_reverbSizeLabel,
+                  g_reverbSizeSlider, ParamResetReverbSize);
         placePair(g_reverbDampingLabel, g_reverbDampingSlider,
-                  ParamResetReverbDamping, g_reverbPredelayLabel,
+                  ParamResetReverbDamping, g_reverbWidthLabel,
+                  g_reverbWidthSlider, ParamResetReverbWidth);
+        placePair(g_reverbDensityLabel, g_reverbDensitySlider,
+                  ParamResetReverbDensity, g_reverbPredelayLabel,
                   g_reverbPredelaySlider, ParamResetReverbPredelay);
-        placeIcon(g_reverbPredelayIcon, g_reverbPredelayLabel,
-                  x + columnWidth + columnGap, y - rowStep);
+        placeIcon(g_reverbPredelayIcon, g_reverbPredelayLabel, rightX,
+                  y - rowStep);
         break;
+    }
     default:
         break;
     }
@@ -619,15 +634,44 @@ void CreateControls(HWND root)
     g_eqReleaseSlider = ui::Slider(window, IDC_EQ_RELEASE_SLIDER,
                                     {1.0, 5000.0, 0.0, true, 0});
 
-    g_reverbMixLabel = ui::Label(window, IDC_REVERB_MIX_LABEL, L"Mix (%)");
-    g_reverbMixSlider = ui::Slider(window, IDC_REVERB_MIX_SLIDER,
-                                   {0.0, 100.0, 1.0, false, 0});
+    g_reverbAlgorithmLabel =
+        ui::Label(window, IDC_REVERB_ALGORITHM_LABEL, L"Algorithm");
+    g_reverbAlgorithmCombo =
+        ui::ComboBox(window, IDC_REVERB_ALGORITHM_COMBO, CBS_DROPDOWNLIST);
+    for (int algorithm = 0;
+         algorithm < static_cast<int>(apo::ReverbAlgorithm::Count);
+         ++algorithm) {
+        SendMessageW(g_reverbAlgorithmCombo, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(apo::ReverbAlgorithmName(
+                         static_cast<apo::ReverbAlgorithm>(algorithm))));
+    }
+    SendMessageW(g_reverbAlgorithmCombo, CB_SETCURSEL,
+                 static_cast<int>(apo::ReverbAlgorithm::CombAllpass), 0);
+
+    g_reverbLevelLabel =
+        ui::Label(window, IDC_REVERB_LEVEL_LABEL, L"Level (%)");
+    g_reverbLevelSlider = ui::Slider(window, IDC_REVERB_LEVEL_SLIDER,
+                                     {0.0, 100.0, 1.0, false, 0});
+    g_reverbMaxLengthLabel =
+        ui::Label(window, IDC_REVERB_MAX_LENGTH_LABEL, L"Max length (s)");
+    g_reverbMaxLengthSlider = ui::Slider(
+        window, IDC_REVERB_MAX_LENGTH_SLIDER,
+        {apo::kReverbMinMaxLengthMs / 1000.0,
+         apo::kReverbMaxMaxLengthMs / 1000.0, 0.1, false, 1});
     g_reverbSizeLabel = ui::Label(window, IDC_REVERB_SIZE_LABEL, L"Size (%)");
     g_reverbSizeSlider = ui::Slider(window, IDC_REVERB_SIZE_SLIDER,
                                     {0.0, 100.0, 1.0, false, 0});
     g_reverbDampingLabel =
         ui::Label(window, IDC_REVERB_DAMPING_LABEL, L"Damping (%)");
     g_reverbDampingSlider = ui::Slider(window, IDC_REVERB_DAMPING_SLIDER,
+                                       {0.0, 100.0, 1.0, false, 0});
+    g_reverbWidthLabel =
+        ui::Label(window, IDC_REVERB_WIDTH_LABEL, L"Width (%)");
+    g_reverbWidthSlider = ui::Slider(window, IDC_REVERB_WIDTH_SLIDER,
+                                     {0.0, 100.0, 1.0, false, 0});
+    g_reverbDensityLabel =
+        ui::Label(window, IDC_REVERB_DENSITY_LABEL, L"Density (%)");
+    g_reverbDensitySlider = ui::Slider(window, IDC_REVERB_DENSITY_SLIDER,
                                        {0.0, 100.0, 1.0, false, 0});
     g_reverbPredelayLabel =
         ui::Label(window, IDC_REVERB_PREDELAY_LABEL, L"Predelay (ms)");

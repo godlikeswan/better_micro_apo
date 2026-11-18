@@ -228,6 +228,17 @@ const wchar_t* DynamicsModeName(DynamicsMode mode)
     }
 }
 
+const wchar_t* ReverbAlgorithmName(ReverbAlgorithm algorithm)
+{
+    switch (algorithm)
+    {
+    case ReverbAlgorithm::CombAllpass:        return L"Comb/allpass";
+    case ReverbAlgorithm::FeedbackDelayNetwork:
+        return L"Feedback delay network (FDN)";
+    default:                                  return L"";
+    }
+}
+
 const wchar_t* DistortionFunctionName(int function)
 {
     switch (function)
@@ -432,9 +443,17 @@ void ClampEffect(EffectInstance& effect)
         break;
 
     case EffectType::Reverb:
-        ClampFinite(effect.reverb.mix, 20.0, 0.0, 100.0);
+        if (effect.reverb.algorithm < ReverbAlgorithm::CombAllpass ||
+            effect.reverb.algorithm >= ReverbAlgorithm::Count) {
+            effect.reverb.algorithm = ReverbAlgorithm::CombAllpass;
+        }
+        ClampFinite(effect.reverb.level, 20.0, 0.0, 100.0);
+        ClampFinite(effect.reverb.maxLengthMs, 2000.0,
+                    kReverbMinMaxLengthMs, kReverbMaxMaxLengthMs);
         ClampFinite(effect.reverb.size, 50.0, 0.0, 100.0);
         ClampFinite(effect.reverb.damping, 50.0, 0.0, 100.0);
+        ClampFinite(effect.reverb.width, 50.0, 0.0, 100.0);
+        ClampFinite(effect.reverb.density, 50.0, 0.0, 100.0);
         ClampFinite(effect.reverb.predelayMs, 20.0, 0.0, 200.0);
         break;
 
@@ -602,12 +621,19 @@ void LoadEffectFields(const std::vector<KeyValue>& entries,
         getDouble(L"saturation_output_db", effect.distortion.outputDb);
         break;
 
-    case EffectType::Reverb:
-        getDouble(L"reverb_mix", effect.reverb.mix);
+    case EffectType::Reverb: {
+        int algorithm = static_cast<int>(effect.reverb.algorithm);
+        getInt(L"reverb_algorithm", algorithm);
+        effect.reverb.algorithm = static_cast<ReverbAlgorithm>(algorithm);
+        getDouble(L"reverb_level", effect.reverb.level);
+        getDouble(L"reverb_max_length_ms", effect.reverb.maxLengthMs);
         getDouble(L"reverb_size", effect.reverb.size);
         getDouble(L"reverb_damping", effect.reverb.damping);
+        getDouble(L"reverb_width", effect.reverb.width);
+        getDouble(L"reverb_density", effect.reverb.density);
         getDouble(L"reverb_predelay_ms", effect.reverb.predelayMs);
         break;
+    }
 
     default:
         break;
@@ -825,12 +851,22 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
                 break;
 
             case EffectType::Reverb:
-                text += prefix + "reverb_mix=" +
-                        FormatDouble(effect.reverb.mix) + "\n";
+                text += prefix + "reverb_algorithm=" +
+                        std::to_string(
+                            static_cast<int>(effect.reverb.algorithm)) +
+                        "\n";
+                text += prefix + "reverb_level=" +
+                        FormatDouble(effect.reverb.level) + "\n";
+                text += prefix + "reverb_max_length_ms=" +
+                        FormatDouble(effect.reverb.maxLengthMs) + "\n";
                 text += prefix + "reverb_size=" +
                         FormatDouble(effect.reverb.size) + "\n";
                 text += prefix + "reverb_damping=" +
                         FormatDouble(effect.reverb.damping) + "\n";
+                text += prefix + "reverb_width=" +
+                        FormatDouble(effect.reverb.width) + "\n";
+                text += prefix + "reverb_density=" +
+                        FormatDouble(effect.reverb.density) + "\n";
                 text += prefix + "reverb_predelay_ms=" +
                         FormatDouble(effect.reverb.predelayMs) + "\n";
                 break;

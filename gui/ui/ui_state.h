@@ -71,12 +71,20 @@ enum : int {
     IDC_DIST_CURVATURE_SLIDER,
     IDC_DIST_OUTPUT_LABEL,
     IDC_DIST_OUTPUT_SLIDER,
-    IDC_REVERB_MIX_LABEL,
-    IDC_REVERB_MIX_SLIDER,
+    IDC_REVERB_ALGORITHM_LABEL,
+    IDC_REVERB_ALGORITHM_COMBO,
+    IDC_REVERB_LEVEL_LABEL,
+    IDC_REVERB_LEVEL_SLIDER,
+    IDC_REVERB_MAX_LENGTH_LABEL,
+    IDC_REVERB_MAX_LENGTH_SLIDER,
     IDC_REVERB_SIZE_LABEL,
     IDC_REVERB_SIZE_SLIDER,
     IDC_REVERB_DAMPING_LABEL,
     IDC_REVERB_DAMPING_SLIDER,
+    IDC_REVERB_WIDTH_LABEL,
+    IDC_REVERB_WIDTH_SLIDER,
+    IDC_REVERB_DENSITY_LABEL,
+    IDC_REVERB_DENSITY_SLIDER,
     IDC_REVERB_PREDELAY_LABEL,
     IDC_REVERB_PREDELAY_SLIDER,
     IDC_REVERB_PREDELAY_ICON,
@@ -116,9 +124,13 @@ enum ParamReset : int {
     ParamResetDynRange,
     ParamResetDynAttack,
     ParamResetDynRelease,
-    ParamResetReverbMix,
+    ParamResetReverbAlgorithm,
+    ParamResetReverbLevel,
+    ParamResetReverbMaxLength,
     ParamResetReverbSize,
     ParamResetReverbDamping,
+    ParamResetReverbWidth,
+    ParamResetReverbDensity,
     ParamResetReverbPredelay,
     ParamResetDistFunction,
     ParamResetDistDrive,
@@ -207,12 +219,20 @@ extern HWND g_distCurvatureLabel;
 extern HWND g_distCurvatureSlider;
 extern HWND g_distOutputLabel;
 extern HWND g_distOutputSlider;
-extern HWND g_reverbMixLabel;
-extern HWND g_reverbMixSlider;
+extern HWND g_reverbAlgorithmLabel;
+extern HWND g_reverbAlgorithmCombo;
+extern HWND g_reverbLevelLabel;
+extern HWND g_reverbLevelSlider;
+extern HWND g_reverbMaxLengthLabel;
+extern HWND g_reverbMaxLengthSlider;
 extern HWND g_reverbSizeLabel;
 extern HWND g_reverbSizeSlider;
 extern HWND g_reverbDampingLabel;
 extern HWND g_reverbDampingSlider;
+extern HWND g_reverbWidthLabel;
+extern HWND g_reverbWidthSlider;
+extern HWND g_reverbDensityLabel;
+extern HWND g_reverbDensitySlider;
 extern HWND g_reverbPredelayLabel;
 extern HWND g_reverbPredelaySlider;
 extern HWND g_reverbPredelayIcon;

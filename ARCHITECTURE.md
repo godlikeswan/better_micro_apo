@@ -26,7 +26,7 @@ trim, target-latching hold, and optional lookahead. Input ranges −24 to +30 dB
 Its ratio slider ends at **∞** (written as `inf` in the INI); the last finite
 position is 1000.
 
-Durable settings use schema version 6 and the runtime snapshot uses version 8.
+Durable settings use schema version 7 and the runtime snapshot uses version 9.
 Loading a settings file with any other `[dsp] version` deletes the file and
 starts from defaults; there is no migration path. See
 [DLL ↔ GUI settings sharing](docs/runtime-sharing.md) for the file formats and

@@ -281,10 +281,14 @@ void ShowEffectControls(apo::EffectType type, bool show)
                  g_distOutputLabel, g_distOutputSlider});
         break;
     case apo::EffectType::Reverb:
-        showAll({g_reverbMixLabel, g_reverbMixSlider, g_reverbSizeLabel,
-                 g_reverbSizeSlider, g_reverbDampingLabel,
-                 g_reverbDampingSlider, g_reverbPredelayLabel,
-                 g_reverbPredelaySlider});
+        showAll({g_reverbAlgorithmLabel, g_reverbAlgorithmCombo,
+                 g_reverbLevelLabel, g_reverbLevelSlider,
+                 g_reverbMaxLengthLabel, g_reverbMaxLengthSlider,
+                 g_reverbSizeLabel, g_reverbSizeSlider,
+                 g_reverbDampingLabel, g_reverbDampingSlider,
+                 g_reverbWidthLabel, g_reverbWidthSlider,
+                 g_reverbDensityLabel, g_reverbDensitySlider,
+                 g_reverbPredelayLabel, g_reverbPredelaySlider});
         break;
     default:
         break;
@@ -316,9 +320,13 @@ void EnableEffectControls(bool enabled)
         g_distDriveLabel, g_distDriveSlider,
         g_distCurvatureLabel, g_distCurvatureSlider,
         g_distOutputLabel, g_distOutputSlider,
-        g_reverbMixLabel, g_reverbMixSlider,
+        g_reverbAlgorithmLabel, g_reverbAlgorithmCombo,
+        g_reverbLevelLabel, g_reverbLevelSlider,
+        g_reverbMaxLengthLabel, g_reverbMaxLengthSlider,
         g_reverbSizeLabel, g_reverbSizeSlider,
         g_reverbDampingLabel, g_reverbDampingSlider,
+        g_reverbWidthLabel, g_reverbWidthSlider,
+        g_reverbDensityLabel, g_reverbDensitySlider,
         g_reverbPredelayLabel, g_reverbPredelaySlider,
         g_noiseReductionLabel, g_noiseReductionSlider,
         g_noiseFftSizeLabel, g_noiseFftSizeCombo, g_noiseCapture,
@@ -470,12 +478,25 @@ void ReadEffectControls(apo::EffectInstance& effect)
         GetSliderValue(g_distOutputSlider, effect.distortion.outputDb);
         break;
     }
-    case apo::EffectType::Reverb:
-        GetSliderValue(g_reverbMixSlider, effect.reverb.mix);
+    case apo::EffectType::Reverb: {
+        const int algorithm = static_cast<int>(
+            SendMessageW(g_reverbAlgorithmCombo, CB_GETCURSEL, 0, 0));
+        if (algorithm >= 0 &&
+            algorithm < static_cast<int>(apo::ReverbAlgorithm::Count)) {
+            effect.reverb.algorithm =
+                static_cast<apo::ReverbAlgorithm>(algorithm);
+        }
+        GetSliderValue(g_reverbLevelSlider, effect.reverb.level);
+        double maxLengthSeconds = effect.reverb.maxLengthMs / 1000.0;
+        GetSliderValue(g_reverbMaxLengthSlider, maxLengthSeconds);
+        effect.reverb.maxLengthMs = maxLengthSeconds * 1000.0;
         GetSliderValue(g_reverbSizeSlider, effect.reverb.size);
         GetSliderValue(g_reverbDampingSlider, effect.reverb.damping);
+        GetSliderValue(g_reverbWidthSlider, effect.reverb.width);
+        GetSliderValue(g_reverbDensitySlider, effect.reverb.density);
         GetSliderValue(g_reverbPredelaySlider, effect.reverb.predelayMs);
         break;
+    }
     default:
         break;
     }
@@ -538,9 +559,15 @@ void ShowEffectForSelected()
     SetSliderValue(g_eqRangeSlider, effect.equalizer.rangeDb);
     SetSliderValue(g_eqAttackSlider, effect.equalizer.attackMs);
     SetSliderValue(g_eqReleaseSlider, effect.equalizer.releaseMs);
-    SetSliderValue(g_reverbMixSlider, effect.reverb.mix);
+    SendMessageW(g_reverbAlgorithmCombo, CB_SETCURSEL,
+                 static_cast<int>(effect.reverb.algorithm), 0);
+    SetSliderValue(g_reverbLevelSlider, effect.reverb.level);
+    SetSliderValue(g_reverbMaxLengthSlider,
+                   effect.reverb.maxLengthMs / 1000.0);
     SetSliderValue(g_reverbSizeSlider, effect.reverb.size);
     SetSliderValue(g_reverbDampingSlider, effect.reverb.damping);
+    SetSliderValue(g_reverbWidthSlider, effect.reverb.width);
+    SetSliderValue(g_reverbDensitySlider, effect.reverb.density);
     SetSliderValue(g_reverbPredelaySlider, effect.reverb.predelayMs);
     SendMessageW(g_distFunctionCombo, CB_SETCURSEL,
                  effect.distortion.function, 0);
@@ -642,9 +669,15 @@ bool CommitEffectEditor(bool showValues = true)
             SetSliderValue(g_distOutputSlider, shown.distortion.outputDb);
             break;
         case apo::EffectType::Reverb:
-            SetSliderValue(g_reverbMixSlider, shown.reverb.mix);
+            SendMessageW(g_reverbAlgorithmCombo, CB_SETCURSEL,
+                         static_cast<int>(shown.reverb.algorithm), 0);
+            SetSliderValue(g_reverbLevelSlider, shown.reverb.level);
+            SetSliderValue(g_reverbMaxLengthSlider,
+                           shown.reverb.maxLengthMs / 1000.0);
             SetSliderValue(g_reverbSizeSlider, shown.reverb.size);
             SetSliderValue(g_reverbDampingSlider, shown.reverb.damping);
+            SetSliderValue(g_reverbWidthSlider, shown.reverb.width);
+            SetSliderValue(g_reverbDensitySlider, shown.reverb.density);
             SetSliderValue(g_reverbPredelaySlider, shown.reverb.predelayMs);
             break;
         default:
@@ -717,12 +750,21 @@ bool ParameterAtDefault(const apo::EffectInstance& effect,
     case ParamResetDynRelease:
         return SameValue(effect.equalizer.releaseMs,
                          defaults.equalizer.releaseMs);
-    case ParamResetReverbMix:
-        return SameValue(effect.reverb.mix, defaults.reverb.mix);
+    case ParamResetReverbAlgorithm:
+        return effect.reverb.algorithm == defaults.reverb.algorithm;
+    case ParamResetReverbLevel:
+        return SameValue(effect.reverb.level, defaults.reverb.level);
+    case ParamResetReverbMaxLength:
+        return SameValue(effect.reverb.maxLengthMs,
+                         defaults.reverb.maxLengthMs);
     case ParamResetReverbSize:
         return SameValue(effect.reverb.size, defaults.reverb.size);
     case ParamResetReverbDamping:
         return SameValue(effect.reverb.damping, defaults.reverb.damping);
+    case ParamResetReverbWidth:
+        return SameValue(effect.reverb.width, defaults.reverb.width);
+    case ParamResetReverbDensity:
+        return SameValue(effect.reverb.density, defaults.reverb.density);
     case ParamResetReverbPredelay:
         return SameValue(effect.reverb.predelayMs, defaults.reverb.predelayMs);
     case ParamResetDistFunction:
@@ -836,14 +878,26 @@ void ResetParameter(int param)
     case ParamResetDynRelease:
         effect.equalizer.releaseMs = defaults.equalizer.releaseMs;
         break;
-    case ParamResetReverbMix:
-        effect.reverb.mix = defaults.reverb.mix;
+    case ParamResetReverbAlgorithm:
+        effect.reverb.algorithm = defaults.reverb.algorithm;
+        break;
+    case ParamResetReverbLevel:
+        effect.reverb.level = defaults.reverb.level;
+        break;
+    case ParamResetReverbMaxLength:
+        effect.reverb.maxLengthMs = defaults.reverb.maxLengthMs;
         break;
     case ParamResetReverbSize:
         effect.reverb.size = defaults.reverb.size;
         break;
     case ParamResetReverbDamping:
         effect.reverb.damping = defaults.reverb.damping;
+        break;
+    case ParamResetReverbWidth:
+        effect.reverb.width = defaults.reverb.width;
+        break;
+    case ParamResetReverbDensity:
+        effect.reverb.density = defaults.reverb.density;
         break;
     case ParamResetReverbPredelay:
         effect.reverb.predelayMs = defaults.reverb.predelayMs;
@@ -2108,6 +2162,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             break;
         case IDC_DIST_FUNCTION_COMBO:
         case IDC_DYN_MODE_COMBO:
+        case IDC_REVERB_ALGORITHM_COMBO:
         case IDC_NOISE_FFT_SIZE_COMBO:
             if (HIWORD(wParam) == CBN_SELCHANGE) {
                 MarkSettingsDirty();
@@ -2132,9 +2187,12 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_EQ_RANGE_SLIDER:
         case IDC_EQ_ATTACK_SLIDER:
         case IDC_EQ_RELEASE_SLIDER:
-        case IDC_REVERB_MIX_SLIDER:
+        case IDC_REVERB_LEVEL_SLIDER:
+        case IDC_REVERB_MAX_LENGTH_SLIDER:
         case IDC_REVERB_SIZE_SLIDER:
         case IDC_REVERB_DAMPING_SLIDER:
+        case IDC_REVERB_WIDTH_SLIDER:
+        case IDC_REVERB_DENSITY_SLIDER:
         case IDC_REVERB_PREDELAY_SLIDER:
         case IDC_DIST_DRIVE_SLIDER:
         case IDC_DIST_CURVATURE_SLIDER:
