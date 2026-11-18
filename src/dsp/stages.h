@@ -38,6 +38,12 @@ private:
     double m_releaseCoeff = 0.0;
     double m_gainDb = 0.0;
 
+    // Latched gain change. Hold keeps the target active after the signal stops
+    // demanding it, so a short peak still gets the full attack ramp.
+    double m_heldTargetDb = 0.0;
+    UINT32 m_holdFrames = 0;
+    UINT32 m_holdCounter = 0;
+
     // Delay line used by the lookahead. Sized for the maximum allowed lookahead
     // at Configure time so Update never allocates.
     std::vector<double> m_delay;

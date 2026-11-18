@@ -28,7 +28,7 @@ filename-safe with `apo::SafeEndpointId`.
 | --- | --- | --- |
 | `sequence` | `volatile uint32_t` | Seqlock: odd while writing, even when complete. |
 | `magic` | `uint32_t` | `0x50414D42` (`"BMAP"`). |
-| `version` | `uint32_t` | `7`; bump whenever `ApoSettings` changes layout. |
+| `version` | `uint32_t` | `8`; bump whenever `ApoSettings` changes layout. |
 | `structSize` | `uint32_t` | Size of the full structure. |
 | `generation` | `volatile uint64_t` | Incremented on each published snapshot; this is what the APO polls. |
 | `settings` | `ApoSettings` | The complete settings blob, copied by value. |
@@ -99,7 +99,7 @@ new snapshot is applied exactly once.
 `devices\{id}.ini` has a single `[dsp]` section:
 
 ```
-version=5
+version=6
 preset_count=4
 preset_index=0
 isolate_effects=1
@@ -117,13 +117,14 @@ Each preset stores `effect_count`, `next_effect_id`, and one block per entry
 with `id`, `type`, `enabled`, and the type's parameter keys. Effect types are
 `gain`, `noise`, `dynamics`, `equalizer`, `mono`, `saturation`, and `reverb`;
 parameter keys include `dynamics_threshold_db`, `dynamics_ratio`,
-`equalizer_frequency_hz`, `saturation_function`, and `reverb_predelay_ms`.
+`dynamics_hold_ms`, `equalizer_frequency_hz`, `saturation_function`, and
+`reverb_predelay_ms`.
 The `id` is the stable instance id the stage pool uses to tell whether a slot
 now holds a different effect. Four presets are always written; only
 `preset_index` is processed.
 
 `LoadSettings` starts with defaults. If `[dsp] version` is missing or is not
-**5**, it deletes the INI file and returns the defaults; there is no migration
+**6**, it deletes the INI file and returns the defaults; there is no migration
 path for old settings. For a current file, `ClampSettings` repairs invalid
 values: non-finite numbers fall back to defaults (except `dynamics_ratio`,
 where positive infinity is valid and is written as `inf`), every numeric field

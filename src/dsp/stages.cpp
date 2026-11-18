@@ -89,11 +89,19 @@ void DynamicsStage::ApplyCoefficients(const AudioFormat& format)
         delayFrames = m_delayCapacityFrames;
     }
     m_delayFrames = delayFrames;
+
+    // The hold must last until the detected frame has passed the lookahead
+    // delay, so add the delay length to the user's hold time.
+    const double holdSeconds = m_settings.holdMs * 0.001;
+    m_holdFrames =
+        static_cast<UINT32>(holdSeconds * sampleRate + 0.5) + m_delayFrames;
 }
 
 void DynamicsStage::Reset()
 {
     m_gainDb = 0.0;
+    m_heldTargetDb = 0.0;
+    m_holdCounter = 0;
     m_delayWrite = 0;
     std::fill(m_delay.begin(), m_delay.end(), 0.0);
 }
@@ -121,15 +129,32 @@ void DynamicsStage::Process(double* samples, UINT32 frames, UINT32 channels)
 
         const double peak = PeakOfFrame(values, channels);
         const double levelDb = LinearToDecibels(peak);
-        const double targetDb =
+        double targetDb =
             DynamicsGainDb(levelDb, m_thresholdDb, m_settings.ratio,
                            m_settings.mode);
-        // Attack while the gain change deepens, release as it returns to unity.
-        // Magnitude keeps this correct in both the cutting and boosting modes.
+
+        // Latch a deeper gain change so a short peak keeps its target active
+        // long enough for attack to reach it. Hold includes the lookahead, so
+        // the counter is measured from the frame that reaches the output.
+        if (std::fabs(targetDb) > std::fabs(m_heldTargetDb) + 1e-6) {
+            m_heldTargetDb = targetDb;
+            m_holdCounter = m_holdFrames;
+        }
+        const bool holding = m_holdCounter > 0;
+        if (holding) {
+            --m_holdCounter;
+            targetDb = m_heldTargetDb;
+        }
+
+        // Attack while the target deepens the gain change, release as it
+        // returns to unity. Magnitude keeps this correct in both modes.
         const double coefficient =
             (std::fabs(targetDb) > std::fabs(m_gainDb)) ? m_attackCoeff
                                                         : m_releaseCoeff;
         m_gainDb += (targetDb - m_gainDb) * coefficient;
+        if (!holding) {
+            m_heldTargetDb = 0.0;
+        }
         const double gain = DecibelsToLinear(m_gainDb) * m_outputGain;
 
         if (lookahead)

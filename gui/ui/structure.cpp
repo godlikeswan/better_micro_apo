@@ -316,6 +316,8 @@ void LayoutEffectParams(int x, int y, int width)
                   g_dynamicsLookaheadSlider, ParamResetDynamicsLookahead);
         placeIcon(g_dynamicsLookaheadIcon, g_dynamicsLookaheadLabel, rightX,
                   y - rowStep);
+        placePair(g_dynamicsHoldLabel, g_dynamicsHoldSlider,
+                  ParamResetDynamicsHold, nullptr, nullptr, 0);
         break;
     }
     case apo::EffectType::Equalizer:
@@ -550,7 +552,7 @@ void CreateControls(HWND root)
     g_dynamicsInputLabel =
         ui::Label(window, IDC_DYN_INPUT_LABEL, L"Input (dB)");
     g_dynamicsInputSlider = ui::Slider(window, IDC_DYN_INPUT_SLIDER,
-                                       {-24.0, 24.0, 0.5, false, 1});
+                                       {-24.0, 30.0, 0.5, false, 1});
     g_dynamicsThresholdLabel =
         ui::Label(window, IDC_DYN_THRESHOLD_LABEL, L"Threshold (dBFS)");
     g_dynamicsThresholdSlider = ui::Slider(
@@ -568,6 +570,10 @@ void CreateControls(HWND root)
         ui::Label(window, IDC_DYN_RELEASE_LABEL, L"Release (ms)");
     g_dynamicsReleaseSlider = ui::Slider(window, IDC_DYN_RELEASE_SLIDER,
                                          {1.0, 5000.0, 0.0, true, 0});
+    g_dynamicsHoldLabel =
+        ui::Label(window, IDC_DYN_HOLD_LABEL, L"Hold (ms)");
+    g_dynamicsHoldSlider = ui::Slider(window, IDC_DYN_HOLD_SLIDER,
+                                      {0.0, 2000.0, 1.0, false, 0});
     g_dynamicsOutputLabel =
         ui::Label(window, IDC_DYN_OUTPUT_LABEL, L"Output (dB)");
     g_dynamicsOutputSlider = ui::Slider(window, IDC_DYN_OUTPUT_SLIDER,

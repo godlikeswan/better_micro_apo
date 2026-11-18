@@ -39,6 +39,8 @@ enum : int {
     IDC_DYN_ATTACK_SLIDER,
     IDC_DYN_RELEASE_LABEL,
     IDC_DYN_RELEASE_SLIDER,
+    IDC_DYN_HOLD_LABEL,
+    IDC_DYN_HOLD_SLIDER,
     IDC_DYN_OUTPUT_LABEL,
     IDC_DYN_OUTPUT_SLIDER,
     IDC_DYN_LOOKAHEAD_LABEL,
@@ -102,6 +104,7 @@ enum ParamReset : int {
     ParamResetDynamicsRatio,
     ParamResetDynamicsAttack,
     ParamResetDynamicsRelease,
+    ParamResetDynamicsHold,
     ParamResetDynamicsOutput,
     ParamResetDynamicsLookahead,
     ParamResetGain,
@@ -172,6 +175,8 @@ extern HWND g_dynamicsAttackLabel;
 extern HWND g_dynamicsAttackSlider;
 extern HWND g_dynamicsReleaseLabel;
 extern HWND g_dynamicsReleaseSlider;
+extern HWND g_dynamicsHoldLabel;
+extern HWND g_dynamicsHoldSlider;
 extern HWND g_dynamicsOutputLabel;
 extern HWND g_dynamicsOutputSlider;
 extern HWND g_dynamicsLookaheadLabel;

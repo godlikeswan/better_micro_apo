@@ -399,10 +399,11 @@ void ClampEffect(EffectInstance& effect)
         }
         ClampFinite(effect.dynamics.thresholdDb, -15.0, -80.0, 0.0);
         ClampRatio(effect.dynamics.ratio);
-        ClampFinite(effect.dynamics.inputDb, 0.0, -24.0, 24.0);
+        ClampFinite(effect.dynamics.inputDb, 0.0, -24.0, 30.0);
         ClampFinite(effect.dynamics.outputDb, 0.0, -24.0, 24.0);
         ClampFinite(effect.dynamics.attackMs, 5.0, 0.1, 1000.0);
         ClampFinite(effect.dynamics.releaseMs, 100.0, 1.0, 5000.0);
+        ClampFinite(effect.dynamics.holdMs, 50.0, 0.0, 2000.0);
         ClampFinite(effect.dynamics.lookaheadMs, 0.0, 0.0,
                     kDynamicsMaxLookaheadMs);
         break;
@@ -575,6 +576,7 @@ void LoadEffectFields(const std::vector<KeyValue>& entries,
         getDouble(L"dynamics_output_db", effect.dynamics.outputDb);
         getDouble(L"dynamics_attack_ms", effect.dynamics.attackMs);
         getDouble(L"dynamics_release_ms", effect.dynamics.releaseMs);
+        getDouble(L"dynamics_hold_ms", effect.dynamics.holdMs);
         getDouble(L"dynamics_lookahead_ms", effect.dynamics.lookaheadMs);
         break;
     }
@@ -783,6 +785,8 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
                         FormatDouble(effect.dynamics.attackMs) + "\n";
                 text += prefix + "dynamics_release_ms=" +
                         FormatDouble(effect.dynamics.releaseMs) + "\n";
+                text += prefix + "dynamics_hold_ms=" +
+                        FormatDouble(effect.dynamics.holdMs) + "\n";
                 text += prefix + "dynamics_lookahead_ms=" +
                         FormatDouble(effect.dynamics.lookaheadMs) + "\n";
                 break;

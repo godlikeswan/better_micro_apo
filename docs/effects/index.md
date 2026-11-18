@@ -62,7 +62,7 @@ effect edits can be applied from the runtime polling path.
   effect's page, clamps every number to its listed range (the dynamics ratio
   also accepts positive infinity), normalizes ids, and forces
   `isolateEffects = true`.
-- Settings schema version 5 is the only accepted version. A file with a missing
+- Settings schema version 6 is the only accepted version. A file with a missing
   or mismatched `[dsp] version` is deleted on load instead of migrated.
 
 ### Graph and transfer math

@@ -11,7 +11,7 @@ namespace apo {
 
 // Settings files with any other version are discarded on load. There is no
 // migration path: a new schema starts from defaults.
-inline constexpr int kSettingsVersion = 5;
+inline constexpr int kSettingsVersion = 6;
 
 // Analysis sizes offered for spectral noise reduction. The buffers and FFT
 // plans for every size are created when the stream binds, so changing
@@ -105,6 +105,11 @@ struct DynamicsSettings
     double outputDb = 0.0;
     double attackMs = 5.0;
     double releaseMs = 100.0;
+
+    // Keeps the last computed gain change active after the signal stops
+    // demanding it, giving attack time to catch short peaks before release.
+    // The hold includes the lookahead, so it is measured at the output.
+    double holdMs = 50.0;
 
     // Detector lookahead. The audio is delayed by this much so the gain change
     // can start before a transient reaches the output. Adds the same latency to

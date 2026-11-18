@@ -28,24 +28,31 @@ the threshold, ratio, timing, input/output trim, and lookahead controls.
   Gain when you only want to compensate this effect.
 - **Attack** and **Release** set the one-pole smoothing. Shorter attack catches
   a transient; longer release avoids a jumpy or pumped sound between words.
+- **Hold** keeps the computed gain change active after the signal stops demanding
+  it, so a short peak still gets the full attack ramp before release. Raise it if
+  brief loud sounds still get through; lower it for a more natural, less
+  “grabby” sound. The hold includes the lookahead, so it is measured at the
+  output.
 - **Lookahead** lets the detector see a transient before it reaches the output,
   which helps leading consonants stay audible. It delays the stream by the same
   amount, so keep it low or at 0 ms when latency matters. The ⏱ marker is a
   reminder.
 - A newly added instance starts in Compressor/Limiter mode at −15 dBFS, 5:1, 0 dB
-  input and output, 5 ms attack, 100 ms release, and 0 ms lookahead. The small ↺
-  buttons reset individual controls. At most 4 instances are supported.
+  input and output, 5 ms attack, 100 ms release, 50 ms hold, and 0 ms lookahead.
+  The small ↺ buttons reset individual controls. At most 4 instances are
+  supported.
 
 ## Controls
 
 | Control | Default | Range | What it does |
 | --- | --- | --- | --- |
 | Mode | Compressor/Limiter | Compressor/Limiter, Expander/Gate | Which side of the threshold is affected. |
-| Input | 0 dB | −24 to +24 dB | Trim before the detector and the signal path. |
+| Input | 0 dB | −24 to +30 dB | Trim before the detector and the signal path. |
 | Threshold | −15 dBFS | −80 to 0 dBFS | Level where the dynamics start acting. |
 | Ratio | 5:1 | 0.01:1 to ∞ | Slope on the affected side; 1 is unity and ∞ is hard. |
 | Attack | 5 ms | 0.1 to 1000 ms | Smoothing when the gain change deepens. |
 | Release | 100 ms | 1 to 5000 ms | Smoothing when the gain change returns to unity. |
+| Hold | 50 ms | 0 to 2000 ms | Keeps the computed gain change active before releasing. |
 | Output | 0 dB | −24 to +24 dB | Trim after the dynamics. |
 | Lookahead | 0 ms | 0 to 300 ms | Delay before processing; adds the same latency while enabled. |
 
@@ -61,6 +68,10 @@ the threshold, ratio, timing, input/output trim, and lookahead controls.
 - Input gain is applied before detection; output gain is applied after the
   dynamics. Attack and release are chosen by the magnitude of the gain change,
   so both modes smooth correctly whether they are cutting or boosting.
+- When a deeper gain change is detected, its target is latched and kept active
+  for `holdMs` plus the lookahead. Attack ramps toward that latched target even
+  if the peak has already gone, then release returns toward the live target.
+  This lets short peaks receive the full attack ramp at the output.
 - With lookahead, the incoming frame enters a per-stage delay line while the
   detector computes the gain for the frame one lookahead behind it. The line is
   allocated in `Configure` for the 300 ms maximum, so changing lookahead live

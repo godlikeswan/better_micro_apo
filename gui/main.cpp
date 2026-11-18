@@ -257,6 +257,7 @@ void ShowEffectControls(apo::EffectType type, bool show)
                  g_dynamicsRatioLabel, g_dynamicsRatioSlider,
                  g_dynamicsAttackLabel, g_dynamicsAttackSlider,
                  g_dynamicsReleaseLabel, g_dynamicsReleaseSlider,
+                 g_dynamicsHoldLabel, g_dynamicsHoldSlider,
                  g_dynamicsOutputLabel, g_dynamicsOutputSlider,
                  g_dynamicsLookaheadLabel, g_dynamicsLookaheadSlider});
         break;
@@ -299,6 +300,7 @@ void EnableEffectControls(bool enabled)
         g_dynamicsRatioLabel, g_dynamicsRatioSlider,
         g_dynamicsAttackLabel, g_dynamicsAttackSlider,
         g_dynamicsReleaseLabel, g_dynamicsReleaseSlider,
+        g_dynamicsHoldLabel, g_dynamicsHoldSlider,
         g_dynamicsOutputLabel, g_dynamicsOutputSlider,
         g_dynamicsLookaheadLabel, g_dynamicsLookaheadSlider,
         g_gainLabel, g_gainSlider,
@@ -435,6 +437,7 @@ void ReadEffectControls(apo::EffectInstance& effect)
         GetSliderValue(g_dynamicsRatioSlider, effect.dynamics.ratio);
         GetSliderValue(g_dynamicsAttackSlider, effect.dynamics.attackMs);
         GetSliderValue(g_dynamicsReleaseSlider, effect.dynamics.releaseMs);
+        GetSliderValue(g_dynamicsHoldSlider, effect.dynamics.holdMs);
         GetSliderValue(g_dynamicsOutputSlider, effect.dynamics.outputDb);
         GetSliderValue(g_dynamicsLookaheadSlider,
                        effect.dynamics.lookaheadMs);
@@ -524,6 +527,7 @@ void ShowEffectForSelected()
     SetSliderValue(g_dynamicsRatioSlider, effect.dynamics.ratio);
     SetSliderValue(g_dynamicsAttackSlider, effect.dynamics.attackMs);
     SetSliderValue(g_dynamicsReleaseSlider, effect.dynamics.releaseMs);
+    SetSliderValue(g_dynamicsHoldSlider, effect.dynamics.holdMs);
     SetSliderValue(g_dynamicsOutputSlider, effect.dynamics.outputDb);
     SetSliderValue(g_dynamicsLookaheadSlider, effect.dynamics.lookaheadMs);
     SetSliderValue(g_gainSlider, effect.gain.gainDb);
@@ -609,6 +613,7 @@ bool CommitEffectEditor(bool showValues = true)
             SetSliderValue(g_dynamicsRatioSlider, shown.dynamics.ratio);
             SetSliderValue(g_dynamicsAttackSlider, shown.dynamics.attackMs);
             SetSliderValue(g_dynamicsReleaseSlider, shown.dynamics.releaseMs);
+            SetSliderValue(g_dynamicsHoldSlider, shown.dynamics.holdMs);
             SetSliderValue(g_dynamicsOutputSlider, shown.dynamics.outputDb);
             SetSliderValue(g_dynamicsLookaheadSlider,
                            shown.dynamics.lookaheadMs);
@@ -683,6 +688,8 @@ bool ParameterAtDefault(const apo::EffectInstance& effect,
     case ParamResetDynamicsRelease:
         return SameValue(effect.dynamics.releaseMs,
                          defaults.dynamics.releaseMs);
+    case ParamResetDynamicsHold:
+        return SameValue(effect.dynamics.holdMs, defaults.dynamics.holdMs);
     case ParamResetDynamicsOutput:
         return SameValue(effect.dynamics.outputDb, defaults.dynamics.outputDb);
     case ParamResetDynamicsLookahead:
@@ -792,6 +799,9 @@ void ResetParameter(int param)
         break;
     case ParamResetDynamicsRelease:
         effect.dynamics.releaseMs = defaults.dynamics.releaseMs;
+        break;
+    case ParamResetDynamicsHold:
+        effect.dynamics.holdMs = defaults.dynamics.holdMs;
         break;
     case ParamResetDynamicsOutput:
         effect.dynamics.outputDb = defaults.dynamics.outputDb;
@@ -2110,6 +2120,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_DYN_RATIO_SLIDER:
         case IDC_DYN_ATTACK_SLIDER:
         case IDC_DYN_RELEASE_SLIDER:
+        case IDC_DYN_HOLD_SLIDER:
         case IDC_DYN_OUTPUT_SLIDER:
         case IDC_DYN_LOOKAHEAD_SLIDER:
         case IDC_GAIN_SLIDER:

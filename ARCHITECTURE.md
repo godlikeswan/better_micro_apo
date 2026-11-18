@@ -22,10 +22,11 @@ The effect list is ordered `Gain`, `Noise reduction`,
 of **+12 dB** and a range of **−24 to +50 dB**. The unified dynamics effect uses
 one of two modes — **Compressor/Limiter** above the threshold or
 **Expander/Gate** below it — with a −15 dB threshold, 5:1 ratio, input/output
-trim, and optional lookahead. Its ratio slider ends at **∞** (written as `inf`
-in the INI); the last finite position is 1000.
+trim, target-latching hold, and optional lookahead. Input ranges −24 to +30 dB.
+Its ratio slider ends at **∞** (written as `inf` in the INI); the last finite
+position is 1000.
 
-Durable settings use schema version 5 and the runtime snapshot uses version 7.
+Durable settings use schema version 6 and the runtime snapshot uses version 8.
 Loading a settings file with any other `[dsp] version` deletes the file and
 starts from defaults; there is no migration path. See
 [DLL ↔ GUI settings sharing](docs/runtime-sharing.md) for the file formats and
