@@ -74,8 +74,8 @@ the 0 dB cross and labels its axes as RMS. Each meter has green/yellow/red
 zones, dB labels to the right, a fill driven by a short (0.06 s) cross-buffer
 peak hold, and a slightly thicker line driven by a longer (0.6 s) hold. Both
 catch transients between GUI polls; the fill falls back sooner. The line's
-colour matches the bar zone it sits in: green below −12 dBFS, yellow from
-−12 to −3 dBFS, and red above −3 dBFS. The dynamics
+colour is the same as the filled bar zone it sits in: green below −12 dBFS,
+yellow from −12 to −3 dBFS, and red above −3 dBFS. The dynamics
 engagement bar is offset to stay clear of the left-hand dB labels. Saturation
 draws the fixed shaping curve and marks the operating point by feeding the
 input peak through the Drive pre-gain, so a higher Drive widens the marker gap

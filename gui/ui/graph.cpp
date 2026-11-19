@@ -349,16 +349,15 @@ void DrawMeter(HDC dc, const RECT& bar, const RECT& labels, double currentDb,
         DrawLine(dc, bar.left + 1, y, bar.right - 1, y, colors.reference);
     }
 
-    // The filled level follows the current buffer; the bright line is the
-    // peak held across buffers by the APO, so a transient between GUI polls is
-    // still visible. Its colour matches the bar zone the line sits in.
+    // The filled level follows the short APO hold; the line is the longer
+    // peak hold, so a transient between GUI polls is still visible. It uses
+    // the exact filled-zone colour so the line and bar always agree.
     if (peakDb > kMinDb) {
         const COLORREF zone = peakDb >= -3.0   ? colors.meterHigh
                               : peakDb >= -12.0 ? colors.meterMid
                                                 : colors.meterLow;
         const int peakY = MapY(bar, DbPosition(peakDb));
-        DrawLine(dc, bar.left - 2, peakY, bar.right + 2, peakY,
-                 Mix(zone, RGB(255, 255, 255), 0.35), PS_SOLID,
+        DrawLine(dc, bar.left - 2, peakY, bar.right + 2, peakY, zone, PS_SOLID,
                  std::max(3, Scale(3)));
     }
 
@@ -710,7 +709,7 @@ void PaintGraph(HWND window, const GraphState& state, HDC dc)
     colors.stripe = Mix(theme.color.accent, RGB(255, 255, 255), 0.35);
     colors.meterLow = RGB(72, 190, 110);
     colors.meterMid = RGB(235, 185, 60);
-    colors.meterHigh = RGB(225, 75, 75);
+    colors.meterHigh = RGB(225, 40, 40);
     colors.meterOff = Mix(theme.color.editBackground, theme.color.text, 0.10);
     colors.engagement = theme.color.accent;
     colors.text = theme.color.text;
