@@ -19,7 +19,7 @@ filename-safe with `apo::SafeEndpointId`.
 | `C:\ProgramData\better_micro_apo\devices\{id}.noise` | GUI | APO at `LockForProcess` and after a live capture | Durable noise profile, with precomputed magnitude bins. |
 | `C:\ProgramData\better_micro_apo\runtime\{id}.dat` | GUI | APO while streaming | Live settings snapshot. |
 | `C:\ProgramData\better_micro_apo\runtime\{id}.capture` | Both | Both while streaming | One-shot stage capture control block. |
-| `C:\ProgramData\better_micro_apo\runtime\{id}.monitor` | APO | GUI while streaming | Continuous per-stage levels, engagement, and spectra. |
+| `C:\ProgramData\better_micro_apo\runtime\{id}.monitor` | APO | GUI while streaming | Continuous per-stage levels, engagement, dynamic gain, and spectra. |
 | `C:\ProgramData\better_micro_apo\gui.ini` | GUI | GUI | `show_all_devices` and `last_device` preferences; not used by the APO. |
 
 ## Runtime snapshot layout
@@ -30,7 +30,7 @@ filename-safe with `apo::SafeEndpointId`.
 | --- | --- | --- |
 | `sequence` | `volatile uint32_t` | Seqlock: odd while writing, even when complete. |
 | `magic` | `uint32_t` | `0x50414D42` (`"BMAP"`). |
-| `version` | `uint32_t` | `10`; bump whenever `ApoSettings` changes layout. |
+| `version` | `uint32_t` | `11`; bump whenever `ApoSettings` changes layout. |
 | `structSize` | `uint32_t` | Size of the full structure. |
 | `generation` | `volatile uint64_t` | Incremented on each published snapshot; this is what the APO polls. |
 | `settings` | `ApoSettings` | The complete settings blob, copied by value. |
@@ -101,7 +101,7 @@ new snapshot is applied exactly once.
 `devices\{id}.ini` has a single `[dsp]` section:
 
 ```
-version=8
+version=9
 preset_count=4
 preset_index=0
 isolate_effects=1
@@ -120,7 +120,9 @@ with `id`, `type`, `enabled`, and the type's parameter keys. Effect types are
 `input`, `gain`, `noise`, `dynamics`, `equalizer`, `mono`, `saturation`, and
 `reverb`; parameter keys include `gain_db` (also used by Input),
 `dynamics_threshold_db`, `dynamics_ratio`, `dynamics_hold_ms`,
-`equalizer_frequency_hz`, `equalizer_level_db`, `saturation_function`,
+`equalizer_mode`, `equalizer_frequency_hz`, `equalizer_level_db`,
+`equalizer_ratio`, `equalizer_range_db`, `equalizer_hold_ms`,
+`equalizer_lookahead_ms`, `saturation_function`,
 `reverb_algorithm`, `reverb_level`, `reverb_max_length_ms`, and
 `reverb_predelay_ms`. Every preset has an Input row at index 0; it is forced on
 and clamped to −24…+24 dB.
@@ -129,10 +131,11 @@ now holds a different effect. Four presets are always written; only
 `preset_index` is processed.
 
 `LoadSettings` starts with defaults. If `[dsp] version` is missing or is not
-**8**, it deletes the INI file and returns the defaults; there is no migration
+**9**, it deletes the INI file and returns the defaults; there is no migration
 path for old settings. For a current file, `ClampSettings` repairs invalid
-values: non-finite numbers fall back to defaults (except `dynamics_ratio`,
-where positive infinity is valid and is written as `inf`), every numeric field
+values: non-finite numbers fall back to defaults (except `dynamics_ratio` and
+`equalizer_ratio`, where positive infinity is valid and is written as `inf`),
+every numeric field
 is clamped to its safe range (Noise reduction to 0–50 dB, unsupported
 `noise_fft_size` values fall back to 512), Input is inserted/repaired at row 0,
 and effect ids are normalized to unique positive values. `isolate_effects` is
@@ -141,22 +144,27 @@ forced to `1` on every load/save/publish and is not a user option.
 ## Stage monitor channel
 
 `StageMonitorFile` (`src/stage_monitor.h`, magic `0x544F4D42` / `"BMOT"`,
-version 4) lives in `runtime\{id}.monitor`. It has a fixed header and one
+version 6) lives in `runtime\{id}.monitor`. It has a fixed header and one
 `StageMonitorSlot` per possible chain position (`kMaxEffects + 2`: the normal
 effect slots, the temporary capture tap, and one padding slot). Each slot has
 its own seqlock and carries
-the bound effect id/type, observed flag, input/output peak and RMS, two
-cross-buffer output peak holds, a stage-specific engagement value, and 128
-spectrum bins from a shared 256-point FFT. Spectra are published only for Input
-and Equalizer. All values are `float` except the 32-bit control fields, so the
-mapping has a stable cross-process layout.
+the bound effect id/type, observed flag, input/output peak and RMS, four
+cross-buffer short holds (input peak, input RMS, output RMS, and output peak),
+a longer output peak hold, a stage-specific engagement value, a signed dynamic
+gain in dB, and 128 spectrum bins from a shared 256-point FFT. Spectra are
+published only for Input and Equalizer. All values are `float` except the 32-bit
+control fields, so the mapping has a stable cross-process layout.
 
-Both peak holds are accumulated in the APO on every buffer rather than sampled
-only when the GUI polls. Their decay is measured in audio time (0.06 s and
-0.6 s half-lives), so a transient between two 100 ms GUI polls reaches both the
-meter fill and the peak line. The shorter hold drives the fill and falls back
-sooner; the longer one remains as the line. The GUI colours the line from the
-bar zone it sits in, so the line and the bar always agree.
+The holds are accumulated in the APO on every buffer rather than sampled only
+when the GUI polls. Their decay is measured in audio time, so a transient
+between two 100 ms GUI polls reaches both the live overlays and the meter. The
+short holds use a 0.06 s half-life: output peak drives the meter fill, and input
+peak drives both the Saturation operating point and the Gain operating point
+(together with that output peak). Input/output RMS holds are still published but
+are no longer used by the GUI. The longer 0.6 s output peak hold remains as the
+meter line; the GUI colours it from the bar zone it sits in, so the line and the
+bar always agree. Equalizer publishes its current signed dynamic gain through
+`Stage::MonitorGainDb()` as an unsmoothed dB value for the live response curve.
 
 The APO opens the file read/write in `LockForProcess`, closes it in
 `UnlockForProcess`/`FinalRelease`, and is the only writer. `BeginBuffer`,

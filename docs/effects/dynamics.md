@@ -52,7 +52,7 @@ the threshold, ratio, timing, input/output trim, and lookahead controls.
 | --- | --- | --- | --- |
 | Mode | Compressor/Limiter | Compressor/Limiter, Expander/Gate | Which side of the threshold is affected. |
 | Input | 0 dB | −24 to +30 dB | Trim before the detector and the signal path. |
-| Threshold | −15 dBFS | −80 to 0 dBFS | Level where the dynamics start acting. |
+| Threshold | −15 dBFS | −96 to +24 dBFS | Level where the dynamics start acting. |
 | Ratio | 5:1 | 0.01:1 to ∞ | Slope on the affected side; 1 is unity and ∞ is hard. |
 | Attack | 5 ms | 0.1 to 1000 ms | Engage in Compressor/Limiter; open in Expander/Gate. |
 | Release | 100 ms | 1 to 5000 ms | Recover in Compressor/Limiter; close in Expander/Gate. |
@@ -89,4 +89,5 @@ the threshold, ratio, timing, input/output trim, and lookahead controls.
   output trim, so it matches the audio path in either mode.
 - `MonitorValue()` reports `min(|gainDb| / 24, 1)`, so gain reduction and gate
   closure both light the **ENG** bar. The APO publishes that value together with
-  output peak/RMS to `.monitor`; the GUI smooths it on a 100 ms poll.
+  output peak/RMS to `.monitor`. The GUI smooths the engagement value on a 100 ms
+  poll; the meter uses APO-side short holds.

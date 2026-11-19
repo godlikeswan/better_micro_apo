@@ -38,23 +38,28 @@ To uninstall, uncheck **Enable** on every device, or use **File → Uninstall**.
   lights up when the signal is too loud, and **drops** counts gaps in the
   listening stream. This bottom meter comes from the Listen stream.
 - The selected effect's panel has its own live graph from the APO: Input
-  spectrum, Gain input/output dot, Dynamics engagement and output, Equalizer
-  spectrum and level, or Saturation operating point and output. Each includes a
-  thin output meter with green/yellow/red zones. Polling these graphs never
-  changes settings or stops Listen.
+  spectrum, Gain input/output peak dot, Dynamics engagement and output, Equalizer
+  spectrum with static/live/limit band curves, or Saturation operating point and
+  output. Each includes a thin output meter with green/yellow/red zones. Gain,
+  Saturation, and the meter use short holds so brief sounds are not skipped
+  between polls. Polling these graphs never changes settings or stops Listen.
 - Effects apply as you change them — there is no Apply button. Each slider has
   a small ↺ button that resets only that setting.
 - The **Gate/Compressor/Limiter/Expander** effect has two modes:
   **Compressor/Limiter** works on signal above the threshold, and
   **Expander/Gate** works on signal below it. Its ratio goes up to **∞**, and
   lookahead is available when you need to catch transients.
+- **Equalizer** starts with a **−12 dB** Level and **Dynamic** set to **No**.
+  Switch Dynamic to **Compressor** to tame loud lows or **Expander** to lift
+  quiet lows; its detector controls are greyed out when Dynamic is No. Level
+  spans −96…+96 dB, Ratio reaches ∞, and Range goes up to 96 dB.
 - If your device is missing from the list, turn on **View → Show all devices**
   to see inactive inputs too.
 - Windows briefly stops audio when effects are installed or attached to a
   device. That is Windows reloading the audio chain. Settings changes and noise
   profile captures apply to the running chain without stopping audio.
-- Noise reduction, dynamics lookahead, and reverb predelay/tail buffer a little
-  audio, so they add a small delay. Those controls are marked with ⏱.
+- Noise reduction, dynamics/equalizer lookahead, and reverb predelay/tail buffer
+  a little audio, so they add a small delay. Those controls are marked with ⏱.
 - A settings file from a different schema version is deleted when it is read;
   the device starts from defaults rather than having old values migrated.
 - Supported input formats are float32, PCM16, PCM24, and PCM32. 24-bit samples

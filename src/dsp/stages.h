@@ -59,10 +59,10 @@ private:
     UINT32 m_channels = 0;
 };
 
-// Frequency-selective equalizer dynamics for the proximity effect. A state-variable
-// bandpass isolates a band around `frequencyHz`; its envelope drives a cut of
-// loud lows (compress) or a boost of quiet lows (expand) applied back to that
-// band only. A broad Q behaves like a dynamic low shelf.
+// Frequency-selective equalizer for the proximity effect. A state-variable
+// bandpass isolates a band around `frequencyHz`. `levelDb` always shifts that
+// band; when Dynamic is Compressor or Expander, its envelope also cuts loud lows
+// or lifts quiet lows. A broad Q behaves like a dynamic low shelf.
 class EqualizerStage final : public Stage
 {
 public:
@@ -72,6 +72,7 @@ public:
     void Update(const EffectInstance& effect, const AudioFormat& format) override;
     void Reset() override;
     void Process(double* samples, UINT32 frames, UINT32 channels) override;
+    double MonitorGainDb() const override;
 
 private:
     void ApplyCoefficients(const AudioFormat& format);
@@ -86,17 +87,32 @@ private:
     double m_ratio = 1.0;
     double m_rangeDb = 0.0;
     double m_levelDb = 0.0;
-    bool m_expand = false;
+    EqualizerDynamicsMode m_mode = EqualizerDynamicsMode::None;
     double m_attackCoeff = 0.0;
     double m_releaseCoeff = 0.0;
     double m_detectorAttack = 0.0;
     double m_detectorRelease = 0.0;
     double m_detectorEnvelope = 0.0;
     double m_gainDb = 0.0;
+    double m_heldTargetDb = 0.0;
+
+    // Expander Hold latches the lowest lift target for Hold + Lookahead; a
+    // threshold crossing is not required to start it.
+    double m_expandHeldTargetDb = 0.0;
+    bool m_expandLatchActive = false;
+
+    UINT32 m_holdFrames = 0;
+    UINT32 m_holdCounter = 0;
+
+    UINT32 m_delayCapacityFrames = 0;
+    UINT32 m_delayFrames = 0;
+    UINT32 m_delayWrite = 0;
     UINT32 m_channels = 0;
     std::vector<double> m_ic1;
     std::vector<double> m_ic2;
     std::vector<double> m_band;
+    std::vector<double> m_delay;
+    std::vector<double> m_delayBand;
 };
 
 // Flat gain, used both by the fixed Input row and by makeup Gain effects.

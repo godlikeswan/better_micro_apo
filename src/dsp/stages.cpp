@@ -268,6 +268,25 @@ void EqualizerStage::Configure(const AudioFormat& format)
     m_ic2.assign(m_channels, 0.0);
     m_band.assign(m_channels, 0.0);
 
+    // Reserve the largest lookahead the settings clamp allows so a live Update
+    // can change the delay length without allocating in the audio path.
+    const double sampleRate = EffectiveSampleRate(format);
+    m_delayCapacityFrames = static_cast<UINT32>(
+        apo::kDynamicsMaxLookaheadMs * 0.001 * sampleRate + 0.5);
+    if (m_delayCapacityFrames > 0 && m_channels > 0)
+    {
+        const size_t count =
+            static_cast<size_t>(m_delayCapacityFrames) * m_channels;
+        m_delay.assign(count, 0.0);
+        m_delayBand.assign(count, 0.0);
+    }
+    else
+    {
+        m_delay.clear();
+        m_delayBand.clear();
+        m_delayCapacityFrames = 0;
+    }
+
     ApplyCoefficients(format);
     Reset();
 }
@@ -276,15 +295,19 @@ void EqualizerStage::Update(const EffectInstance& effect,
                           const AudioFormat& format)
 {
     const bool wasEnabled = m_settings.enabled;
+    const EqualizerDynamicsMode oldMode = m_settings.mode;
     const double oldFrequency = m_settings.frequencyHz;
     const double oldQ = m_settings.q;
+    const double oldLookahead = m_settings.lookaheadMs;
 
     m_settings = effect.equalizer;
     ApplyCoefficients(format);
 
-    // Changing the filter shape invalidates the filter state.
-    if (wasEnabled != m_settings.enabled ||
-        oldFrequency != m_settings.frequencyHz || oldQ != m_settings.q)
+    // Filter shape, dynamic mode, or delay length changes invalidate the
+    // stored band and delay state.
+    if (wasEnabled != m_settings.enabled || oldMode != m_settings.mode ||
+        oldFrequency != m_settings.frequencyHz || oldQ != m_settings.q ||
+        oldLookahead != m_settings.lookaheadMs)
     {
         Reset();
     }
@@ -313,23 +336,61 @@ void EqualizerStage::ApplyCoefficients(const AudioFormat& format)
     m_ratio = std::max(1.0, m_settings.ratio);
     m_rangeDb = std::max(0.0, m_settings.rangeDb);
     m_levelDb = m_settings.levelDb;
-    m_expand = m_settings.expand;
+    m_mode = m_settings.mode;
     m_attackCoeff = TimeCoefficient(m_settings.attackMs, sampleRate);
     m_releaseCoeff = TimeCoefficient(m_settings.releaseMs, sampleRate);
 
     // A separate fast-attack / slow-release envelope smooths the band peak so
-    // the gain does not pulse at the signal's own zero crossings.
-    m_detectorAttack = TimeCoefficient(1.0, sampleRate);
+    // the gain does not pulse at the signal's own zero crossings. The attack is
+    // scaled to the selected band's period: a fixed 1 ms is only about 0.12
+    // cycles at 120 Hz but 5 cycles at 5 kHz, which averages short high-band
+    // bursts away before they can reach the threshold. Keeping it near half a
+    // cycle makes the detector respond to transients at any frequency; low
+    // bands keep the original 1 ms.
+    const double bandPeriodMs = 1000.0 / std::max(m_settings.frequencyHz, 20.0);
+    const double detectorAttackMs =
+        std::clamp(0.5 * bandPeriodMs, 0.05, 1.0);
+    m_detectorAttack = TimeCoefficient(detectorAttackMs, sampleRate);
     m_detectorRelease = TimeCoefficient(100.0, sampleRate);
+
+    UINT32 delayFrames = static_cast<UINT32>(
+        m_settings.lookaheadMs * 0.001 * sampleRate + 0.5);
+    if (delayFrames > m_delayCapacityFrames)
+    {
+        delayFrames = m_delayCapacityFrames;
+    }
+    m_delayFrames = delayFrames;
+
+    // Hold is measured at the output, so cover the lookahead as well.
+    m_holdFrames =
+        static_cast<UINT32>(m_settings.holdMs * 0.001 * sampleRate + 0.5) +
+        m_delayFrames;
 }
 
 void EqualizerStage::Reset()
 {
     m_gainDb = 0.0;
+    m_heldTargetDb = 0.0;
+    m_expandHeldTargetDb = 0.0;
+    m_expandLatchActive = false;
+    m_holdCounter = 0;
     m_detectorEnvelope = 0.0;
+    m_delayWrite = 0;
     std::fill(m_ic1.begin(), m_ic1.end(), 0.0);
     std::fill(m_ic2.begin(), m_ic2.end(), 0.0);
     std::fill(m_band.begin(), m_band.end(), 0.0);
+    std::fill(m_delay.begin(), m_delay.end(), 0.0);
+    std::fill(m_delayBand.begin(), m_delayBand.end(), 0.0);
+}
+
+double EqualizerStage::MonitorGainDb() const
+{
+    if (!m_settings.enabled ||
+        m_settings.mode == EqualizerDynamicsMode::None)
+    {
+        return 0.0;
+    }
+    return m_gainDb;
 }
 
 void EqualizerStage::Process(double* samples, UINT32 frames, UINT32 channels)
@@ -344,6 +405,10 @@ void EqualizerStage::Process(double* samples, UINT32 frames, UINT32 channels)
         return;
     }
 
+    const bool lookahead =
+        m_mode != EqualizerDynamicsMode::None && m_delayFrames > 0 &&
+        m_delay.size() >= static_cast<size_t>(m_delayFrames) * channels &&
+        m_delayBand.size() >= static_cast<size_t>(m_delayFrames) * channels;
     const double slope = 1.0 - 1.0 / m_ratio;
 
     for (UINT32 frame = 0; frame < frames; ++frame)
@@ -380,11 +445,23 @@ void EqualizerStage::Process(double* samples, UINT32 frames, UINT32 channels)
         const double level = m_detectorEnvelope;
 
         double targetDb = 0.0;
-        if (m_expand)
+        if (m_mode == EqualizerDynamicsMode::Compressor)
         {
-            // Extend: lift the band when it is quiet, so quiet lows (the
-            // proximity effect at a distance) become fuller. Silence has
-            // nothing to lift, so only non-zero bands above the floor count.
+            // Cut loud lows, taming a strong proximity effect up close.
+            if (level > m_thresholdLinear)
+            {
+                const double levelDb = 20.0 * std::log10(level);
+                const double amount = (levelDb - m_thresholdDb) * slope;
+                if (amount > 0.0)
+                {
+                    targetDb = -std::min(amount, m_rangeDb);
+                }
+            }
+        }
+        else if (m_mode == EqualizerDynamicsMode::Expander)
+        {
+            // Lift quiet lows, restoring body when the mic is farther away.
+            // Silence has nothing to lift, so only non-zero bands count.
             if (level > 0.0 && level < m_thresholdLinear)
             {
                 const double levelDb = 20.0 * std::log10(level);
@@ -395,29 +472,99 @@ void EqualizerStage::Process(double* samples, UINT32 frames, UINT32 channels)
                 }
             }
         }
-        else if (level > m_thresholdLinear)
-        {
-            // Reduce: cut the band when it is loud, taming a strong
-            // proximity effect up close.
-            const double levelDb = 20.0 * std::log10(level);
-            const double amount = (levelDb - m_thresholdDb) * slope;
-            if (amount > 0.0)
-            {
-                targetDb = -std::min(amount, m_rangeDb);
-            }
-        }
 
-        // Attack when the effect deepens, release when it returns to zero.
-        const double coefficient =
-            (std::fabs(targetDb) > std::fabs(m_gainDb)) ? m_attackCoeff
-                                                        : m_releaseCoeff;
-        m_gainDb += (targetDb - m_gainDb) * coefficient;
+        if (m_mode == EqualizerDynamicsMode::None)
+        {
+            m_gainDb = 0.0;
+        }
+        else if (m_mode == EqualizerDynamicsMode::Compressor)
+        {
+            // Latch a deeper cut so a short peak keeps its gain long enough for
+            // attack to act; hold includes the lookahead delay.
+            if (std::fabs(targetDb) > std::fabs(m_heldTargetDb) + 1e-6)
+            {
+                m_heldTargetDb = targetDb;
+                m_holdCounter = m_holdFrames;
+            }
+            if (m_holdCounter > 0)
+            {
+                --m_holdCounter;
+                targetDb = m_heldTargetDb;
+            }
+            else
+            {
+                m_heldTargetDb = 0.0;
+            }
+
+            const bool deepening =
+                std::fabs(targetDb) > std::fabs(m_gainDb) + 1e-6;
+            m_gainDb += (targetDb - m_gainDb) *
+                        (deepening ? m_attackCoeff : m_releaseCoeff);
+        }
+        else
+        {
+            // Expander Hold latches the lowest lift target. A drop happens
+            // whenever the band gets louder, even well below the threshold, so
+            // the hold does not depend on a threshold crossing. The latched low
+            // value pins the target until the timer (Hold plus Lookahead)
+            // expires; a further drop re-latches an even lower value and
+            // restarts it. Threshold still sets the target's size, but no
+            // longer starts the hold.
+            if (!m_expandLatchActive ||
+                targetDb < m_expandHeldTargetDb - 1e-6)
+            {
+                m_expandHeldTargetDb = targetDb;
+                m_holdCounter = m_holdFrames;
+                m_expandLatchActive = true;
+            }
+            if (m_holdCounter > 0)
+            {
+                --m_holdCounter;
+                targetDb = m_expandHeldTargetDb;
+            }
+            else
+            {
+                m_expandLatchActive = false;
+            }
+
+            // Opening toward 0 dB is fast; engaging the boost is slow.
+            const bool deepening =
+                std::fabs(targetDb) > std::fabs(m_gainDb) + 1e-6;
+            m_gainDb += (targetDb - m_gainDb) *
+                        (deepening ? m_releaseCoeff : m_attackCoeff);
+        }
 
         const double bandGain =
             DecibelsToLinear(m_gainDb + m_levelDb) - 1.0;
-        for (UINT32 channel = 0; channel < channels; ++channel)
+        if (lookahead)
         {
-            values[channel] += m_band[channel] * bandGain;
+            // The detector ran on the incoming band; apply its gain to the
+            // matching band from the frame one lookahead behind it.
+            double* delayed =
+                m_delay.data() + static_cast<size_t>(m_delayWrite) * channels;
+            double* delayedBand =
+                m_delayBand.data() + static_cast<size_t>(m_delayWrite) * channels;
+            for (UINT32 channel = 0; channel < channels; ++channel)
+            {
+                const double current = values[channel];
+                const double currentBand = m_band[channel];
+                values[channel] =
+                    delayed[channel] + delayedBand[channel] * bandGain;
+                delayed[channel] = current;
+                delayedBand[channel] = currentBand;
+            }
+
+            if (++m_delayWrite >= m_delayFrames)
+            {
+                m_delayWrite = 0;
+            }
+        }
+        else
+        {
+            for (UINT32 channel = 0; channel < channels; ++channel)
+            {
+                values[channel] += m_band[channel] * bandGain;
+            }
         }
     }
 }

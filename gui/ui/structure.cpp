@@ -228,6 +228,7 @@ void LayoutEffectParams(int x, int y, int width)
         ShowWindow(button, SW_HIDE);
     }
     ShowWindow(g_dynamicsLookaheadIcon, SW_HIDE);
+    ShowWindow(g_eqLookaheadIcon, SW_HIDE);
     ShowWindow(g_reverbPredelayIcon, SW_HIDE);
     if (g_effectSelection < 0) {
         return;
@@ -320,22 +321,34 @@ void LayoutEffectParams(int x, int y, int width)
                   ParamResetDynamicsHold, nullptr, nullptr, 0);
         break;
     }
-    case apo::EffectType::Equalizer:
-        MoveWindow(g_eqExtend, x, y,
-                   columnWidth - resetWidth - resetGap, Scale(22), TRUE);
-        placeReset(ParamResetDynExpand, x, y);
-        y += Scale(30);
+    case apo::EffectType::Equalizer: {
+        const int rightX = x + columnWidth + columnGap;
         placePair(g_eqFrequencyLabel, g_eqFrequencySlider,
                   ParamResetDynFrequency, g_eqQLabel, g_eqQSlider,
                   ParamResetDynQ);
-        placePair(g_eqLevelLabel, g_eqLevelSlider, ParamResetDynLevel,
-                  g_eqThresholdLabel, g_eqThresholdSlider,
-                  ParamResetDynThreshold);
-        placePair(g_eqRatioLabel, g_eqRatioSlider, ParamResetDynRatio,
-                  g_eqRangeLabel, g_eqRangeSlider, ParamResetDynRange);
-        placePair(g_eqAttackLabel, g_eqAttackSlider, ParamResetDynAttack,
-                  g_eqReleaseLabel, g_eqReleaseSlider, ParamResetDynRelease);
+
+        MoveWindow(g_eqLevelLabel, x, y, labelWidth, Scale(20), TRUE);
+        MoveWindow(g_eqLevelSlider, x + labelWidth, y, sliderWidth,
+                   controlHeight, TRUE);
+        placeReset(ParamResetDynLevel, x, y);
+        MoveWindow(g_eqDynamicLabel, rightX, y, labelWidth, Scale(20), TRUE);
+        MoveWindow(g_eqDynamicCombo, rightX + labelWidth, y, sliderWidth,
+                   Scale(200), TRUE);
+        placeReset(ParamResetDynMode, rightX, y);
+        y += rowStep;
+
+        placePair(g_eqThresholdLabel, g_eqThresholdSlider,
+                  ParamResetDynThreshold, g_eqRatioLabel, g_eqRatioSlider,
+                  ParamResetDynRatio);
+        placePair(g_eqRangeLabel, g_eqRangeSlider, ParamResetDynRange,
+                  g_eqAttackLabel, g_eqAttackSlider, ParamResetDynAttack);
+        placePair(g_eqReleaseLabel, g_eqReleaseSlider, ParamResetDynRelease,
+                  g_eqHoldLabel, g_eqHoldSlider, ParamResetDynHold);
+        placePair(g_eqLookaheadLabel, g_eqLookaheadSlider,
+                  ParamResetDynLookahead, nullptr, nullptr, 0);
+        placeIcon(g_eqLookaheadIcon, g_eqLookaheadLabel, x, y - rowStep);
         break;
+    }
     case apo::EffectType::Input:
         placePair(g_inputGainLabel, g_inputGainSlider, ParamResetInputGain,
                   nullptr, nullptr, 0);
@@ -575,7 +588,8 @@ void CreateControls(HWND root)
     g_dynamicsThresholdLabel =
         ui::Label(window, IDC_DYN_THRESHOLD_LABEL, L"Threshold (dBFS)");
     g_dynamicsThresholdSlider = ui::Slider(
-        window, IDC_DYN_THRESHOLD_SLIDER, {-80.0, 0.0, 1.0, false, 0});
+        window, IDC_DYN_THRESHOLD_SLIDER,
+        {apo::kMinThresholdDb, apo::kMaxThresholdDb, 1.0, false, 0});
     g_dynamicsRatioLabel = ui::Label(window, IDC_DYN_RATIO_LABEL, L"Ratio");
     g_dynamicsRatioSlider = ui::Slider(
         window, IDC_DYN_RATIO_SLIDER,
@@ -616,8 +630,19 @@ void CreateControls(HWND root)
     g_gainSlider = ui::Slider(window, IDC_GAIN_SLIDER,
                               {-24.0, 50.0, 0.5, false, 1});
 
-    g_eqExtend =
-        ui::CheckBox(window, IDC_EQ_EXTEND, L"Extend quiet lows");
+    g_eqDynamicLabel = ui::Label(window, IDC_EQ_DYNAMIC_LABEL, L"Dynamic");
+    g_eqDynamicCombo =
+        ui::ComboBox(window, IDC_EQ_DYNAMIC_COMBO, CBS_DROPDOWNLIST);
+    for (int mode = 0;
+         mode < static_cast<int>(apo::EqualizerDynamicsMode::Count); ++mode) {
+        SendMessageW(
+            g_eqDynamicCombo, CB_ADDSTRING, 0,
+            reinterpret_cast<LPARAM>(apo::EqualizerDynamicsModeName(
+                static_cast<apo::EqualizerDynamicsMode>(mode))));
+    }
+    SendMessageW(g_eqDynamicCombo, CB_SETCURSEL,
+                 static_cast<int>(apo::EqualizerDynamicsMode::None), 0);
+
     g_eqFrequencyLabel =
         ui::Label(window, IDC_EQ_FREQUENCY_LABEL, L"Frequency (Hz)");
     g_eqFrequencySlider = ui::Slider(window, IDC_EQ_FREQUENCY_SLIDER,
@@ -629,13 +654,15 @@ void CreateControls(HWND root)
     g_eqThresholdLabel =
         ui::Label(window, IDC_EQ_THRESHOLD_LABEL, L"Threshold (dBFS)");
     g_eqThresholdSlider = ui::Slider(
-        window, IDC_EQ_THRESHOLD_SLIDER, {-80.0, 0.0, 1.0, false, 0});
+        window, IDC_EQ_THRESHOLD_SLIDER,
+        {apo::kMinThresholdDb, apo::kMaxThresholdDb, 1.0, false, 0});
     g_eqRatioLabel = ui::Label(window, IDC_EQ_RATIO_LABEL, L"Ratio (:1)");
-    g_eqRatioSlider = ui::Slider(window, IDC_EQ_RATIO_SLIDER,
-                                  {1.0, 20.0, 0.1, false, 1});
+    g_eqRatioSlider =
+        ui::Slider(window, IDC_EQ_RATIO_SLIDER,
+                   {1.0, apo::kDynamicsMaxFiniteRatio, 0.0, true, 0, true});
     g_eqRangeLabel = ui::Label(window, IDC_EQ_RANGE_LABEL, L"Range (dB)");
     g_eqRangeSlider = ui::Slider(window, IDC_EQ_RANGE_SLIDER,
-                                  {0.0, 36.0, 1.0, false, 0});
+                                  {0.0, apo::kEqMaxRangeDb, 1.0, false, 0});
     g_eqLevelLabel = ui::Label(window, IDC_EQ_LEVEL_LABEL, L"Level (dB)");
     g_eqLevelSlider = ui::Slider(window, IDC_EQ_LEVEL_SLIDER,
                                   {apo::kEqMinLevelDb, apo::kEqMaxLevelDb,
@@ -648,6 +675,17 @@ void CreateControls(HWND root)
         ui::Label(window, IDC_EQ_RELEASE_LABEL, L"Release (ms)");
     g_eqReleaseSlider = ui::Slider(window, IDC_EQ_RELEASE_SLIDER,
                                     {1.0, 5000.0, 0.0, true, 0});
+    g_eqHoldLabel = ui::Label(window, IDC_EQ_HOLD_LABEL, L"Hold (ms)");
+    g_eqHoldSlider = ui::Slider(window, IDC_EQ_HOLD_SLIDER,
+                                 {0.0, apo::kEqMaxHoldMs, 1.0, false, 0});
+    g_eqLookaheadLabel =
+        ui::Label(window, IDC_EQ_LOOKAHEAD_LABEL, L"Lookahead (ms)");
+    g_eqLookaheadSlider = ui::Slider(window, IDC_EQ_LOOKAHEAD_SLIDER,
+                                      {0.0, apo::kDynamicsMaxLookaheadMs, 1.0,
+                                       false, 0});
+    g_eqLookaheadIcon =
+        InfoIcon(window, IDC_EQ_LOOKAHEAD_ICON, InfoIconKind::Latency);
+    AddTooltip(g_eqLookaheadIcon, L"Adds delay to the audio stream.");
 
     g_reverbAlgorithmLabel =
         ui::Label(window, IDC_REVERB_ALGORITHM_LABEL, L"Algorithm");

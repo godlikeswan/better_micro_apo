@@ -17,9 +17,11 @@ settings add warmth and bite; higher Drive and Curvature get buzzy.
 - While audio runs, the panel places mirrored dots and dotted vertical stripes
   on the transfer curve from the stage's input peak after the Drive pre-gain.
   Drive widens that gap toward the flat part of the curve; it does not bend the
-  curve itself. This is an operating-point cue, not a waveform display; the thin
-  meter to the right shows the stage's output peak with a short-held fill and a
-  thicker long-hold peak line whose colour matches the bar zone it sits in.
+  curve itself. This is an operating-point cue, not a waveform display. The
+  input peak uses the same short cross-buffer hold as the meter fill, so brief
+  sounds are visible between 100 ms GUI polls. The thin meter to the right shows
+  the stage's output peak with that short-held fill and a thicker long-hold peak
+  line whose colour matches the bar zone it sits in.
 - **Function** changes the character. **Tanh** is the smooth default; try the
   others if you want a different color.
 - **Output** sets the level after the effect. Saturation can sound much louder

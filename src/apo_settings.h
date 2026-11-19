@@ -11,7 +11,7 @@ namespace apo {
 
 // Settings files with any other version are discarded on load. There is no
 // migration path: a new schema starts from defaults.
-inline constexpr int kSettingsVersion = 8;
+inline constexpr int kSettingsVersion = 9;
 
 // The fixed first stage has its own gain range; it is stored in GainSettings
 // but is separate from the standalone makeup Gain effect.
@@ -25,10 +25,12 @@ inline constexpr double kEqMinFrequencyHz = 20.0;
 inline constexpr double kEqMaxFrequencyHz = 20000.0;
 inline constexpr double kEqMinQ = 0.1;
 inline constexpr double kEqMaxQ = 30.0;
-// Level can run far beyond the graph's +24 dB top; the curve is allowed to
-// clip off-screen rather than limiting the useful boost on a narrow band.
-inline constexpr double kEqMinLevelDb = -48.0;
-inline constexpr double kEqMaxLevelDb = 48.0;
+// Level spans the same ±96 dB window used by the response graph; a boost can
+// still run off the older +24 dB spectrum scale rather than being limited.
+inline constexpr double kEqMinLevelDb = -96.0;
+inline constexpr double kEqMaxLevelDb = 96.0;
+inline constexpr double kEqMaxRangeDb = 96.0;
+inline constexpr double kEqMaxHoldMs = 2000.0;
 
 // Analysis sizes offered for spectral noise reduction. The buffers and FFT
 // plans for every size are created when the stream binds, so changing
@@ -101,6 +103,22 @@ enum class DynamicsMode : int
 
 const wchar_t* DynamicsModeName(DynamicsMode mode);
 
+// Dynamics applied to the Equalizer's isolated band. `None` leaves only the
+// static Level shift; the other modes cut loud lows or lift quiet lows.
+enum class EqualizerDynamicsMode : int
+{
+    None = 0,
+    Compressor = 1,
+    Expander = 2,
+    Count,
+};
+
+const wchar_t* EqualizerDynamicsModeName(EqualizerDynamicsMode mode);
+
+// Threshold bounds shared by the unified Dynamics and Equalizer detectors.
+inline constexpr double kMinThresholdDb = -96.0;
+inline constexpr double kMaxThresholdDb = 24.0;
+
 // Ratio bounds. `kDynamicsMaxFiniteRatio` is the last finite slider position;
 // the end stop means true infinity (hard limiter / hard gate).
 inline constexpr double kDynamicsMinRatio = 0.01;
@@ -134,26 +152,32 @@ struct DynamicsSettings
     double lookaheadMs = 0.0;
 };
 
-// Frequency-selective dynamics for the proximity effect. The detector watches
-// a band around `frequencyHz`; `expand` selects the extend mode (boost quiet
-// lows, which strengthens a distant proximity effect) instead of the reduce
-// mode (cut loud lows, which tames a close proximity effect). A broad Q makes
-// it behave like a dynamic low shelf.
+// Frequency-selective EQ for the proximity effect. The detector watches a band
+// around `frequencyHz`; `mode` chooses no dynamics, a compressor cut of loud
+// lows, or an expander lift of quiet lows. A broad Q behaves like a dynamic low
+// shelf. `levelDb` is a static signed shift of that band, independent of mode.
 struct EqualizerSettings
 {
     bool enabled = false;
-    bool expand = false;
+    EqualizerDynamicsMode mode = EqualizerDynamicsMode::None;
     double frequencyHz = 120.0;
     double q = 0.7;
+    // Static band shift; negative cuts and positive boosts the band.
+    double levelDb = -12.0;
     double thresholdDb = -45.0;
     double ratio = 4.0;
 
-    // Maximum cut (compress) or boost (expand) applied to the band.
+    // Maximum cut (compress) or boost (expand) applied by the dynamics.
     double rangeDb = 18.0;
-    // Static vertical offset of the isolated band, added to the dynamic gain.
-    double levelDb = 0.0;
     double attackMs = 10.0;
     double releaseMs = 150.0;
+
+    // Keeps the last computed band gain active briefly so short peaks are not
+    // missed. Includes lookahead, so it is measured at the output.
+    double holdMs = 50.0;
+    // Delays the audio so the detector can act before a transient reaches the
+    // output. Adds the same latency while the effect is enabled.
+    double lookaheadMs = 0.0;
 };
 
 // Flat gain. A newly added effect starts at +12 dB, which is the usual makeup

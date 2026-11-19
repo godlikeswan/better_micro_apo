@@ -110,6 +110,10 @@ public:
     // reports its current gain change; other stages leave it at zero.
     virtual double MonitorValue() const { return 0.0; }
 
+    // Optional signed gain change in dB for stages with frequency-dependent
+    // dynamics. Equalizer reports its current cut/boost; other stages are zero.
+    virtual double MonitorGainDb() const { return 0.0; }
+
     // Processes `frames` frames in place. `samples` holds
     // frames * channels interleaved values in [-1, 1]. Real-time safe.
     virtual void Process(double* samples, UINT32 frames, UINT32 channels) = 0;

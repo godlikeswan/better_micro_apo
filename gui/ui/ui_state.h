@@ -50,7 +50,8 @@ enum : int {
     IDC_INPUT_GAIN_SLIDER,
     IDC_GAIN_LABEL,
     IDC_GAIN_SLIDER,
-    IDC_EQ_EXTEND,
+    IDC_EQ_DYNAMIC_LABEL,
+    IDC_EQ_DYNAMIC_COMBO,
     IDC_EQ_FREQUENCY_LABEL,
     IDC_EQ_FREQUENCY_SLIDER,
     IDC_EQ_Q_LABEL,
@@ -67,6 +68,11 @@ enum : int {
     IDC_EQ_ATTACK_SLIDER,
     IDC_EQ_RELEASE_LABEL,
     IDC_EQ_RELEASE_SLIDER,
+    IDC_EQ_HOLD_LABEL,
+    IDC_EQ_HOLD_SLIDER,
+    IDC_EQ_LOOKAHEAD_LABEL,
+    IDC_EQ_LOOKAHEAD_SLIDER,
+    IDC_EQ_LOOKAHEAD_ICON,
     IDC_DIST_FUNCTION_LABEL,
     IDC_DIST_FUNCTION_COMBO,
     IDC_DIST_DRIVE_LABEL,
@@ -121,15 +127,17 @@ enum ParamReset : int {
     ParamResetDynamicsLookahead,
     ParamResetInputGain,
     ParamResetGain,
-    ParamResetDynExpand,
+    ParamResetDynMode,
     ParamResetDynFrequency,
     ParamResetDynQ,
+    ParamResetDynLevel,
     ParamResetDynThreshold,
     ParamResetDynRatio,
     ParamResetDynRange,
-    ParamResetDynLevel,
     ParamResetDynAttack,
     ParamResetDynRelease,
+    ParamResetDynHold,
+    ParamResetDynLookahead,
     ParamResetReverbAlgorithm,
     ParamResetReverbLevel,
     ParamResetReverbMaxLength,
@@ -204,7 +212,8 @@ extern HWND g_inputGainLabel;
 extern HWND g_inputGainSlider;
 extern HWND g_gainLabel;
 extern HWND g_gainSlider;
-extern HWND g_eqExtend;
+extern HWND g_eqDynamicLabel;
+extern HWND g_eqDynamicCombo;
 extern HWND g_eqFrequencyLabel;
 extern HWND g_eqFrequencySlider;
 extern HWND g_eqQLabel;
@@ -221,6 +230,11 @@ extern HWND g_eqAttackLabel;
 extern HWND g_eqAttackSlider;
 extern HWND g_eqReleaseLabel;
 extern HWND g_eqReleaseSlider;
+extern HWND g_eqHoldLabel;
+extern HWND g_eqHoldSlider;
+extern HWND g_eqLookaheadLabel;
+extern HWND g_eqLookaheadSlider;
+extern HWND g_eqLookaheadIcon;
 extern HWND g_distFunctionLabel;
 extern HWND g_distFunctionCombo;
 extern HWND g_distDriveLabel;

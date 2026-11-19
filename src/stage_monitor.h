@@ -19,7 +19,7 @@ namespace apo {
 // sampling the meters never changes settings, rebuilds the chain, or stops
 // audio.
 inline constexpr std::uint32_t kStageMonitorMagic = 0x544F4D42u; // "BMOT"
-inline constexpr std::uint32_t kStageMonitorVersion = 4u;
+inline constexpr std::uint32_t kStageMonitorVersion = 6u;
 inline constexpr int kStageMonitorFftSize = 256;
 inline constexpr int kStageMonitorBins = kStageMonitorFftSize / 2;
 // One spare slot covers the temporary capture tap, another covers future chain
@@ -50,7 +50,7 @@ public:
                               const double* samples, UINT32 frames,
                               UINT32 channels, float inputPeak, float inputRms,
                               float outputPeak, float outputRms,
-                              float engagement) = 0;
+                              float engagement, float dynamicGainDb) = 0;
     // Any slot not observed during a buffer is cleared here, so silence and
     // disabled effects never leave stale meter values on screen.
     virtual void EndBuffer() = 0;
@@ -66,11 +66,16 @@ struct StageMonitorSlot
     float inputRms = 0.0f;
     float outputPeak = 0.0f;
     float outputRms = 0.0f;
-    // Two cross-buffer holds: a short one for the meter fill and a longer one
-    // for the peak line, so transients between GUI polls reach both.
+    // Cross-buffer short holds keep live overlays from missing transients
+    // between GUI polls; the longer peak hold remains as the meter line.
+    float inputPeakShortHold = 0.0f;
+    float inputRmsShortHold = 0.0f;
+    float outputRmsShortHold = 0.0f;
     float outputPeakShortHold = 0.0f;
     float outputPeakHold = 0.0f;
     float engagement = 0.0f;
+    // Signed dynamic gain in dB for the Equalizer's live response overlay.
+    float dynamicGainDb = 0.0f;
     float spectrum[kStageMonitorBins]{};
 };
 
@@ -95,9 +100,14 @@ struct StageMonitorSnapshot
     float inputRms = 0.0f;
     float outputPeak = 0.0f;
     float outputRms = 0.0f;
+    float inputPeakShortHold = 0.0f;
+    float inputRmsShortHold = 0.0f;
+    float outputRmsShortHold = 0.0f;
     float outputPeakShortHold = 0.0f;
     float outputPeakHold = 0.0f;
     float engagement = 0.0f;
+    // Signed dynamic gain in dB for the Equalizer's live response overlay.
+    float dynamicGainDb = 0.0f;
     float spectrum[kStageMonitorBins]{};
 };
 
@@ -150,7 +160,8 @@ public:
     void ObserveStage(size_t slot, const StageMonitorBinding& binding,
                       const double* samples, UINT32 frames, UINT32 channels,
                       float inputPeak, float inputRms, float outputPeak,
-                      float outputRms, float engagement) override;
+                      float outputRms, float engagement,
+                      float dynamicGainDb) override;
     void EndBuffer() override;
 
 private:
@@ -158,8 +169,8 @@ private:
                          UINT32 channels);
     void WriteSlot(size_t slot, const StageMonitorBinding& binding,
                    float inputPeak, float inputRms, float outputPeak,
-                   float outputRms, float engagement, float shortDecay,
-                   float peakDecay);
+                   float outputRms, float engagement, float dynamicGainDb,
+                   float shortDecay, float peakDecay);
     void ClearSlot(size_t slot);
 
     HANDLE m_file = nullptr;

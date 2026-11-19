@@ -44,7 +44,10 @@ struct StageMonitorImpl
         history{};
     std::array<int, kStageMonitorSlots> historyWrite{};
     std::array<int, kStageMonitorSlots> hopCounter{};
-    std::array<float, kStageMonitorSlots> shortHold{};
+    std::array<float, kStageMonitorSlots> inputPeakShortHold{};
+    std::array<float, kStageMonitorSlots> inputRmsShortHold{};
+    std::array<float, kStageMonitorSlots> outputRmsShortHold{};
+    std::array<float, kStageMonitorSlots> outputPeakShortHold{};
     std::array<float, kStageMonitorSlots> peakHold{};
 };
 
@@ -161,9 +164,13 @@ bool StageMonitorView::Read(int slot, StageMonitorSnapshot& snapshot) const
         snapshot.inputRms = source.inputRms;
         snapshot.outputPeak = source.outputPeak;
         snapshot.outputRms = source.outputRms;
+        snapshot.inputPeakShortHold = source.inputPeakShortHold;
+        snapshot.inputRmsShortHold = source.inputRmsShortHold;
+        snapshot.outputRmsShortHold = source.outputRmsShortHold;
         snapshot.outputPeakShortHold = source.outputPeakShortHold;
         snapshot.outputPeakHold = source.outputPeakHold;
         snapshot.engagement = source.engagement;
+        snapshot.dynamicGainDb = source.dynamicGainDb;
         snapshot.valid = (source.flags & kStageMonitorFlagObserved) != 0;
         std::memcpy(snapshot.spectrum, source.spectrum,
                     sizeof(snapshot.spectrum));
@@ -254,7 +261,10 @@ bool StageMonitor::Open(const std::wstring& endpointId, UINT32 sampleRate)
     }
     m_impl->historyWrite.fill(0);
     m_impl->hopCounter.fill(0);
-    m_impl->shortHold.fill(0.0f);
+    m_impl->inputPeakShortHold.fill(0.0f);
+    m_impl->inputRmsShortHold.fill(0.0f);
+    m_impl->outputRmsShortHold.fill(0.0f);
+    m_impl->outputPeakShortHold.fill(0.0f);
     m_impl->peakHold.fill(0.0f);
     return true;
 }
@@ -290,7 +300,8 @@ void StageMonitor::ObserveStage(size_t slot, const StageMonitorBinding& binding,
                                 const double* samples, UINT32 frames,
                                 UINT32 channels, float inputPeak,
                                 float inputRms, float outputPeak,
-                                float outputRms, float engagement)
+                                float outputRms, float engagement,
+                                float dynamicGainDb)
 {
     if (m_view == nullptr || slot >= static_cast<size_t>(kStageMonitorSlots)) {
         return;
@@ -306,7 +317,8 @@ void StageMonitor::ObserveStage(size_t slot, const StageMonitorBinding& binding,
             ? static_cast<float>(frames) / static_cast<float>(m_view->sampleRate)
             : 0.0f;
     WriteSlot(slot, binding, inputPeak, inputRms, outputPeak, outputRms,
-              engagement, std::pow(0.5f, seconds / kShortPeakHalfLifeSeconds),
+              engagement, dynamicGainDb,
+              std::pow(0.5f, seconds / kShortPeakHalfLifeSeconds),
               std::pow(0.5f, seconds / kPeakHalfLifeSeconds));
 }
 
@@ -374,7 +386,8 @@ void StageMonitor::AnalyzeSpectrum(size_t slot, const double* samples,
 void StageMonitor::WriteSlot(size_t slot, const StageMonitorBinding& binding,
                              float inputPeak, float inputRms, float outputPeak,
                              float outputRms, float engagement,
-                             float shortDecay, float peakDecay)
+                             float dynamicGainDb, float shortDecay,
+                             float peakDecay)
 {
     StageMonitorSlot& target = m_view->slots[slot];
     InterlockedExchange(&target.sequence, 1);
@@ -390,14 +403,24 @@ void StageMonitor::WriteSlot(size_t slot, const StageMonitorBinding& binding,
 
     // Accumulate the maximum across buffers, not just the latest one: a short
     // transient can happen between two GUI polls and would otherwise be lost.
-    float& shortHold = m_impl->shortHold[slot];
-    shortHold = std::max(outputPeak, shortHold * shortDecay);
-    target.outputPeakShortHold = shortHold;
+    float& inputPeakShort = m_impl->inputPeakShortHold[slot];
+    inputPeakShort = std::max(inputPeak, inputPeakShort * shortDecay);
+    target.inputPeakShortHold = inputPeakShort;
+    float& inputRmsShort = m_impl->inputRmsShortHold[slot];
+    inputRmsShort = std::max(inputRms, inputRmsShort * shortDecay);
+    target.inputRmsShortHold = inputRmsShort;
+    float& outputRmsShort = m_impl->outputRmsShortHold[slot];
+    outputRmsShort = std::max(outputRms, outputRmsShort * shortDecay);
+    target.outputRmsShortHold = outputRmsShort;
+    float& outputPeakShort = m_impl->outputPeakShortHold[slot];
+    outputPeakShort = std::max(outputPeak, outputPeakShort * shortDecay);
+    target.outputPeakShortHold = outputPeakShort;
     float& peakHold = m_impl->peakHold[slot];
     peakHold = std::max(outputPeak, peakHold * peakDecay);
     target.outputPeakHold = peakHold;
 
     target.engagement = engagement;
+    target.dynamicGainDb = dynamicGainDb;
 
     if (binding.spectrum) {
         const auto& bins = m_impl->spectrum[slot];
@@ -424,15 +447,22 @@ void StageMonitor::ClearSlot(size_t slot)
     target.inputRms = 0.0f;
     target.outputPeak = 0.0f;
     target.outputRms = 0.0f;
+    target.inputPeakShortHold = 0.0f;
+    target.inputRmsShortHold = 0.0f;
+    target.outputRmsShortHold = 0.0f;
     target.outputPeakShortHold = 0.0f;
     target.outputPeakHold = 0.0f;
     target.engagement = 0.0f;
+    target.dynamicGainDb = 0.0f;
     std::memset(target.spectrum, 0, sizeof(target.spectrum));
 
     auto& bins = m_impl->spectrum[slot];
     bins.fill(0.0);
     m_impl->hopCounter[slot] = 0;
-    m_impl->shortHold[slot] = 0.0f;
+    m_impl->inputPeakShortHold[slot] = 0.0f;
+    m_impl->inputRmsShortHold[slot] = 0.0f;
+    m_impl->outputRmsShortHold[slot] = 0.0f;
+    m_impl->outputPeakShortHold[slot] = 0.0f;
     m_impl->peakHold[slot] = 0.0f;
 
     std::atomic_thread_fence(std::memory_order_release);

@@ -39,8 +39,9 @@ APO" and the APO flags used by the base class.
 - Each device has four presets; only the selected one is processed.
 - `APOProcess` does no file I/O, no allocation, no locks, and no logging.
   Settings published by the GUI are picked up by polling a mapped file.
-  Per-stage peak/RMS/engagement and spectra are written into a separate mapped
-  `.monitor` file; the GUI reads it without changing settings or audio state.
+  Per-stage peak/RMS/engagement, dynamic gain, and spectra are written into a
+  separate mapped `.monitor` file; the GUI reads it without changing settings or
+  audio state.
 
 See [APO operation](operation.md) for the call sequence and allocations, and
 the [list of effects](../effects/index.md) for each stage.

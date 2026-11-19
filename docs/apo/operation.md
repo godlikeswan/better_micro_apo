@@ -112,7 +112,8 @@ retuned from the new instance. Each enabled effect then gets
 `Stage::Update(effect, format)`, is added to the non-owning `Chain` with a
 monitor binding (stable id, type, and spectrum flag), and is included in the
 returned active count. Input and Equalizer request spectra; Dynamics supplies
-engagement through `Stage::MonitorValue()`. The chain is cleared and refilled
+engagement through `Stage::MonitorValue()`, and Equalizer supplies its signed
+dynamic gain through `Stage::MonitorGainDb()`. The chain is cleared and refilled
 without allocation, which is what makes live settings changes safe from the
 real-time path. `RebuildChain` is the single place that fills the chain, so a
 capture tap survives a settings change made while a profile is being recorded;

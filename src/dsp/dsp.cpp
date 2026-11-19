@@ -430,7 +430,8 @@ void Chain::Process(const BYTE* source, BYTE* destination, UINT32 frames,
                               static_cast<float>(inputRms),
                               static_cast<float>(outputPeak),
                               static_cast<float>(outputRms),
-                              static_cast<float>(stage->MonitorValue()));
+                              static_cast<float>(stage->MonitorValue()),
+                              static_cast<float>(stage->MonitorGainDb()));
     }
 
     for (size_t i = 0; i < count; ++i)
@@ -485,7 +486,8 @@ void Chain::ProcessSilence(BYTE* destination, UINT32 frames, double* scratch,
                               static_cast<float>(inputRms),
                               static_cast<float>(outputPeak),
                               static_cast<float>(outputRms),
-                              static_cast<float>(stage->MonitorValue()));
+                              static_cast<float>(stage->MonitorValue()),
+                              static_cast<float>(stage->MonitorGainDb()));
     }
 
     for (size_t i = 0; i < count; ++i)

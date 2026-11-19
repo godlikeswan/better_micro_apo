@@ -112,6 +112,7 @@ std::wstring g_stateSignature;
 // Forward declarations for helpers that are used before their definitions.
 void UpdateMainUi();
 void UpdateEffectsUi();
+void ApplyEqualizerDynamicEnable(bool parentEnabled);
 void UpdateParamResetButtons();
 void MarkSettingsDirty();
 void RefreshEffectGraph();
@@ -270,12 +271,14 @@ void ShowEffectControls(apo::EffectType type, bool show)
                  g_dynamicsLookaheadLabel, g_dynamicsLookaheadSlider});
         break;
     case apo::EffectType::Equalizer:
-        showAll({g_eqExtend, g_eqFrequencyLabel, g_eqFrequencySlider,
-                 g_eqQLabel, g_eqQSlider, g_eqThresholdLabel,
+        showAll({g_eqDynamicLabel, g_eqDynamicCombo, g_eqFrequencyLabel,
+                 g_eqFrequencySlider, g_eqQLabel, g_eqQSlider,
+                 g_eqLevelLabel, g_eqLevelSlider, g_eqThresholdLabel,
                  g_eqThresholdSlider, g_eqRatioLabel, g_eqRatioSlider,
-                 g_eqRangeLabel, g_eqRangeSlider, g_eqLevelLabel,
-                 g_eqLevelSlider, g_eqAttackLabel, g_eqAttackSlider,
-                 g_eqReleaseLabel, g_eqReleaseSlider});
+                 g_eqRangeLabel, g_eqRangeSlider, g_eqAttackLabel,
+                 g_eqAttackSlider, g_eqReleaseLabel, g_eqReleaseSlider,
+                 g_eqHoldLabel, g_eqHoldSlider, g_eqLookaheadLabel,
+                 g_eqLookaheadSlider});
         break;
     case apo::EffectType::Gain:
         showAll({g_gainLabel, g_gainSlider});
@@ -318,15 +321,17 @@ void EnableEffectControls(bool enabled)
         g_dynamicsLookaheadLabel, g_dynamicsLookaheadSlider,
         g_inputGainLabel, g_inputGainSlider,
         g_gainLabel, g_gainSlider,
-        g_eqExtend,
+        g_eqDynamicLabel, g_eqDynamicCombo,
         g_eqFrequencyLabel, g_eqFrequencySlider,
         g_eqQLabel, g_eqQSlider,
+        g_eqLevelLabel, g_eqLevelSlider,
         g_eqThresholdLabel, g_eqThresholdSlider,
         g_eqRatioLabel, g_eqRatioSlider,
         g_eqRangeLabel, g_eqRangeSlider,
-        g_eqLevelLabel, g_eqLevelSlider,
         g_eqAttackLabel, g_eqAttackSlider,
         g_eqReleaseLabel, g_eqReleaseSlider,
+        g_eqHoldLabel, g_eqHoldSlider,
+        g_eqLookaheadLabel, g_eqLookaheadSlider,
         g_distFunctionLabel, g_distFunctionCombo,
         g_distDriveLabel, g_distDriveSlider,
         g_distCurvatureLabel, g_distCurvatureSlider,
@@ -346,6 +351,33 @@ void EnableEffectControls(bool enabled)
     for (HWND control : controls) {
         EnableWindow(control, enabled);
     }
+    ApplyEqualizerDynamicEnable(enabled);
+}
+
+// The Equalizer's static controls (frequency, Q, level) stay usable with
+// dynamics off; only the detector controls follow the Dynamic selector.
+void ApplyEqualizerDynamicEnable(bool parentEnabled)
+{
+    const int mode = static_cast<int>(
+        SendMessageW(g_eqDynamicCombo, CB_GETCURSEL, 0, 0));
+    const bool hasDynamics =
+        mode > static_cast<int>(apo::EqualizerDynamicsMode::None) &&
+        mode < static_cast<int>(apo::EqualizerDynamicsMode::Count);
+    const bool enabled = parentEnabled && hasDynamics && HasEffectSelection() &&
+                         g_effectType == apo::EffectType::Equalizer;
+    const HWND controls[] = {
+        g_eqThresholdLabel,  g_eqThresholdSlider,
+        g_eqRatioLabel,      g_eqRatioSlider,
+        g_eqRangeLabel,      g_eqRangeSlider,
+        g_eqAttackLabel,     g_eqAttackSlider,
+        g_eqReleaseLabel,    g_eqReleaseSlider,
+        g_eqHoldLabel,       g_eqHoldSlider,
+        g_eqLookaheadLabel,  g_eqLookaheadSlider,
+        g_eqLookaheadIcon,
+    };
+    for (HWND control : controls) {
+        EnableWindow(control, enabled);
+    }
 }
 
 void ClearEffectEditor()
@@ -359,7 +391,8 @@ void ClearEffectEditor()
     }
     SendMessageW(g_dynamicsModeCombo, CB_SETCURSEL,
                  static_cast<int>(apo::DynamicsMode::CompressorLimiter), 0);
-    SendMessageW(g_eqExtend, BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessageW(g_eqDynamicCombo, CB_SETCURSEL,
+                 static_cast<int>(apo::EqualizerDynamicsMode::None), 0);
     SendMessageW(g_distFunctionCombo, CB_SETCURSEL, apo::kDistortionTanh, 0);
     SendMessageW(g_noiseFftSizeCombo, CB_SETCURSEL,
                  apo::NoiseFftSizeIndex(apo::kNoiseDefaultFftSize), 0);
@@ -469,18 +502,26 @@ void ReadEffectControls(apo::EffectInstance& effect)
                        effect.dynamics.lookaheadMs);
         break;
     }
-    case apo::EffectType::Equalizer:
+    case apo::EffectType::Equalizer: {
+        const int mode = static_cast<int>(
+            SendMessageW(g_eqDynamicCombo, CB_GETCURSEL, 0, 0));
+        if (mode >= 0 &&
+            mode < static_cast<int>(apo::EqualizerDynamicsMode::Count)) {
+            effect.equalizer.mode =
+                static_cast<apo::EqualizerDynamicsMode>(mode);
+        }
         GetSliderValue(g_eqFrequencySlider, effect.equalizer.frequencyHz);
         GetSliderValue(g_eqQSlider, effect.equalizer.q);
+        GetSliderValue(g_eqLevelSlider, effect.equalizer.levelDb);
         GetSliderValue(g_eqThresholdSlider, effect.equalizer.thresholdDb);
         GetSliderValue(g_eqRatioSlider, effect.equalizer.ratio);
         GetSliderValue(g_eqRangeSlider, effect.equalizer.rangeDb);
-        GetSliderValue(g_eqLevelSlider, effect.equalizer.levelDb);
         GetSliderValue(g_eqAttackSlider, effect.equalizer.attackMs);
         GetSliderValue(g_eqReleaseSlider, effect.equalizer.releaseMs);
-        effect.equalizer.expand =
-            SendMessageW(g_eqExtend, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        GetSliderValue(g_eqHoldSlider, effect.equalizer.holdMs);
+        GetSliderValue(g_eqLookaheadSlider, effect.equalizer.lookaheadMs);
         break;
+    }
     case apo::EffectType::Gain:
         GetSliderValue(g_gainSlider, effect.gain.gainDb);
         break;
@@ -572,14 +613,18 @@ void ShowEffectForSelected()
     SetSliderValue(g_dynamicsOutputSlider, effect.dynamics.outputDb);
     SetSliderValue(g_dynamicsLookaheadSlider, effect.dynamics.lookaheadMs);
     SetSliderValue(g_gainSlider, effect.gain.gainDb);
+    SendMessageW(g_eqDynamicCombo, CB_SETCURSEL,
+                 static_cast<int>(effect.equalizer.mode), 0);
     SetSliderValue(g_eqFrequencySlider, effect.equalizer.frequencyHz);
     SetSliderValue(g_eqQSlider, effect.equalizer.q);
+    SetSliderValue(g_eqLevelSlider, effect.equalizer.levelDb);
     SetSliderValue(g_eqThresholdSlider, effect.equalizer.thresholdDb);
     SetSliderValue(g_eqRatioSlider, effect.equalizer.ratio);
     SetSliderValue(g_eqRangeSlider, effect.equalizer.rangeDb);
-    SetSliderValue(g_eqLevelSlider, effect.equalizer.levelDb);
     SetSliderValue(g_eqAttackSlider, effect.equalizer.attackMs);
     SetSliderValue(g_eqReleaseSlider, effect.equalizer.releaseMs);
+    SetSliderValue(g_eqHoldSlider, effect.equalizer.holdMs);
+    SetSliderValue(g_eqLookaheadSlider, effect.equalizer.lookaheadMs);
     SendMessageW(g_reverbAlgorithmCombo, CB_SETCURSEL,
                  static_cast<int>(effect.reverb.algorithm), 0);
     SetSliderValue(g_reverbLevelSlider, effect.reverb.level);
@@ -595,8 +640,6 @@ void ShowEffectForSelected()
     SetSliderValue(g_distDriveSlider, effect.distortion.driveDb);
     SetSliderValue(g_distCurvatureSlider, effect.distortion.curvature);
     SetSliderValue(g_distOutputSlider, effect.distortion.outputDb);
-    SendMessageW(g_eqExtend, BM_SETCHECK,
-                 effect.equalizer.expand ? BST_CHECKED : BST_UNCHECKED, 0);
 
     SetWindowTextW(g_effectHeading, apo::EffectTypeName(effect.type));
     // The parameter panel is shared: hide every type first so switching to an
@@ -621,6 +664,7 @@ void ShowEffectForSelected()
     g_effectLoading = false;
     RefreshEffectGraph();
     Relayout();
+    ApplyEqualizerDynamicEnable(!g_busy && ValidEffectIndex());
     UpdateParamResetButtons();
 }
 
@@ -670,18 +714,20 @@ bool CommitEffectEditor(bool showValues = true)
                            shown.dynamics.lookaheadMs);
             break;
         case apo::EffectType::Equalizer:
+            SendMessageW(g_eqDynamicCombo, CB_SETCURSEL,
+                         static_cast<int>(shown.equalizer.mode), 0);
             SetSliderValue(g_eqFrequencySlider, shown.equalizer.frequencyHz);
             SetSliderValue(g_eqQSlider, shown.equalizer.q);
+            SetSliderValue(g_eqLevelSlider, shown.equalizer.levelDb);
             SetSliderValue(g_eqThresholdSlider,
                            shown.equalizer.thresholdDb);
             SetSliderValue(g_eqRatioSlider, shown.equalizer.ratio);
             SetSliderValue(g_eqRangeSlider, shown.equalizer.rangeDb);
-            SetSliderValue(g_eqLevelSlider, shown.equalizer.levelDb);
             SetSliderValue(g_eqAttackSlider, shown.equalizer.attackMs);
             SetSliderValue(g_eqReleaseSlider, shown.equalizer.releaseMs);
-            SendMessageW(g_eqExtend, BM_SETCHECK,
-                         shown.equalizer.expand ? BST_CHECKED : BST_UNCHECKED,
-                         0);
+            SetSliderValue(g_eqHoldSlider, shown.equalizer.holdMs);
+            SetSliderValue(g_eqLookaheadSlider,
+                           shown.equalizer.lookaheadMs);
             break;
         case apo::EffectType::Gain:
             SetSliderValue(g_gainSlider, shown.gain.gainDb);
@@ -757,13 +803,15 @@ bool ParameterAtDefault(const apo::EffectInstance& effect,
         return SameValue(effect.gain.gainDb, defaults.gain.gainDb);
     case ParamResetGain:
         return SameValue(effect.gain.gainDb, defaults.gain.gainDb);
-    case ParamResetDynExpand:
-        return effect.equalizer.expand == defaults.equalizer.expand;
+    case ParamResetDynMode:
+        return effect.equalizer.mode == defaults.equalizer.mode;
     case ParamResetDynFrequency:
         return SameValue(effect.equalizer.frequencyHz,
                          defaults.equalizer.frequencyHz);
     case ParamResetDynQ:
         return SameValue(effect.equalizer.q, defaults.equalizer.q);
+    case ParamResetDynLevel:
+        return SameValue(effect.equalizer.levelDb, defaults.equalizer.levelDb);
     case ParamResetDynThreshold:
         return SameValue(effect.equalizer.thresholdDb,
                          defaults.equalizer.thresholdDb);
@@ -771,14 +819,17 @@ bool ParameterAtDefault(const apo::EffectInstance& effect,
         return SameValue(effect.equalizer.ratio, defaults.equalizer.ratio);
     case ParamResetDynRange:
         return SameValue(effect.equalizer.rangeDb, defaults.equalizer.rangeDb);
-    case ParamResetDynLevel:
-        return SameValue(effect.equalizer.levelDb, defaults.equalizer.levelDb);
     case ParamResetDynAttack:
         return SameValue(effect.equalizer.attackMs,
                          defaults.equalizer.attackMs);
     case ParamResetDynRelease:
         return SameValue(effect.equalizer.releaseMs,
                          defaults.equalizer.releaseMs);
+    case ParamResetDynHold:
+        return SameValue(effect.equalizer.holdMs, defaults.equalizer.holdMs);
+    case ParamResetDynLookahead:
+        return SameValue(effect.equalizer.lookaheadMs,
+                         defaults.equalizer.lookaheadMs);
     case ParamResetReverbAlgorithm:
         return effect.reverb.algorithm == defaults.reverb.algorithm;
     case ParamResetReverbLevel:
@@ -827,9 +878,16 @@ void UpdateParamResetButtons()
             .effects[g_effectSelection];
     const apo::EffectInstance defaults =
         apo::MakeEffect(effect.type, effect.id);
+    const bool eqDynamicOff =
+        effect.type == apo::EffectType::Equalizer &&
+        effect.equalizer.mode == apo::EqualizerDynamicsMode::None;
     for (int param = 0; param < ParamResetCount; ++param) {
-        EnableWindow(g_paramResetButtons[param],
-                     !ParameterAtDefault(effect, defaults, param));
+        bool enable = !ParameterAtDefault(effect, defaults, param);
+        if (eqDynamicOff && param >= ParamResetDynThreshold &&
+            param <= ParamResetDynLookahead) {
+            enable = false;
+        }
+        EnableWindow(g_paramResetButtons[param], enable);
     }
 }
 
@@ -886,14 +944,17 @@ void ResetParameter(int param)
     case ParamResetGain:
         effect.gain.gainDb = defaults.gain.gainDb;
         break;
-    case ParamResetDynExpand:
-        effect.equalizer.expand = defaults.equalizer.expand;
+    case ParamResetDynMode:
+        effect.equalizer.mode = defaults.equalizer.mode;
         break;
     case ParamResetDynFrequency:
         effect.equalizer.frequencyHz = defaults.equalizer.frequencyHz;
         break;
     case ParamResetDynQ:
         effect.equalizer.q = defaults.equalizer.q;
+        break;
+    case ParamResetDynLevel:
+        effect.equalizer.levelDb = defaults.equalizer.levelDb;
         break;
     case ParamResetDynThreshold:
         effect.equalizer.thresholdDb = defaults.equalizer.thresholdDb;
@@ -904,14 +965,17 @@ void ResetParameter(int param)
     case ParamResetDynRange:
         effect.equalizer.rangeDb = defaults.equalizer.rangeDb;
         break;
-    case ParamResetDynLevel:
-        effect.equalizer.levelDb = defaults.equalizer.levelDb;
-        break;
     case ParamResetDynAttack:
         effect.equalizer.attackMs = defaults.equalizer.attackMs;
         break;
     case ParamResetDynRelease:
         effect.equalizer.releaseMs = defaults.equalizer.releaseMs;
+        break;
+    case ParamResetDynHold:
+        effect.equalizer.holdMs = defaults.equalizer.holdMs;
+        break;
+    case ParamResetDynLookahead:
+        effect.equalizer.lookaheadMs = defaults.equalizer.lookaheadMs;
         break;
     case ParamResetReverbAlgorithm:
         effect.reverb.algorithm = defaults.reverb.algorithm;
@@ -2216,6 +2280,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             break;
         case IDC_MAIN_ENABLE_ICON:
         case IDC_DYN_LOOKAHEAD_ICON:
+        case IDC_EQ_LOOKAHEAD_ICON:
         case IDC_REVERB_PREDELAY_ICON:
             if (HIWORD(wParam) == STN_CLICKED) {
                 SendMessageW(g_infoTooltip, TTM_POPUP, 0, 0);
@@ -2247,6 +2312,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             break;
         case IDC_DIST_FUNCTION_COMBO:
         case IDC_DYN_MODE_COMBO:
+        case IDC_EQ_DYNAMIC_COMBO:
         case IDC_REVERB_ALGORITHM_COMBO:
         case IDC_NOISE_FFT_SIZE_COMBO:
             if (HIWORD(wParam) == CBN_SELCHANGE) {
@@ -2274,6 +2340,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_EQ_LEVEL_SLIDER:
         case IDC_EQ_ATTACK_SLIDER:
         case IDC_EQ_RELEASE_SLIDER:
+        case IDC_EQ_HOLD_SLIDER:
+        case IDC_EQ_LOOKAHEAD_SLIDER:
         case IDC_REVERB_LEVEL_SLIDER:
         case IDC_REVERB_MAX_LENGTH_SLIDER:
         case IDC_REVERB_SIZE_SLIDER:
@@ -2285,11 +2353,6 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_DIST_CURVATURE_SLIDER:
         case IDC_DIST_OUTPUT_SLIDER:
             if (ui::IsSliderChange(HIWORD(wParam))) {
-                MarkSettingsDirty();
-            }
-            break;
-        case IDC_EQ_EXTEND:
-            if (HIWORD(wParam) == BN_CLICKED) {
                 MarkSettingsDirty();
             }
             break;

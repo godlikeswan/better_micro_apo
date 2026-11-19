@@ -17,6 +17,9 @@ constexpr wchar_t kGraphClass[] = L"BetterMicroApoGraph";
 constexpr int kCurveSamples = 240;
 constexpr double kMinDb = -96.0;
 constexpr double kMaxDb = 24.0;
+// Equalizer response curves use a symmetric scale so 0 dB sits in the middle
+// of the plot, independently of the spectrum's −96…+24 dBFS scale.
+constexpr double kEqCurveMaxDb = 96.0;
 constexpr double kMinHz = 20.0;
 constexpr double kMaxHz = 20000.0;
 
@@ -28,11 +31,10 @@ struct GraphState
     bool hasMonitor = false;
     HFONT font = nullptr;
 
-    // Stage telemetry arrives in short buffers; these values keep the dot,
-    // engagement bar and meter from jumping on every timer tick.
-    float inputRms = 0.0f;
-    float outputRms = 0.0f;
+    // Live overlays use APO-side short holds; the engagement bar is smoothed
+    // here because it is a slowly changing control signal.
     float inputPeak = 0.0f;
+    float outputPeak = 0.0f;
     float engagement = 0.0f;
     float meterCurrent = 0.0f;
     float meterPeak = 0.0f;
@@ -52,6 +54,8 @@ struct GraphColors
     COLORREF meterHigh;
     COLORREF meterOff;
     COLORREF engagement;
+    COLORREF dynamicCurve;
+    COLORREF potentialCurve;
     COLORREF text;
 };
 
@@ -176,7 +180,8 @@ const wchar_t* FrequencyLabel(double maxHz)
 // horizontal position in [0, 1] and returns the vertical position in [0, 1],
 // with 0 at the bottom.
 template <typename ValueAt>
-void StrokeCurve(HDC dc, const RECT& plot, COLORREF color, ValueAt valueAt)
+void StrokeCurve(HDC dc, const RECT& plot, COLORREF color, ValueAt valueAt,
+                 int style = PS_SOLID, int penWidth = 0)
 {
     POINT points[kCurveSamples];
     const int width = plot.right - plot.left;
@@ -190,7 +195,8 @@ void StrokeCurve(HDC dc, const RECT& plot, COLORREF color, ValueAt valueAt)
 
     const int saved = SaveDC(dc);
     IntersectClipRect(dc, plot.left, plot.top, plot.right, plot.bottom);
-    HPEN pen = CreatePen(PS_SOLID, std::max(2, Scale(2)), color);
+    HPEN pen = CreatePen(style, penWidth > 0 ? penWidth : std::max(2, Scale(2)),
+                         color);
     HGDIOBJ old = SelectObject(dc, pen);
     Polyline(dc, points, kCurveSamples);
     SelectObject(dc, old);
@@ -551,8 +557,10 @@ void PaintGain(HDC dc, const RECT& client, const RECT& plot,
     });
 
     if (state.monitor.valid) {
-        const int x = MapX(plot, DbPosition(AmplitudeDb(state.inputRms)));
-        const int y = MapY(plot, DbPosition(AmplitudeDb(state.outputRms)));
+        // Use the same short-held peaks as the output meter so a reading above
+        // 0 dB on the bar has a matching point on the transfer curve.
+        const int x = MapX(plot, DbPosition(AmplitudeDb(state.inputPeak)));
+        const int y = MapY(plot, DbPosition(AmplitudeDb(state.outputPeak)));
         DrawLine(dc, x, plot.bottom, x, y, colors.reference, PS_DOT);
         DrawLine(dc, plot.left, y, x, y, colors.reference, PS_DOT);
         DrawDot(dc, x, y, colors.stripe);
@@ -564,7 +572,7 @@ void PaintGain(HDC dc, const RECT& client, const RECT& plot,
     DrawTextW(dc, L"0 dB", -1, &zeroLabel,
               DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_NOPREFIX);
 
-    DrawCaption(dc, client, plot, L"Input / output RMS (dBFS)", colors.text);
+    DrawCaption(dc, client, plot, L"Transfer curve (peak, dB)", colors.text);
     DrawXLeft(dc, plot, L"-96", colors.text);
     DrawXCenter(dc, plot, MapX(plot, DbPosition(0.0)), L"0", colors.text);
     DrawXRight(dc, plot, L"+24", colors.text);
@@ -582,8 +590,8 @@ void PaintDynamics(HDC dc, const RECT& client, const RECT& plot,
                    const apo::DynamicsSettings& settings,
                    const GraphColors& colors)
 {
-    constexpr double kThresholdMin = -80.0;
-    constexpr double kThresholdMax = 0.0;
+    constexpr double kThresholdMin = apo::kMinThresholdDb;
+    constexpr double kThresholdMax = apo::kMaxThresholdDb;
 
     DrawGrid(dc, plot, colors.grid, 4, 4);
     DrawLine(dc, plot.left, plot.bottom - 1, plot.right - 1, plot.top,
@@ -621,13 +629,27 @@ void PaintDynamics(HDC dc, const RECT& client, const RECT& plot,
 
 void PaintEqualizer(HDC dc, const RECT& client, const RECT& plot,
                     const apo::EqualizerSettings& settings,
-                    double sampleRate, const GraphColors& colors)
+                    const GraphState& state, const GraphColors& colors)
 {
+    const double sampleRate = state.monitor.sampleRate;
     const double maxHz = MaxFrequency(sampleRate);
     const double centerHz = std::clamp(settings.frequencyHz, kMinHz, maxHz);
     const double q = std::max(settings.q, 0.1);
 
     auto decibelPosition = [](double db) { return DbPosition(db); };
+    auto curvePosition = [](double db) {
+        return (db + kEqCurveMaxDb) / (2.0 * kEqCurveMaxDb);
+    };
+    auto frequencyAt = [&](double t) {
+        return kMinHz * std::pow(maxHz / kMinHz, t);
+    };
+    // The band-pass peaks at 0 dB in the center and falls on its skirts. Its
+    // linear magnitude is a 0..1 shape shared by every Equalizer overlay.
+    auto bandShape = [&](double hz) {
+        const double bandDb =
+            std::max(apo::dsp::BandpassMagnitudeDb(hz, centerHz, q), -96.0);
+        return apo::dsp::DecibelsToLinear(bandDb);
+    };
 
     const double gridHz[] = {100.0, 1000.0, 10000.0};
     for (double hz : gridHz) {
@@ -643,27 +665,61 @@ void PaintEqualizer(HDC dc, const RECT& client, const RECT& plot,
         DrawLine(dc, plot.left, y, plot.right, y, colors.grid);
     }
 
-    DrawLine(dc, plot.left, MapY(plot, decibelPosition(0.0)), plot.right,
-             MapY(plot, decibelPosition(0.0)), colors.reference, PS_DOT);
     const int centerX =
         MapX(plot, FrequencyPosition(centerHz, sampleRate));
     DrawLine(dc, centerX, plot.top, centerX, plot.bottom, colors.reference,
              PS_DOT);
+    // The response curves have their own symmetric scale, so their zero line
+    // is at the vertical center even though the spectrum's zero is near the top.
+    const int curveZeroY = MapY(plot, curvePosition(0.0));
+    DrawLine(dc, plot.left, curveZeroY, plot.right, curveZeroY,
+             colors.reference, PS_DOT);
 
+    // Only one limit curve: a cut for Compressor, a boost for Expander. It
+    // follows the band shape and reaches Range at the center frequency.
+    if (settings.mode != apo::EqualizerDynamicsMode::None &&
+        settings.rangeDb > 0.0) {
+        const double sign =
+            settings.mode == apo::EqualizerDynamicsMode::Compressor ? -1.0
+                                                                   : 1.0;
+        StrokeCurve(dc, plot, colors.potentialCurve, [&](double t) {
+            return curvePosition(sign * settings.rangeDb *
+                                 bandShape(frequencyAt(t)));
+        }, PS_DASH, 1);
+    }
+
+    // Static bell: signed Level lifts or cuts the band, skirts return to 0 dB.
     StrokeCurve(dc, plot, colors.curve, [&](double t) {
-        const double hz = kMinHz * std::pow(maxHz / kMinHz, t);
-        const double db =
-            apo::dsp::BandpassMagnitudeDb(hz, centerHz, q) + settings.levelDb;
-        return decibelPosition(db);
+        return curvePosition(settings.levelDb * bandShape(frequencyAt(t)));
     });
 
-    DrawCaption(dc, client, plot, L"Band response + level", colors.text);
+    // Live engagement: the APO publishes its current signed dynamic gain, and
+    // the same band shape shows where that cut or boost is being applied.
+    if (settings.mode != apo::EqualizerDynamicsMode::None &&
+        state.monitor.valid) {
+        const double liveDb = state.monitor.dynamicGainDb;
+        if (std::fabs(liveDb) > 0.01) {
+            StrokeCurve(dc, plot, colors.dynamicCurve, [&](double t) {
+                return curvePosition(liveDb * bandShape(frequencyAt(t)));
+            });
+        }
+    }
+
+    // Mark the static response at the selected center frequency: there the band
+    // shape is exactly 1, so the curve value equals Level.
+    DrawDot(dc, centerX, MapY(plot, curvePosition(settings.levelDb)),
+            colors.stripe);
+
+    DrawCaption(dc, client, plot, L"Band response (level / live / limit)",
+                colors.text);
     DrawXLeft(dc, plot, L"20", colors.text);
     DrawXCenter(dc, plot, MapX(plot, FrequencyPosition(100.0, sampleRate)),
                 L"100", colors.text);
     DrawXCenter(dc, plot, MapX(plot, FrequencyPosition(1000.0, sampleRate)),
                 L"1k", colors.text);
     DrawXRight(dc, plot, FrequencyLabel(maxHz), colors.text);
+    // Left labels stay on the spectrum's dBFS scale; the response labels sit
+    // just inside the right edge so the plot and meter column do not move.
     DrawYLabel(dc, client.left, client.left + Scale(30), plot, plot.top, L"+24",
                colors.text);
     DrawYLabel(dc, client.left, client.left + Scale(30), plot,
@@ -672,6 +728,12 @@ void PaintEqualizer(HDC dc, const RECT& client, const RECT& plot,
                MapY(plot, DbPosition(-48.0)), L"-48", colors.text);
     DrawYLabel(dc, client.left, client.left + Scale(30), plot, plot.bottom,
                L"-96", colors.text);
+    DrawYLabel(dc, plot.right - Scale(38), plot.right - Scale(4), plot,
+               MapY(plot, curvePosition(kEqCurveMaxDb)), L"+96", colors.text);
+    DrawYLabel(dc, plot.right - Scale(38), plot.right - Scale(4), plot,
+               curveZeroY, L"0", colors.text);
+    DrawYLabel(dc, plot.right - Scale(38), plot.right - Scale(4), plot,
+               MapY(plot, curvePosition(-kEqCurveMaxDb)), L"-96", colors.text);
 }
 
 void PaintGraph(HWND window, const GraphState& state, HDC dc)
@@ -712,6 +774,9 @@ void PaintGraph(HWND window, const GraphState& state, HDC dc)
     colors.meterHigh = RGB(225, 40, 40);
     colors.meterOff = Mix(theme.color.editBackground, theme.color.text, 0.10);
     colors.engagement = theme.color.accent;
+    colors.dynamicCurve = colors.meterMid;
+    colors.potentialCurve =
+        Mix(theme.color.editBackground, theme.color.text, 0.50);
     colors.text = theme.color.text;
 
     HFONT font = state.font != nullptr
@@ -740,8 +805,7 @@ void PaintGraph(HWND window, const GraphState& state, HDC dc)
         break;
     case apo::EffectType::Equalizer:
         PaintSpectrum(dc, plot, state.monitor, colors);
-        PaintEqualizer(dc, client, plot, state.effect.equalizer,
-                       state.monitor.sampleRate, colors);
+        PaintEqualizer(dc, client, plot, state.effect.equalizer, state, colors);
         break;
     default:
         break;
@@ -830,9 +894,8 @@ void ClearGraphState(GraphState& state)
 {
     state.monitor = apo::StageMonitorSnapshot{};
     state.hasMonitor = false;
-    state.inputRms = 0.0f;
-    state.outputRms = 0.0f;
     state.inputPeak = 0.0f;
+    state.outputPeak = 0.0f;
     state.engagement = 0.0f;
     state.meterCurrent = 0.0f;
     state.meterPeak = 0.0f;
@@ -903,9 +966,8 @@ void SetGraphMonitor(HWND graph, const apo::StageMonitorSnapshot& monitor)
     constexpr float kSmoothing = 0.30f;
     state->monitor = monitor;
     state->hasMonitor = true;
-    state->inputRms += (monitor.inputRms - state->inputRms) * kSmoothing;
-    state->outputRms += (monitor.outputRms - state->outputRms) * kSmoothing;
-    state->inputPeak += (monitor.inputPeak - state->inputPeak) * kSmoothing;
+    state->inputPeak = monitor.inputPeakShortHold;
+    state->outputPeak = monitor.outputPeakShortHold;
     state->engagement += (monitor.engagement - state->engagement) * kSmoothing;
     // Both meter parts use APO-side cross-buffer holds, so a transient between
     // GUI polls moves the fill as well. The fill's hold is shorter, leaving the

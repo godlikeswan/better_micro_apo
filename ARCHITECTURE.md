@@ -25,9 +25,13 @@ starts at **+12 dB** with a **−24 to +50 dB** range. The unified dynamics effe
 uses one of two modes — **Compressor/Limiter** above the threshold or
 **Expander/Gate** below it — with a −15 dB threshold, 5:1 ratio, input/output
 trim, target-latching hold, and optional lookahead. Its ratio slider ends at
-**∞** (written as `inf` in the INI); the last finite position is 1000.
+**∞** (written as `inf` in the INI); the last finite position is 1000. Equalizer
+has a signed static **Level** (default −12 dB, −96…+96 dB) and a **Dynamic**
+selector of **No**, **Compressor**, or **Expander**, with a ratio that also ends
+at ∞, a 0…96 dB **Range**, and the same hold and lookahead ranges as the unified
+dynamics effect.
 
-Durable settings use schema version 8 and the runtime snapshot uses version 10.
+Durable settings use schema version 9 and the runtime snapshot uses version 11.
 Loading a settings file with any other `[dsp] version` deletes the file and
 starts from defaults; there is no migration path. See
 [DLL ↔ GUI settings sharing](docs/runtime-sharing.md) for the file formats, the

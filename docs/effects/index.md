@@ -40,6 +40,7 @@ All effects implement `apo::dsp::Stage` (`src/dsp/dsp.h`):
 | `Reset()` | Setup and when instance identity/shape changes | Clear internal state, keep configuration. |
 | `NeedsSilence()` | Query from the chain | True when the stage buffers audio across calls and needs silent buffers to flush its tail. |
 | `MonitorValue()` | Every monitored buffer | Optional 0..1 stage-specific engagement value; Dynamics reports gain change, others return zero. |
+| `MonitorGainDb()` | Every monitored buffer | Optional signed gain change in dB; Equalizer reports its current dynamic cut/boost, others return zero. |
 | `Process(samples, frames, channels)` | Every `APOProcess` | Process `frames * channels` interleaved `double` values in `[-1, 1]`, in place. Real-time safe. |
 
 `Chain` holds non-owning `Stage*` pointers in list order. `Chain::Process`
@@ -74,31 +75,40 @@ runtime polling path.
   value; a newly added effect in the GUI is always on. Input is forced on even
   if a stale file says otherwise.
 - `ClampSettings` repairs non-finite values using the fallback defaults in each
-  effect's page, clamps every number to its listed range (the dynamics ratio
-  also accepts positive infinity), inserts or repairs Input at row 0,
-  normalizes ids, and forces `isolateEffects = true`.
-- Settings schema version 8 is the only accepted version. A file with a missing
+  effect's page, clamps every number to its listed range (the dynamics and
+  equalizer ratios also accept positive infinity), inserts or repairs Input at
+  row 0, normalizes ids, and forces `isolateEffects = true`.
+- Settings schema version 9 is the only accepted version. A file with a missing
   or mismatched `[dsp] version` is deleted on load instead of migrated.
 
 ### Graph and transfer math
 
-The GUI draws an Input spectrum, a Gain input/output dot, a mode-aware Dynamics
-transfer curve with an engagement bar, an Equalizer spectrum behind the
-level-shifted band response, and a Saturation transfer curve with a mirrored
-operating point driven by the input peak after Drive. The selected effect also
+The GUI draws an Input spectrum, a Gain input/output dot on a transfer curve, a
+mode-aware Dynamics transfer curve with an engagement bar, an Equalizer spectrum
+behind a static Level curve with a center-frequency dot, a yellow live dynamic
+curve, and a dashed mode-dependent Range limit, and a Saturation transfer curve
+with a mirrored operating point driven by the input peak after Drive. The
+selected effect also
 gets a thin output meter with green, yellow, and red zones, dB labels, a
 short-held fill driven by a 0.06 s peak hold, and a slightly thicker 0.6 s
 peak-hold line whose colour matches the bar zone it sits in; Dynamics gets a
-separate engagement bar on the left. The dB-based graphs (Input, Gain, Dynamics, Equalizer) keep a vertical
-range of **−96 to +24 dBFS**; boosts above +24 dB remain audible but may be
-off-screen. Saturation uses normalized −1…1 transfer axes.
+separate engagement bar on the left. The Gain dot and Saturation marker use the
+same short APO-side holds as the meter fill, so short sounds are not skipped
+between 100 ms GUI polls. Input, Gain, and Dynamics keep a vertical range of
+**−96 to +24 dBFS**. The Equalizer's spectrum keeps that left-hand dBFS scale and
+its labels, while its response curves use a centered **−96…+96 dB** scale with
++96/0/−96 marks just inside the right edge; the plot rectangle does not move.
+Saturation uses normalized −1…1 transfer axes.
 
 The saturation and dynamics stages and their graphs call the same inline
 functions in `src/dsp/transfer.h`, so the displayed curve cannot drift from the
-audio path. The equalizer graph shows the analog band-pass prototype approximated
-by `EqualizerStage`, shifted by its **Level** control. Live overlays come from
-the APO's `.monitor` channel, not from the Listen stream; the bottom Peak/RMS
-display is separate. See
+audio path. The equalizer graph normalizes the analog band-pass prototype
+approximated by `EqualizerStage` and multiplies it by the signed **Level** for
+the static curve, with a dot at the selected center frequency. The yellow live
+curve multiplies the published signed dynamic gain by the same shape, and the
+single dashed curve shows **−Range** for Compressor or **+Range** for Expander.
+Live overlays come from the APO's `.monitor` channel, not from the Listen stream;
+the bottom Peak/RMS display is separate. See
 [DLL ↔ GUI settings sharing](../runtime-sharing.md) for the telemetry format.
 
 ### Adding a new effect type

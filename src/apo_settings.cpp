@@ -119,8 +119,9 @@ std::wstring Utf8ToWide(const std::string& data)
 
 bool ParseDouble(const std::wstring& text, double& value)
 {
-    // Infinity is only meaningful for the dynamics ratio. Other fields accept
-    // it syntactically and ClampFinite replaces it with their default.
+    // Infinity is meaningful for the dynamics and equalizer ratios. Other
+    // fields accept it syntactically and ClampFinite replaces it with their
+    // default.
     if (EqualsIgnoreCase(text, L"inf") || EqualsIgnoreCase(text, L"+inf") ||
         EqualsIgnoreCase(text, L"infinity") ||
         EqualsIgnoreCase(text, L"+infinity")) {
@@ -226,6 +227,17 @@ const wchar_t* DynamicsModeName(DynamicsMode mode)
     case DynamicsMode::CompressorLimiter: return L"Compressor/Limiter";
     case DynamicsMode::ExpanderGate:      return L"Expander/Gate";
     default:                              return L"";
+    }
+}
+
+const wchar_t* EqualizerDynamicsModeName(EqualizerDynamicsMode mode)
+{
+    switch (mode)
+    {
+    case EqualizerDynamicsMode::None:       return L"No";
+    case EqualizerDynamicsMode::Compressor: return L"Compressor";
+    case EqualizerDynamicsMode::Expander:   return L"Expander";
+    default:                                return L"";
     }
 }
 
@@ -423,7 +435,8 @@ void ClampEffect(EffectInstance& effect)
             effect.dynamics.mode >= DynamicsMode::Count) {
             effect.dynamics.mode = DynamicsMode::CompressorLimiter;
         }
-        ClampFinite(effect.dynamics.thresholdDb, -15.0, -80.0, 0.0);
+        ClampFinite(effect.dynamics.thresholdDb, -15.0, kMinThresholdDb,
+                    kMaxThresholdDb);
         ClampRatio(effect.dynamics.ratio);
         ClampFinite(effect.dynamics.inputDb, 0.0, -24.0, 30.0);
         ClampFinite(effect.dynamics.outputDb, 0.0, -24.0, 24.0);
@@ -434,18 +447,36 @@ void ClampEffect(EffectInstance& effect)
                     kDynamicsMaxLookaheadMs);
         break;
 
-    case EffectType::Equalizer:
+    case EffectType::Equalizer: {
+        if (effect.equalizer.mode < EqualizerDynamicsMode::None ||
+            effect.equalizer.mode >= EqualizerDynamicsMode::Count) {
+            effect.equalizer.mode = EqualizerDynamicsMode::None;
+        }
         ClampFinite(effect.equalizer.frequencyHz, 120.0,
                     kEqMinFrequencyHz, kEqMaxFrequencyHz);
         ClampFinite(effect.equalizer.q, 0.7, kEqMinQ, kEqMaxQ);
-        ClampFinite(effect.equalizer.thresholdDb, -45.0, -80.0, 0.0);
-        ClampFinite(effect.equalizer.ratio, 4.0, 1.0, 20.0);
-        ClampFinite(effect.equalizer.rangeDb, 18.0, 0.0, 36.0);
-        ClampFinite(effect.equalizer.levelDb, 0.0, kEqMinLevelDb,
+        ClampFinite(effect.equalizer.levelDb, -12.0, kEqMinLevelDb,
                     kEqMaxLevelDb);
+        ClampFinite(effect.equalizer.thresholdDb, -45.0, kMinThresholdDb,
+                    kMaxThresholdDb);
+        // Positive infinity is allowed here too: the right end stop is a hard
+        // limiter/expander, matching the unified dynamics ratio slider.
+        double& equalizerRatio = effect.equalizer.ratio;
+        if (std::isinf(equalizerRatio) && equalizerRatio > 0.0) {
+            // Keep true infinity.
+        } else if (!std::isfinite(equalizerRatio) || equalizerRatio < 1.0) {
+            equalizerRatio = 4.0;
+        } else {
+            equalizerRatio = std::min(equalizerRatio, kDynamicsMaxFiniteRatio);
+        }
+        ClampFinite(effect.equalizer.rangeDb, 18.0, 0.0, kEqMaxRangeDb);
         ClampFinite(effect.equalizer.attackMs, 10.0, 0.1, 1000.0);
         ClampFinite(effect.equalizer.releaseMs, 150.0, 1.0, 5000.0);
+        ClampFinite(effect.equalizer.holdMs, 50.0, 0.0, kEqMaxHoldMs);
+        ClampFinite(effect.equalizer.lookaheadMs, 0.0, 0.0,
+                    kDynamicsMaxLookaheadMs);
         break;
+    }
 
     case EffectType::Mono:
         break;
@@ -639,17 +670,22 @@ void LoadEffectFields(const std::vector<KeyValue>& entries,
         break;
     }
 
-    case EffectType::Equalizer:
-        getBool(L"equalizer_expand", effect.equalizer.expand);
+    case EffectType::Equalizer: {
+        int mode = static_cast<int>(EqualizerDynamicsMode::None);
+        getInt(L"equalizer_mode", mode);
+        effect.equalizer.mode = static_cast<EqualizerDynamicsMode>(mode);
         getDouble(L"equalizer_frequency_hz", effect.equalizer.frequencyHz);
         getDouble(L"equalizer_q", effect.equalizer.q);
+        getDouble(L"equalizer_level_db", effect.equalizer.levelDb);
         getDouble(L"equalizer_threshold_db", effect.equalizer.thresholdDb);
         getDouble(L"equalizer_ratio", effect.equalizer.ratio);
         getDouble(L"equalizer_range_db", effect.equalizer.rangeDb);
-        getDouble(L"equalizer_level_db", effect.equalizer.levelDb);
         getDouble(L"equalizer_attack_ms", effect.equalizer.attackMs);
         getDouble(L"equalizer_release_ms", effect.equalizer.releaseMs);
+        getDouble(L"equalizer_hold_ms", effect.equalizer.holdMs);
+        getDouble(L"equalizer_lookahead_ms", effect.equalizer.lookaheadMs);
         break;
+    }
 
     case EffectType::Mono:
         break;
@@ -862,8 +898,9 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
                 break;
 
             case EffectType::Equalizer:
-                text += prefix + "equalizer_expand=" +
-                        (effect.equalizer.expand ? "1" : "0") + "\n";
+                text += prefix + "equalizer_mode=" +
+                        std::to_string(static_cast<int>(effect.equalizer.mode)) +
+                        "\n";
                 text += prefix + "equalizer_frequency_hz=" +
                         FormatDouble(effect.equalizer.frequencyHz) + "\n";
                 text += prefix + "equalizer_q=" +
@@ -880,6 +917,10 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
                         FormatDouble(effect.equalizer.attackMs) + "\n";
                 text += prefix + "equalizer_release_ms=" +
                         FormatDouble(effect.equalizer.releaseMs) + "\n";
+                text += prefix + "equalizer_hold_ms=" +
+                        FormatDouble(effect.equalizer.holdMs) + "\n";
+                text += prefix + "equalizer_lookahead_ms=" +
+                        FormatDouble(effect.equalizer.lookaheadMs) + "\n";
                 break;
 
             case EffectType::Mono:
