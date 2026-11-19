@@ -124,6 +124,16 @@ void DynamicsStage::Reset()
     std::fill(m_delay.begin(), m_delay.end(), 0.0);
 }
 
+double DynamicsStage::MonitorValue() const
+{
+    if (!m_settings.enabled) {
+        return 0.0;
+    }
+    // Gain reduction and gate closure are both useful engagement cues; both
+    // show up as a nonzero |m_gainDb|. 24 dB spans the useful visual range.
+    return std::clamp(std::fabs(m_gainDb) / 24.0, 0.0, 1.0);
+}
+
 void DynamicsStage::Process(double* samples, UINT32 frames, UINT32 channels)
 {
     if (!m_settings.enabled)
@@ -302,6 +312,7 @@ void EqualizerStage::ApplyCoefficients(const AudioFormat& format)
     m_thresholdLinear = DecibelsToLinear(m_thresholdDb);
     m_ratio = std::max(1.0, m_settings.ratio);
     m_rangeDb = std::max(0.0, m_settings.rangeDb);
+    m_levelDb = m_settings.levelDb;
     m_expand = m_settings.expand;
     m_attackCoeff = TimeCoefficient(m_settings.attackMs, sampleRate);
     m_releaseCoeff = TimeCoefficient(m_settings.releaseMs, sampleRate);
@@ -402,7 +413,8 @@ void EqualizerStage::Process(double* samples, UINT32 frames, UINT32 channels)
                                                         : m_releaseCoeff;
         m_gainDb += (targetDb - m_gainDb) * coefficient;
 
-        const double bandGain = DecibelsToLinear(m_gainDb) - 1.0;
+        const double bandGain =
+            DecibelsToLinear(m_gainDb + m_levelDb) - 1.0;
         for (UINT32 channel = 0; channel < channels; ++channel)
         {
             values[channel] += m_band[channel] * bandGain;
@@ -1278,6 +1290,7 @@ void StagePool::Configure(const AudioFormat& format,
             std::unique_ptr<Stage> stage;
             switch (type)
             {
+            case EffectType::Input:
             case EffectType::Gain:
                 stage = std::make_unique<GainStage>();
                 break;
@@ -1324,12 +1337,16 @@ void StagePool::Clear()
     }
 }
 
-void StagePool::Update(const ApoSettings& settings, const AudioFormat& format,
-                       Chain& chain)
+int StagePool::Update(const ApoSettings& settings, const AudioFormat& format,
+                      Chain& chain)
 {
     chain.Clear();
 
     int used[static_cast<int>(EffectType::Count)] = {};
+    int boundCount = 0;
+    const auto wantsSpectrum = [](EffectType type) {
+        return type == EffectType::Input || type == EffectType::Equalizer;
+    };
 
     const EffectPreset& preset = ActivePreset(settings);
     for (int index = 0; index < preset.effectCount; ++index)
@@ -1370,8 +1387,11 @@ void StagePool::Update(const ApoSettings& settings, const AudioFormat& format,
         }
 
         stage->Update(effect, format);
-        chain.Add(stage);
+        chain.Add(stage, StageMonitorBinding{effect.id, effect.type,
+                                             wantsSpectrum(effect.type)});
+        ++boundCount;
     }
+    return boundCount;
 }
 
 void StagePool::UpdateProfileBins(const NoiseProfile& profile)

@@ -17,9 +17,12 @@ setting up the APO needs administrator rights.
    up the effect.
 3. Check **Listen to this device** and use headphones to hear the input with
    the effects applied.
-4. Click **Add effect**. **Gain** is first in the list and starts at **+12 dB**;
-   move the slider until the meters look comfortable.
-5. Add more effects and experiment. The [effect documentation](docs/effects/index.md)
+4. Select the fixed **Input** row. It is always first and enabled; set
+   **Input gain** (0 dB by default) and watch its live spectrum and output
+   meter.
+5. Click **Add effect**. **Gain** is first in the Add effect menu and starts at
+   **+12 dB**; move its slider until the meters look comfortable.
+6. Add more effects and experiment. The [effect documentation](docs/effects/index.md)
    explains what each one does.
 
 To uninstall, uncheck **Enable** on every device, or use **File → Uninstall**.
@@ -27,12 +30,18 @@ To uninstall, uncheck **Enable** on every device, or use **File → Uninstall**.
 ## Useful notes
 
 - Each device has four presets. Change **Preset** (1–4) to keep up to four
-  different effect sets for the same device.
+  different effect sets for the same device. Each preset starts with an
+  always-on **Input** row that cannot be added, deleted, or disabled.
 - While listening, **Peak** and **RMS** at the bottom show the input level.
   Peak is the loudest moment; RMS is the average level
   ([what RMS means](https://en.wikipedia.org/wiki/Root_mean_square)). **CLIP**
   lights up when the signal is too loud, and **drops** counts gaps in the
-  listening stream.
+  listening stream. This bottom meter comes from the Listen stream.
+- The selected effect's panel has its own live graph from the APO: Input
+  spectrum, Gain input/output dot, Dynamics engagement and output, Equalizer
+  spectrum and level, or Saturation operating point and output. Each includes a
+  thin output meter with green/yellow/red zones. Polling these graphs never
+  changes settings or stops Listen.
 - Effects apply as you change them — there is no Apply button. Each slider has
   a small ↺ button that resets only that setting.
 - The **Gate/Compressor/Limiter/Expander** effect has two modes:

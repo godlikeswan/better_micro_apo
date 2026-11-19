@@ -213,6 +213,7 @@ HRESULT BetterMicroApo::FinalConstruct()
 
 void BetterMicroApo::FinalRelease()
 {
+    CloseStageMonitor();
     CloseStageCapture();
     CloseRuntimeSettings();
     Log(L"FinalRelease pid=%lu", GetCurrentProcessId());
@@ -294,6 +295,7 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
     UINT32 u32NumOutputConnections,
     APO_CONNECTION_DESCRIPTOR** ppOutputConnections)
 {
+    CloseStageMonitor();
     CloseStageCapture();
 
     // The base class validates connection counts, formats and registration
@@ -365,11 +367,13 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
             static_cast<size_t>(m_maxFrames) * info.channels, 0.0);
         m_captureTap.Configure(m_formatInfo);
         OpenStageCapture();
+        OpenStageMonitor();
         ConfigureDsp();
     }
     catch (...)
     {
         CBaseAudioProcessingObject::UnlockForProcess();
+        CloseStageMonitor();
         CloseStageCapture();
         CloseRuntimeSettings();
         m_chain.Clear();
@@ -394,6 +398,7 @@ STDMETHODIMP BetterMicroApo::UnlockForProcess()
 {
     const HRESULT hr = CBaseAudioProcessingObject::UnlockForProcess();
 
+    CloseStageMonitor();
     CloseStageCapture();
     CloseRuntimeSettings();
     m_chain.Clear();
@@ -456,13 +461,15 @@ STDMETHODIMP_(void) BetterMicroApo::APOProcess(
 
     if (input->u32BufferFlags == BUFFER_SILENT)
     {
+        m_monitor.BeginBuffer();
+
         // A stage with lookahead buffers audio, so run the silent buffer
         // through the chain to flush its tail instead of replaying stale audio
         // when sound resumes.
         if (destination != nullptr && m_chain.NeedsSilence())
         {
             m_chain.ProcessSilence(destination, input->u32ValidFrameCount,
-                                   m_scratch.data());
+                                   m_scratch.data(), &m_monitor);
             output->u32BufferFlags = BUFFER_VALID;
         }
         else
@@ -479,6 +486,10 @@ STDMETHODIMP_(void) BetterMicroApo::APOProcess(
                                m_formatInfo.bytesPerSample);
             }
         }
+
+        // Slots not observed by this buffer are cleared, so meters fall back
+        // to zero during silence instead of holding their last value.
+        m_monitor.EndBuffer();
         return;
     }
 
@@ -489,7 +500,9 @@ STDMETHODIMP_(void) BetterMicroApo::APOProcess(
         return;
     }
 
-    ProcessBuffer(source, destination, input->u32ValidFrameCount);
+    m_monitor.BeginBuffer();
+    ProcessBuffer(source, destination, input->u32ValidFrameCount, &m_monitor);
+    m_monitor.EndBuffer();
 
     output->u32BufferFlags = BUFFER_VALID;
 }
@@ -506,9 +519,11 @@ void BetterMicroApo::ConfigureDsp()
     m_chain.Reset();
 }
 
-void BetterMicroApo::ProcessBuffer(const BYTE* source, BYTE* destination, UINT32 frames)
+void BetterMicroApo::ProcessBuffer(const BYTE* source, BYTE* destination,
+                                   UINT32 frames,
+                                   apo::StageMonitorSink* monitor)
 {
-    m_chain.Process(source, destination, frames, m_scratch.data());
+    m_chain.Process(source, destination, frames, m_scratch.data(), monitor);
 }
 
 void BetterMicroApo::OpenRuntimeSettings()
@@ -657,6 +672,24 @@ void BetterMicroApo::CloseStageCapture()
     m_captureView.Close();
 }
 
+void BetterMicroApo::OpenStageMonitor()
+{
+    if (m_endpointId.empty())
+    {
+        return;
+    }
+    if (!m_monitor.Open(m_endpointId, m_formatInfo.sampleRate))
+    {
+        Log(L"Could not open the stage monitor channel for %s",
+            m_endpointId.c_str());
+    }
+}
+
+void BetterMicroApo::CloseStageMonitor()
+{
+    m_monitor.Close();
+}
+
 bool BetterMicroApo::FindCaptureTarget(int presetIndex, int effectId,
                                        size_t& chainIndex, int& fftSize) const
 {
@@ -704,7 +737,11 @@ void BetterMicroApo::RebuildChain()
             index = m_captureChainIndex;
         }
         m_captureChainIndex = index;
-        m_chain.Insert(index, &m_captureTap);
+        // The tap has no persistent effect identity; an explicit sentinel keeps
+        // it from being mistaken for a real effect by the monitor lookup.
+        m_chain.Insert(index, &m_captureTap,
+                       apo::StageMonitorBinding{-1, apo::EffectType::Count,
+                                                false});
     }
 }
 

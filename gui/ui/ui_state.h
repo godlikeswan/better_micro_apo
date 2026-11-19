@@ -46,6 +46,8 @@ enum : int {
     IDC_DYN_LOOKAHEAD_LABEL,
     IDC_DYN_LOOKAHEAD_SLIDER,
     IDC_DYN_LOOKAHEAD_ICON,
+    IDC_INPUT_GAIN_LABEL,
+    IDC_INPUT_GAIN_SLIDER,
     IDC_GAIN_LABEL,
     IDC_GAIN_SLIDER,
     IDC_EQ_EXTEND,
@@ -59,6 +61,8 @@ enum : int {
     IDC_EQ_RATIO_SLIDER,
     IDC_EQ_RANGE_LABEL,
     IDC_EQ_RANGE_SLIDER,
+    IDC_EQ_LEVEL_LABEL,
+    IDC_EQ_LEVEL_SLIDER,
     IDC_EQ_ATTACK_LABEL,
     IDC_EQ_ATTACK_SLIDER,
     IDC_EQ_RELEASE_LABEL,
@@ -115,6 +119,7 @@ enum ParamReset : int {
     ParamResetDynamicsHold,
     ParamResetDynamicsOutput,
     ParamResetDynamicsLookahead,
+    ParamResetInputGain,
     ParamResetGain,
     ParamResetDynExpand,
     ParamResetDynFrequency,
@@ -122,6 +127,7 @@ enum ParamReset : int {
     ParamResetDynThreshold,
     ParamResetDynRatio,
     ParamResetDynRange,
+    ParamResetDynLevel,
     ParamResetDynAttack,
     ParamResetDynRelease,
     ParamResetReverbAlgorithm,
@@ -194,6 +200,8 @@ extern HWND g_dynamicsOutputSlider;
 extern HWND g_dynamicsLookaheadLabel;
 extern HWND g_dynamicsLookaheadSlider;
 extern HWND g_dynamicsLookaheadIcon;
+extern HWND g_inputGainLabel;
+extern HWND g_inputGainSlider;
 extern HWND g_gainLabel;
 extern HWND g_gainSlider;
 extern HWND g_eqExtend;
@@ -207,6 +215,8 @@ extern HWND g_eqRatioLabel;
 extern HWND g_eqRatioSlider;
 extern HWND g_eqRangeLabel;
 extern HWND g_eqRangeSlider;
+extern HWND g_eqLevelLabel;
+extern HWND g_eqLevelSlider;
 extern HWND g_eqAttackLabel;
 extern HWND g_eqAttackSlider;
 extern HWND g_eqReleaseLabel;

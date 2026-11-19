@@ -12,8 +12,10 @@ the threshold, ratio, timing, input/output trim, and lookahead controls.
   steady hiss or hum.
 - Start in **Compressor/Limiter** mode with the default **−15 dBFS** threshold
   and **5:1** ratio. Talk normally; the transfer-curve graph shows where the
-  gain starts changing. Raise the threshold if every word is squashed, or lower
-  it if only the loudest peaks are affected.
+  gain starts changing, the **ENG** bar on its left shows how hard the dynamics
+  are working, and the **OUT** meter on the right shows the output level. Raise
+  the threshold if every word is squashed, or lower it if only the loudest peaks
+  are affected.
 - Set **Ratio** higher for a firmer ceiling or gate. The slider runs from
   **0.01** to **∞**: the last finite position is 1000, and the right edge snaps
   to infinity (shown as `∞`, stored as `inf`). In Compressor/Limiter mode,
@@ -85,3 +87,6 @@ the threshold, ratio, timing, input/output trim, and lookahead controls.
 - `Process` and `Update` are allocation-free. The graph calls
   `DynamicsTransferDb` from the same transfer header and includes the input and
   output trim, so it matches the audio path in either mode.
+- `MonitorValue()` reports `min(|gainDb| / 24, 1)`, so gain reduction and gate
+  closure both light the **ENG** bar. The APO publishes that value together with
+  output peak/RMS to `.monitor`; the GUI smooths it on a 100 ms poll.

@@ -304,15 +304,17 @@ std::vector<double> AverageMagnitudeSpectrum(const float* samples,
     return sum;
 }
 
-void Chain::Add(Stage* stage)
+void Chain::Add(Stage* stage, const StageMonitorBinding& binding)
 {
     if (stage != nullptr && m_stages.size() < m_stages.capacity())
     {
         m_stages.push_back(stage);
+        m_bindings[m_stages.size() - 1] = binding;
     }
 }
 
-void Chain::Insert(size_t index, Stage* stage)
+void Chain::Insert(size_t index, Stage* stage,
+                   const StageMonitorBinding& binding)
 {
     if (stage == nullptr || m_stages.size() >= m_stages.capacity())
     {
@@ -322,11 +324,20 @@ void Chain::Insert(size_t index, Stage* stage)
     index = std::min(index, m_stages.size());
     m_stages.insert(m_stages.begin() + static_cast<std::ptrdiff_t>(index),
                     stage);
+    for (size_t i = m_stages.size() - 1; i > index; --i)
+    {
+        m_bindings[i] = m_bindings[i - 1];
+    }
+    m_bindings[index] = binding;
 }
 
 void Chain::Clear()
 {
     m_stages.clear();
+    for (auto& binding : m_bindings)
+    {
+        binding = StageMonitorBinding{};
+    }
 }
 
 void Chain::Reset()
@@ -349,8 +360,27 @@ bool Chain::NeedsSilence() const
     return false;
 }
 
+void Chain::Measure(const double* samples, UINT32 frames, UINT32 channels,
+                    double& peak, double& rms)
+{
+    const size_t count = static_cast<size_t>(frames) * channels;
+    double sumSquares = 0.0;
+    peak = 0.0;
+    for (size_t i = 0; i < count; ++i)
+    {
+        const double value = samples[i];
+        const double magnitude = std::fabs(value);
+        if (magnitude > peak)
+        {
+            peak = magnitude;
+        }
+        sumSquares += value * value;
+    }
+    rms = (count == 0) ? 0.0 : std::sqrt(sumSquares / static_cast<double>(count));
+}
+
 void Chain::Process(const BYTE* source, BYTE* destination, UINT32 frames,
-                    double* scratch) const
+                    double* scratch, StageMonitorSink* monitor) const
 {
     if (m_format.sample == SampleFormat::Unknown || m_format.channels == 0)
     {
@@ -378,9 +408,29 @@ void Chain::Process(const BYTE* source, BYTE* destination, UINT32 frames,
         scratch[i] = DecodeSample(m_format.sample, source, i);
     }
 
-    for (auto& stage : m_stages)
+    for (size_t index = 0; index < m_stages.size(); ++index)
     {
+        Stage* stage = m_stages[index];
+        if (monitor == nullptr)
+        {
+            stage->Process(scratch, frames, m_format.channels);
+            continue;
+        }
+
+        double inputPeak = 0.0;
+        double inputRms = 0.0;
+        double outputPeak = 0.0;
+        double outputRms = 0.0;
+        Measure(scratch, frames, m_format.channels, inputPeak, inputRms);
         stage->Process(scratch, frames, m_format.channels);
+        Measure(scratch, frames, m_format.channels, outputPeak, outputRms);
+        monitor->ObserveStage(index, m_bindings[index], scratch, frames,
+                              m_format.channels,
+                              static_cast<float>(inputPeak),
+                              static_cast<float>(inputRms),
+                              static_cast<float>(outputPeak),
+                              static_cast<float>(outputRms),
+                              static_cast<float>(stage->MonitorValue()));
     }
 
     for (size_t i = 0; i < count; ++i)
@@ -389,8 +439,8 @@ void Chain::Process(const BYTE* source, BYTE* destination, UINT32 frames,
     }
 }
 
-void Chain::ProcessSilence(BYTE* destination, UINT32 frames,
-                           double* scratch) const
+void Chain::ProcessSilence(BYTE* destination, UINT32 frames, double* scratch,
+                           StageMonitorSink* monitor) const
 {
     if (destination == nullptr ||
         m_format.sample == SampleFormat::Unknown || m_format.channels == 0)
@@ -413,9 +463,29 @@ void Chain::ProcessSilence(BYTE* destination, UINT32 frames,
     // Run zeros through the stages so buffered stages (such as a gate with
     // lookahead) flush their tail instead of replaying stale audio later.
     std::fill(scratch, scratch + count, 0.0);
-    for (auto& stage : m_stages)
+    for (size_t index = 0; index < m_stages.size(); ++index)
     {
+        Stage* stage = m_stages[index];
+        if (monitor == nullptr)
+        {
+            stage->Process(scratch, frames, m_format.channels);
+            continue;
+        }
+
+        double inputPeak = 0.0;
+        double inputRms = 0.0;
+        double outputPeak = 0.0;
+        double outputRms = 0.0;
+        Measure(scratch, frames, m_format.channels, inputPeak, inputRms);
         stage->Process(scratch, frames, m_format.channels);
+        Measure(scratch, frames, m_format.channels, outputPeak, outputRms);
+        monitor->ObserveStage(index, m_bindings[index], scratch, frames,
+                              m_format.channels,
+                              static_cast<float>(inputPeak),
+                              static_cast<float>(inputRms),
+                              static_cast<float>(outputPeak),
+                              static_cast<float>(outputRms),
+                              static_cast<float>(stage->MonitorValue()));
     }
 
     for (size_t i = 0; i < count; ++i)

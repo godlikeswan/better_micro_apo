@@ -31,13 +31,16 @@ APO" and the APO flags used by the base class.
 - Supported formats: float32, PCM16, PCM24, PCM32. The container size must
   equal the valid-bit size. 24-valid-bits-in-a-32-bit-container is not
   supported.
-- The DSP is an ordered list of `apo::dsp::Stage` objects. `StagePool`
-  preallocates stages, `Update` binds each enabled effect by its stable id, and
-  `Chain` runs them in list order. The same effect type may appear more than
-  once.
+- The DSP is an ordered list of `apo::dsp::Stage` objects. Every preset starts
+  with an always-enabled Input stage backed by `GainStage`; the remaining
+  addable effects follow. `StagePool` preallocates stages, `Update` binds each
+  enabled effect by its stable id, and `Chain` runs them in list order. The same
+  addable effect type may appear more than once.
 - Each device has four presets; only the selected one is processed.
 - `APOProcess` does no file I/O, no allocation, no locks, and no logging.
   Settings published by the GUI are picked up by polling a mapped file.
+  Per-stage peak/RMS/engagement and spectra are written into a separate mapped
+  `.monitor` file; the GUI reads it without changing settings or audio state.
 
 See [APO operation](operation.md) for the call sequence and allocations, and
 the [list of effects](../effects/index.md) for each stage.
@@ -50,6 +53,7 @@ the [list of effects](../effects/index.md) for each stage.
 | `C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.ini` | Per-device settings and presets. |
 | `C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.noise` | Captured room-noise profile with precomputed magnitude bins. |
 | `C:\ProgramData\better_micro_apo\runtime\{endpoint-guid}.dat` | Live settings snapshot shared with the GUI. |
+| `C:\ProgramData\better_micro_apo\runtime\{endpoint-guid}.monitor` | APO-written stage telemetry read by the GUI for live graphs and meters. |
 | `C:\ProgramData\better_micro_apo\backup\FxProperties-{endpoint}.reg` | Canonical registry backup for a device. |
 | `C:\ProgramData\better_micro_apo\better_micro_apo.log` | Setup-path log (never written from `APOProcess`). |
 | `C:\ProgramData\better_micro_apo\gui.ini` | GUI preferences `show_all_devices` and `last_device`. |

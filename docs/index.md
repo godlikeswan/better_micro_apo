@@ -11,7 +11,7 @@ the channel they share at runtime.
 - [GUI overview](gui/overview.md) — window lifecycle, events, background work,
   and module responsibilities.
 - [List of effects](effects/index.md) — what each effect does, its controls,
-  and implementation notes.
+  and implementation notes, including the fixed Input row.
 
 ## APO
 

@@ -23,7 +23,8 @@ Two window classes are registered:
 `WM_CREATE` creates the fonts, loads `show_all_devices` and `last_device`, builds
 the menu, calls `CreateControls`, applies native theming to children, sets up the
 list's state images, refreshes state with the remembered device as the preferred
-selection, repaints, and starts the 1200 ms refresh timer.
+selection, repaints, and starts the 1200 ms refresh timer plus the 100 ms
+stage-monitor poll timer.
 
 ## Message handling
 
@@ -36,7 +37,7 @@ messages and `HandleNotify` handles list-view notifications.
 | `WM_SIZE` | `ui::Layout` for the new client size, then `RepaintAll`. |
 | `WM_COMMAND` | Menu and control commands (install, uninstall, enable, presets, effects, listen, dialogs). |
 | `WM_NOTIFY` | `HandleNotify`: effect-list state, `NM_CLICK` on the `×` column, slider changes. |
-| `WM_TIMER` | Four timers, listed below. |
+| `WM_TIMER` | Five timers, listed below. |
 | `WM_DEVICECHANGE` | Debounce into the device-change timer (device notifications arrive in bursts). |
 | `WM_SETTINGCHANGE` / `WM_THEMECHANGED` | Rebuild theme palette, menu, list glyphs, title bar, info icons; repaint. |
 | `WM_NCPAINT` / `WM_NCACTIVATE` | Repaint the menu divider that Windows paints with an inactive color. |
@@ -53,6 +54,7 @@ Timer ids and intervals (`gui/main.cpp`):
 | 2 | `kLiveApplyTimer` | 200 ms | Debounced settings-only apply. |
 | 3 | `kRefreshTimer` | 1200 ms | Poll for external install/device changes. |
 | 4 | `kDeviceChangeTimer` | 200 ms | Debounced device-change re-check. |
+| 5 | `kStageMonitorTimer` | 100 ms | Read the selected effect's `.monitor` slot and update its live graph and meters. |
 
 `CheckForExternalChanges` compares a `StateSignature` of install status and
 endpoint id/name/state/binding flags. Per-device settings are deliberately
@@ -71,7 +73,9 @@ handler, so the effect list stays visible but read-only during work.
 
 Listening is stopped only when an operation actually restarts audio. The GUI
 remembers the endpoint and restarts the monitor afterwards. Settings-only
-applies and noise-profile captures leave it running.
+applies and noise-profile captures leave it running. Stage-monitor polling is
+read-only and follows the selected endpoint; it closes the view when no enabled
+effect is selected and never touches the Listen stream.
 
 ## Module ownership
 
@@ -81,6 +85,7 @@ applies and noise-profile captures leave it running.
 | Install, registry, binding, backup, isolation | `gui/apo_ops.cpp`, `gui/apo.h`, `gui/apo_internal.h` |
 | Endpoint enumeration and file status | `gui/apo_status.cpp` |
 | Listen monitor | `gui/apo_monitor.cpp/.h` |
+| APO stage telemetry writer and read-only view | `src/stage_monitor.cpp/.h` |
 | Noise capture request/result channel and tap | `src/stage_capture.cpp/.h` |
 | `show_all_devices` and `last_device` preferences | `gui/preferences.cpp/.h` |
 | Control ids and shared HWNDs | `gui/ui/ui_state.*` |

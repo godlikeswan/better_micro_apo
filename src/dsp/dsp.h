@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "apo_settings.h"
+#include "stage_monitor.h"
 #include "transfer.h"
 
 // Format conversion and the stage/chain framework used by the APO. Keeping
@@ -105,6 +106,10 @@ public:
     // be run for silent input buffers to flush the buffered tail.
     virtual bool NeedsSilence() const { return false; }
 
+    // Optional 0..1 value for a stage-specific engagement display. Dynamics
+    // reports its current gain change; other stages leave it at zero.
+    virtual double MonitorValue() const { return 0.0; }
+
     // Processes `frames` frames in place. `samples` holds
     // frames * channels interleaved values in [-1, 1]. Real-time safe.
     virtual void Process(double* samples, UINT32 frames, UINT32 channels) = 0;
@@ -116,26 +121,43 @@ public:
 class Chain
 {
 public:
-    Chain() { m_stages.reserve(kMaxEffects + 1); }
+    Chain() { m_stages.reserve(kMaxEffects + 2); }
 
-    void Add(Stage* stage);
+    void Add(Stage* stage,
+             const StageMonitorBinding& binding = StageMonitorBinding{});
     // Inserts at `index`, clamped to the current end. Used by the temporary
     // stage-local capture tap; the extra slot is reserved up front.
-    void Insert(size_t index, Stage* stage);
+    void Insert(size_t index, Stage* stage,
+                const StageMonitorBinding& binding = StageMonitorBinding{});
     void Clear();
     void SetFormat(const AudioFormat& format) { m_format = format; }
     void Reset();
     bool NeedsSilence() const;
     void Process(const BYTE* source, BYTE* destination, UINT32 frames,
-                 double* scratch) const;
-    void ProcessSilence(BYTE* destination, UINT32 frames,
-                        double* scratch) const;
+                 double* scratch, StageMonitorSink* monitor = nullptr) const;
+    void ProcessSilence(BYTE* destination, UINT32 frames, double* scratch,
+                        StageMonitorSink* monitor = nullptr) const;
 
     bool Empty() const { return m_stages.empty(); }
 
+    const StageMonitorBinding& MonitorBinding(size_t index) const
+    {
+        return m_bindings[index];
+    }
+    void SetMonitorBinding(size_t index, const StageMonitorBinding& binding)
+    {
+        if (index < m_stages.size()) {
+            m_bindings[index] = binding;
+        }
+    }
+
 private:
+    static void Measure(const double* samples, UINT32 frames, UINT32 channels,
+                        double& peak, double& rms);
+
     AudioFormat m_format;
     std::vector<Stage*> m_stages;
+    StageMonitorBinding m_bindings[kMaxEffects + 2];
 };
 
 } // namespace apo::dsp

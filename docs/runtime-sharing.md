@@ -3,9 +3,10 @@
 The GUI and the APO are separate processes. They share per-device settings
 through a file-backed memory mapping so effect edits can be applied to a
 running stream without restarting audio. Noise profile capture uses a second
-mapping for the request/result handshake. Source: `src/runtime_settings.*`,
-`src/stage_capture.*`, `src/apo_settings.cpp`, `src/better_micro_apo.cpp`,
-`gui/apo_ops.cpp`, and `gui/main.cpp`.
+mapping for the request/result handshake, and a third mapping carries APO→GUI
+stage telemetry for the live graphs and meters. Source: `src/runtime_settings.*`,
+`src/stage_capture.*`, `src/stage_monitor.*`, `src/apo_settings.cpp`,
+`src/better_micro_apo.cpp`, `gui/apo_ops.cpp`, and `gui/main.cpp`.
 
 ## Files per endpoint
 
@@ -18,6 +19,7 @@ filename-safe with `apo::SafeEndpointId`.
 | `C:\ProgramData\better_micro_apo\devices\{id}.noise` | GUI | APO at `LockForProcess` and after a live capture | Durable noise profile, with precomputed magnitude bins. |
 | `C:\ProgramData\better_micro_apo\runtime\{id}.dat` | GUI | APO while streaming | Live settings snapshot. |
 | `C:\ProgramData\better_micro_apo\runtime\{id}.capture` | Both | Both while streaming | One-shot stage capture control block. |
+| `C:\ProgramData\better_micro_apo\runtime\{id}.monitor` | APO | GUI while streaming | Continuous per-stage levels, engagement, and spectra. |
 | `C:\ProgramData\better_micro_apo\gui.ini` | GUI | GUI | `show_all_devices` and `last_device` preferences; not used by the APO. |
 
 ## Runtime snapshot layout
@@ -28,7 +30,7 @@ filename-safe with `apo::SafeEndpointId`.
 | --- | --- | --- |
 | `sequence` | `volatile uint32_t` | Seqlock: odd while writing, even when complete. |
 | `magic` | `uint32_t` | `0x50414D42` (`"BMAP"`). |
-| `version` | `uint32_t` | `9`; bump whenever `ApoSettings` changes layout. |
+| `version` | `uint32_t` | `10`; bump whenever `ApoSettings` changes layout. |
 | `structSize` | `uint32_t` | Size of the full structure. |
 | `generation` | `volatile uint64_t` | Incremented on each published snapshot; this is what the APO polls. |
 | `settings` | `ApoSettings` | The complete settings blob, copied by value. |
@@ -99,7 +101,7 @@ new snapshot is applied exactly once.
 `devices\{id}.ini` has a single `[dsp]` section:
 
 ```
-version=7
+version=8
 preset_count=4
 preset_index=0
 isolate_effects=1
@@ -115,24 +117,61 @@ preset_0_effect_0_noise_fft_size=512
 
 Each preset stores `effect_count`, `next_effect_id`, and one block per entry
 with `id`, `type`, `enabled`, and the type's parameter keys. Effect types are
-`gain`, `noise`, `dynamics`, `equalizer`, `mono`, `saturation`, and `reverb`;
-parameter keys include `dynamics_threshold_db`, `dynamics_ratio`,
-`dynamics_hold_ms`, `equalizer_frequency_hz`, `saturation_function`,
+`input`, `gain`, `noise`, `dynamics`, `equalizer`, `mono`, `saturation`, and
+`reverb`; parameter keys include `gain_db` (also used by Input),
+`dynamics_threshold_db`, `dynamics_ratio`, `dynamics_hold_ms`,
+`equalizer_frequency_hz`, `equalizer_level_db`, `saturation_function`,
 `reverb_algorithm`, `reverb_level`, `reverb_max_length_ms`, and
-`reverb_predelay_ms`.
+`reverb_predelay_ms`. Every preset has an Input row at index 0; it is forced on
+and clamped to −24…+24 dB.
 The `id` is the stable instance id the stage pool uses to tell whether a slot
 now holds a different effect. Four presets are always written; only
 `preset_index` is processed.
 
 `LoadSettings` starts with defaults. If `[dsp] version` is missing or is not
-**7**, it deletes the INI file and returns the defaults; there is no migration
+**8**, it deletes the INI file and returns the defaults; there is no migration
 path for old settings. For a current file, `ClampSettings` repairs invalid
 values: non-finite numbers fall back to defaults (except `dynamics_ratio`,
 where positive infinity is valid and is written as `inf`), every numeric field
 is clamped to its safe range (Noise reduction to 0–50 dB, unsupported
-`noise_fft_size` values fall back to 512), and effect ids are normalized to
-unique positive values. `isolate_effects` is forced to `1` on every
-load/save/publish and is not a user option.
+`noise_fft_size` values fall back to 512), Input is inserted/repaired at row 0,
+and effect ids are normalized to unique positive values. `isolate_effects` is
+forced to `1` on every load/save/publish and is not a user option.
+
+## Stage monitor channel
+
+`StageMonitorFile` (`src/stage_monitor.h`, magic `0x544F4D42` / `"BMOT"`,
+version 4) lives in `runtime\{id}.monitor`. It has a fixed header and one
+`StageMonitorSlot` per possible chain position (`kMaxEffects + 2`: the normal
+effect slots, the temporary capture tap, and one padding slot). Each slot has
+its own seqlock and carries
+the bound effect id/type, observed flag, input/output peak and RMS, two
+cross-buffer output peak holds, a stage-specific engagement value, and 128
+spectrum bins from a shared 256-point FFT. Spectra are published only for Input
+and Equalizer. All values are `float` except the 32-bit control fields, so the
+mapping has a stable cross-process layout.
+
+Both peak holds are accumulated in the APO on every buffer rather than sampled
+only when the GUI polls. Their decay is measured in audio time (0.06 s and
+0.6 s half-lives), so a transient between two 100 ms GUI polls reaches both the
+meter fill and the peak line. The shorter hold drives the fill and falls back
+sooner; the longer one remains as the line. The GUI colours the line from the
+bar zone it sits in, so the line and the bar always agree.
+
+The APO opens the file read/write in `LockForProcess`, closes it in
+`UnlockForProcess`/`FinalRelease`, and is the only writer. `BeginBuffer`,
+`ObserveStage` and `EndBuffer` run from `APOProcess` without allocation, locks,
+logging, or file I/O. Slots not observed in a buffer are cleared so silence does
+not leave stale meters; `Close` publishes one final all-empty generation. The
+temporary capture tap uses an explicit sentinel binding so it can never be
+mistaken for an effect by the GUI.
+
+The GUI keeps one read-only `StageMonitorView` open for the selected endpoint
+and polls it from timer id 5 (100 ms). It looks slots up by the stable effect id
+and type, then passes the snapshot to `ui::SetGraphMonitor`; missing or stale
+telemetry calls `ui::ClearGraphMonitor` instead. Polling never writes settings,
+touches bindings, or stops Listen. This channel is independent of the bottom
+Peak/RMS meter, which comes from the WASAPI Listen stream.
 
 ## Noise profile format
 

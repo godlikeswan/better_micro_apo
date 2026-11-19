@@ -97,6 +97,10 @@ LRESULT CALLBACK DialogProc(HWND window, UINT message, WPARAM wParam,
         int selected = -1;
         for (int i = 0; i < static_cast<int>(apo::EffectType::Count); ++i) {
             const auto type = static_cast<apo::EffectType>(i);
+            // Input is structural and already present at row 0.
+            if (type == apo::EffectType::Input) {
+                continue;
+            }
             if (created->settings != nullptr &&
                 CountType(*created->settings, type) >=
                     apo::EffectTypeCapacity(type)) {

@@ -207,6 +207,7 @@ const wchar_t* EffectTypeName(EffectType type)
 {
     switch (type)
     {
+    case EffectType::Input:      return L"Input";
     case EffectType::Gain:       return L"Gain";
     case EffectType::Noise:      return L"Noise reduction";
     case EffectType::Dynamics:   return L"Gate/Compressor/Limiter/Expander";
@@ -257,6 +258,7 @@ const char* EffectTypeKey(EffectType type)
 {
     switch (type)
     {
+    case EffectType::Input:      return "input";
     case EffectType::Gain:       return "gain";
     case EffectType::Noise:      return "noise";
     case EffectType::Dynamics:   return "dynamics";
@@ -286,6 +288,8 @@ int EffectTypeCapacity(EffectType type)
 {
     switch (type)
     {
+    case EffectType::Input:
+        return 1;
     case EffectType::Noise:
     case EffectType::Dynamics:
     case EffectType::Reverb:
@@ -299,6 +303,7 @@ bool EffectEnabled(const EffectInstance& effect)
 {
     switch (effect.type)
     {
+    case EffectType::Input:      return true;
     case EffectType::Gain:       return effect.gain.enabled;
     case EffectType::Noise:      return effect.noise.enabled;
     case EffectType::Dynamics:   return effect.dynamics.enabled;
@@ -314,6 +319,7 @@ void SetEffectEnabled(EffectInstance& effect, bool enabled)
 {
     switch (effect.type)
     {
+    case EffectType::Input:      effect.gain.enabled = true; break;
     case EffectType::Gain:       effect.gain.enabled = enabled; break;
     case EffectType::Noise:      effect.noise.enabled = enabled; break;
     case EffectType::Dynamics:   effect.dynamics.enabled = enabled; break;
@@ -330,6 +336,9 @@ EffectInstance MakeEffect(EffectType type, int id)
     EffectInstance effect;
     effect.id = id;
     effect.type = type;
+    if (type == EffectType::Input) {
+        effect.gain.gainDb = kInputDefaultGainDb;
+    }
     SetEffectEnabled(effect, true);
     return effect;
 }
@@ -394,6 +403,12 @@ void ClampEffect(EffectInstance& effect)
 {
     switch (effect.type)
     {
+    case EffectType::Input:
+        ClampFinite(effect.gain.gainDb, kInputDefaultGainDb,
+                    kInputMinGainDb, kInputMaxGainDb);
+        SetEffectEnabled(effect, true);
+        break;
+
     case EffectType::Gain:
         ClampFinite(effect.gain.gainDb, 12.0, -24.0, 50.0);
         break;
@@ -420,11 +435,14 @@ void ClampEffect(EffectInstance& effect)
         break;
 
     case EffectType::Equalizer:
-        ClampFinite(effect.equalizer.frequencyHz, 120.0, 20.0, 2000.0);
-        ClampFinite(effect.equalizer.q, 0.7, 0.1, 10.0);
+        ClampFinite(effect.equalizer.frequencyHz, 120.0,
+                    kEqMinFrequencyHz, kEqMaxFrequencyHz);
+        ClampFinite(effect.equalizer.q, 0.7, kEqMinQ, kEqMaxQ);
         ClampFinite(effect.equalizer.thresholdDb, -45.0, -80.0, 0.0);
         ClampFinite(effect.equalizer.ratio, 4.0, 1.0, 20.0);
         ClampFinite(effect.equalizer.rangeDb, 18.0, 0.0, 36.0);
+        ClampFinite(effect.equalizer.levelDb, 0.0, kEqMinLevelDb,
+                    kEqMaxLevelDb);
         ClampFinite(effect.equalizer.attackMs, 10.0, 0.1, 1000.0);
         ClampFinite(effect.equalizer.releaseMs, 150.0, 1.0, 5000.0);
         break;
@@ -475,6 +493,25 @@ void ClampSettings(ApoSettings& settings)
         preset.effectCount =
             static_cast<int>(Clamp(preset.effectCount, 0, kMaxEffects));
 
+        // Input is structural: every preset has exactly one, at row 0. Older
+        // or hand-edited snapshots are repaired here rather than migrated.
+        if (preset.effectCount == 0) {
+            preset.effects[0] = MakeEffect(EffectType::Input, 0);
+            preset.effectCount = 1;
+        } else if (preset.effects[0].type != EffectType::Input) {
+            if (preset.effectCount < kMaxEffects) {
+                for (int i = preset.effectCount; i > 0; --i) {
+                    preset.effects[i] = preset.effects[i - 1];
+                }
+                ++preset.effectCount;
+            } else {
+                for (int i = kMaxEffects - 1; i > 0; --i) {
+                    preset.effects[i] = preset.effects[i - 1];
+                }
+            }
+            preset.effects[0] = MakeEffect(EffectType::Input, 0);
+        }
+
         for (int i = 0; i < preset.effectCount; ++i) {
             if (static_cast<int>(preset.effects[i].type) < 0 ||
                 preset.effects[i].type >= EffectType::Count) {
@@ -482,6 +519,7 @@ void ClampSettings(ApoSettings& settings)
             }
             ClampEffect(preset.effects[i]);
         }
+        SetEffectEnabled(preset.effects[0], true);
 
         // Give every instance a unique positive id inside this preset. This
         // also repairs hand-edited files without changing well-formed ids.
@@ -576,6 +614,7 @@ void LoadEffectFields(const std::vector<KeyValue>& entries,
 
     switch (effect.type)
     {
+    case EffectType::Input:
     case EffectType::Gain:
         getDouble(L"gain_db", effect.gain.gainDb);
         break;
@@ -607,6 +646,7 @@ void LoadEffectFields(const std::vector<KeyValue>& entries,
         getDouble(L"equalizer_threshold_db", effect.equalizer.thresholdDb);
         getDouble(L"equalizer_ratio", effect.equalizer.ratio);
         getDouble(L"equalizer_range_db", effect.equalizer.rangeDb);
+        getDouble(L"equalizer_level_db", effect.equalizer.levelDb);
         getDouble(L"equalizer_attack_ms", effect.equalizer.attackMs);
         getDouble(L"equalizer_release_ms", effect.equalizer.releaseMs);
         break;
@@ -645,6 +685,8 @@ void LoadEffectFields(const std::vector<KeyValue>& entries,
 bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
 {
     settings = ApoSettings{};
+    // Even when there is no durable file, expose the structural Input row.
+    ClampSettings(settings);
 
     std::string data;
     if (!ReadFileText(SettingsPath(endpointId), data)) {
@@ -694,6 +736,7 @@ bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
         version != kSettingsVersion)
     {
         DeleteFileW(SettingsPath(endpointId).c_str());
+        ClampSettings(settings);
         return false;
     }
 
@@ -783,6 +826,7 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
 
             switch (effect.type)
             {
+            case EffectType::Input:
             case EffectType::Gain:
                 text += prefix + "gain_db=" +
                         FormatDouble(effect.gain.gainDb) + "\n";
@@ -830,6 +874,8 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
                         FormatDouble(effect.equalizer.ratio) + "\n";
                 text += prefix + "equalizer_range_db=" +
                         FormatDouble(effect.equalizer.rangeDb) + "\n";
+                text += prefix + "equalizer_level_db=" +
+                        FormatDouble(effect.equalizer.levelDb) + "\n";
                 text += prefix + "equalizer_attack_ms=" +
                         FormatDouble(effect.equalizer.attackMs) + "\n";
                 text += prefix + "equalizer_release_ms=" +

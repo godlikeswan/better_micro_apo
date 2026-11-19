@@ -5,6 +5,7 @@
 #include "preferences.h"
 #include "runtime_settings.h"
 #include "stage_capture.h"
+#include "stage_monitor.h"
 
 #include "ui/effect_dialog.h"
 #include "ui/graph.h"
@@ -50,8 +51,10 @@ constexpr UINT_PTR kMonitorTimer = 1;
 constexpr UINT_PTR kLiveApplyTimer = 2;
 constexpr UINT_PTR kRefreshTimer = 3;
 constexpr UINT_PTR kDeviceChangeTimer = 4;
+constexpr UINT_PTR kStageMonitorTimer = 5;
 constexpr UINT kLiveApplyDelayMs = 200;
 constexpr UINT kRefreshPollMs = 1200;
+constexpr UINT kStageMonitorPollMs = 100;
 constexpr UINT kDeviceChangeDebounceMs = 200;
 constexpr DWORD kMeterWindowMs = 500;
 
@@ -83,6 +86,7 @@ bool g_showAllDevices = false;
 
 std::vector<apo::Endpoint> g_endpoints;
 apo::FilesStatus g_files;
+apo::StageMonitorView g_stageMonitor;
 std::thread g_worker;
 apo::Result g_result;
 
@@ -114,6 +118,7 @@ void RefreshEffectGraph();
 bool ValidEffectIndex();
 void DoEnable(bool enable);
 void UpdateChromeUi();
+void PollStageMonitor();
 
 // Describes the install state and the identity/state/bindings of every capture
 // endpoint. Deliberately excludes per-device settings: those are edited in
@@ -245,6 +250,9 @@ void ShowEffectControls(apo::EffectType type, bool show)
     };
 
     switch (type) {
+    case apo::EffectType::Input:
+        showAll({g_inputGainLabel, g_inputGainSlider});
+        break;
     case apo::EffectType::Noise:
         showAll({g_noiseReductionLabel, g_noiseReductionSlider,
                  g_noiseFftSizeLabel, g_noiseFftSizeCombo, g_noiseCapture,
@@ -265,8 +273,9 @@ void ShowEffectControls(apo::EffectType type, bool show)
         showAll({g_eqExtend, g_eqFrequencyLabel, g_eqFrequencySlider,
                  g_eqQLabel, g_eqQSlider, g_eqThresholdLabel,
                  g_eqThresholdSlider, g_eqRatioLabel, g_eqRatioSlider,
-                 g_eqRangeLabel, g_eqRangeSlider, g_eqAttackLabel,
-                 g_eqAttackSlider, g_eqReleaseLabel, g_eqReleaseSlider});
+                 g_eqRangeLabel, g_eqRangeSlider, g_eqLevelLabel,
+                 g_eqLevelSlider, g_eqAttackLabel, g_eqAttackSlider,
+                 g_eqReleaseLabel, g_eqReleaseSlider});
         break;
     case apo::EffectType::Gain:
         showAll({g_gainLabel, g_gainSlider});
@@ -307,6 +316,7 @@ void EnableEffectControls(bool enabled)
         g_dynamicsHoldLabel, g_dynamicsHoldSlider,
         g_dynamicsOutputLabel, g_dynamicsOutputSlider,
         g_dynamicsLookaheadLabel, g_dynamicsLookaheadSlider,
+        g_inputGainLabel, g_inputGainSlider,
         g_gainLabel, g_gainSlider,
         g_eqExtend,
         g_eqFrequencyLabel, g_eqFrequencySlider,
@@ -314,6 +324,7 @@ void EnableEffectControls(bool enabled)
         g_eqThresholdLabel, g_eqThresholdSlider,
         g_eqRatioLabel, g_eqRatioSlider,
         g_eqRangeLabel, g_eqRangeSlider,
+        g_eqLevelLabel, g_eqLevelSlider,
         g_eqAttackLabel, g_eqAttackSlider,
         g_eqReleaseLabel, g_eqReleaseSlider,
         g_distFunctionLabel, g_distFunctionCombo,
@@ -356,6 +367,7 @@ void ClearEffectEditor()
     SetWindowTextW(g_noiseNote, L"");
     ShowWindow(g_effectGraph, SW_HIDE);
     g_effectLoading = false;
+    ui::ClearGraphMonitor(g_effectGraph);
     RefreshEffectGraph();
     Relayout();
     UpdateParamResetButtons();
@@ -394,10 +406,13 @@ void RebuildEffectList()
             item.pszText =
                 const_cast<wchar_t*>(apo::EffectTypeName(effect.type));
             const int row = ListView_InsertItem(g_effectList, &item);
-            ListView_SetItemText(g_effectList, row, 1,
-                                 const_cast<wchar_t*>(L"\u00D7"));
-            ListView_SetCheckState(g_effectList, row,
-                                   apo::EffectEnabled(effect) ? TRUE : FALSE);
+            // Input is structural: no delete affordance and always checked.
+            ListView_SetItemText(
+                g_effectList, row, 1,
+                const_cast<wchar_t*>(i == 0 ? L"" : L"\u00D7"));
+            ListView_SetCheckState(
+                g_effectList, row,
+                (i == 0 || apo::EffectEnabled(effect)) ? TRUE : FALSE);
         }
     }
 
@@ -423,6 +438,9 @@ void RebuildEffectList()
 void ReadEffectControls(apo::EffectInstance& effect)
 {
     switch (effect.type) {
+    case apo::EffectType::Input:
+        GetSliderValue(g_inputGainSlider, effect.gain.gainDb);
+        break;
     case apo::EffectType::Noise: {
         GetSliderValue(g_noiseReductionSlider, effect.noise.reductionDb);
         const int index = static_cast<int>(
@@ -457,6 +475,7 @@ void ReadEffectControls(apo::EffectInstance& effect)
         GetSliderValue(g_eqThresholdSlider, effect.equalizer.thresholdDb);
         GetSliderValue(g_eqRatioSlider, effect.equalizer.ratio);
         GetSliderValue(g_eqRangeSlider, effect.equalizer.rangeDb);
+        GetSliderValue(g_eqLevelSlider, effect.equalizer.levelDb);
         GetSliderValue(g_eqAttackSlider, effect.equalizer.attackMs);
         GetSliderValue(g_eqReleaseSlider, effect.equalizer.releaseMs);
         effect.equalizer.expand =
@@ -538,6 +557,7 @@ void ShowEffectForSelected()
     g_effectType = effect.type;
 
     g_effectLoading = true;
+    SetSliderValue(g_inputGainSlider, effect.gain.gainDb);
     SetSliderValue(g_noiseReductionSlider, effect.noise.reductionDb);
     SendMessageW(g_noiseFftSizeCombo, CB_SETCURSEL,
                  apo::NoiseFftSizeIndex(effect.noise.fftSize), 0);
@@ -557,6 +577,7 @@ void ShowEffectForSelected()
     SetSliderValue(g_eqThresholdSlider, effect.equalizer.thresholdDb);
     SetSliderValue(g_eqRatioSlider, effect.equalizer.ratio);
     SetSliderValue(g_eqRangeSlider, effect.equalizer.rangeDb);
+    SetSliderValue(g_eqLevelSlider, effect.equalizer.levelDb);
     SetSliderValue(g_eqAttackSlider, effect.equalizer.attackMs);
     SetSliderValue(g_eqReleaseSlider, effect.equalizer.releaseMs);
     SendMessageW(g_reverbAlgorithmCombo, CB_SETCURSEL,
@@ -628,6 +649,9 @@ bool CommitEffectEditor(bool showValues = true)
             apo::ActivePreset(settings).effects[g_effectSelection];
         g_effectLoading = true;
         switch (shown.type) {
+        case apo::EffectType::Input:
+            SetSliderValue(g_inputGainSlider, shown.gain.gainDb);
+            break;
         case apo::EffectType::Noise:
             SetSliderValue(g_noiseReductionSlider, shown.noise.reductionDb);
             break;
@@ -652,6 +676,7 @@ bool CommitEffectEditor(bool showValues = true)
                            shown.equalizer.thresholdDb);
             SetSliderValue(g_eqRatioSlider, shown.equalizer.ratio);
             SetSliderValue(g_eqRangeSlider, shown.equalizer.rangeDb);
+            SetSliderValue(g_eqLevelSlider, shown.equalizer.levelDb);
             SetSliderValue(g_eqAttackSlider, shown.equalizer.attackMs);
             SetSliderValue(g_eqReleaseSlider, shown.equalizer.releaseMs);
             SendMessageW(g_eqExtend, BM_SETCHECK,
@@ -728,6 +753,8 @@ bool ParameterAtDefault(const apo::EffectInstance& effect,
     case ParamResetDynamicsLookahead:
         return SameValue(effect.dynamics.lookaheadMs,
                          defaults.dynamics.lookaheadMs);
+    case ParamResetInputGain:
+        return SameValue(effect.gain.gainDb, defaults.gain.gainDb);
     case ParamResetGain:
         return SameValue(effect.gain.gainDb, defaults.gain.gainDb);
     case ParamResetDynExpand:
@@ -744,6 +771,8 @@ bool ParameterAtDefault(const apo::EffectInstance& effect,
         return SameValue(effect.equalizer.ratio, defaults.equalizer.ratio);
     case ParamResetDynRange:
         return SameValue(effect.equalizer.rangeDb, defaults.equalizer.rangeDb);
+    case ParamResetDynLevel:
+        return SameValue(effect.equalizer.levelDb, defaults.equalizer.levelDb);
     case ParamResetDynAttack:
         return SameValue(effect.equalizer.attackMs,
                          defaults.equalizer.attackMs);
@@ -851,6 +880,9 @@ void ResetParameter(int param)
     case ParamResetDynamicsLookahead:
         effect.dynamics.lookaheadMs = defaults.dynamics.lookaheadMs;
         break;
+    case ParamResetInputGain:
+        effect.gain.gainDb = defaults.gain.gainDb;
+        break;
     case ParamResetGain:
         effect.gain.gainDb = defaults.gain.gainDb;
         break;
@@ -871,6 +903,9 @@ void ResetParameter(int param)
         break;
     case ParamResetDynRange:
         effect.equalizer.rangeDb = defaults.equalizer.rangeDb;
+        break;
+    case ParamResetDynLevel:
+        effect.equalizer.levelDb = defaults.equalizer.levelDb;
         break;
     case ParamResetDynAttack:
         effect.equalizer.attackMs = defaults.equalizer.attackMs;
@@ -952,6 +987,9 @@ void AddEffect(apo::EffectType type)
     if (g_busy || !ValidEffectIndex() || !CommitEffectEditor()) {
         return;
     }
+    if (type == apo::EffectType::Input) {
+        return;
+    }
 
     apo::ApoSettings& settings = g_endpoints[g_effectIndex].settings;
     apo::EffectPreset& preset = apo::ActivePreset(settings);
@@ -962,10 +1000,11 @@ void AddEffect(apo::EffectType type)
 
     // The list order is the processing order. Insert after the highlighted
     // effect, or append when nothing is selected.
-    const int insertAt =
-        g_effectSelection >= 0 && g_effectSelection < preset.effectCount
-            ? g_effectSelection + 1
-            : preset.effectCount;
+    // Input owns row 0, so an inserted effect can never displace it.
+    const int insertAt = std::max(
+        1, g_effectSelection >= 0 && g_effectSelection < preset.effectCount
+               ? g_effectSelection + 1
+               : preset.effectCount);
     for (int i = preset.effectCount; i > insertAt; --i) {
         preset.effects[i] = preset.effects[i - 1];
     }
@@ -989,7 +1028,7 @@ void DeleteEffect(int row)
 
     apo::ApoSettings& settings = g_endpoints[g_effectIndex].settings;
     apo::EffectPreset& preset = apo::ActivePreset(settings);
-    if (row < 0 || row >= preset.effectCount) {
+    if (row <= 0 || row >= preset.effectCount) {
         return;
     }
 
@@ -1163,6 +1202,37 @@ void UpdateMeter()
     if (text != g_meterText) {
         g_meterText = text;
         SetWindowTextW(g_meter, g_meterText.c_str());
+    }
+}
+
+// Reads the APO's per-stage telemetry without touching settings, bindings or
+// the audition stream. The APO is the only writer; if its channel is not ready
+// yet, retry on the next tick and keep the graph cleared.
+void PollStageMonitor()
+{
+    if (g_effectGraph == nullptr) {
+        return;
+    }
+    if (g_busy || !ValidEffectIndex() || !HasEffectSelection() ||
+        !g_endpoints[g_effectIndex].Enabled()) {
+        g_stageMonitor.Close();
+        ui::ClearGraphMonitor(g_effectGraph);
+        return;
+    }
+
+    const apo::Endpoint& endpoint = g_endpoints[g_effectIndex];
+    if (g_stageMonitor.EndpointId() != endpoint.id) {
+        g_stageMonitor.Open(endpoint.id, false);
+    }
+
+    const apo::EffectInstance& effect =
+        apo::ActivePreset(endpoint.settings).effects[g_effectSelection];
+    apo::StageMonitorSnapshot snapshot;
+    if (g_stageMonitor.EndpointId() == endpoint.id &&
+        g_stageMonitor.Find(effect.id, effect.type, snapshot)) {
+        ui::SetGraphMonitor(g_effectGraph, snapshot);
+    } else {
+        ui::ClearGraphMonitor(g_effectGraph);
     }
 }
 
@@ -1738,6 +1808,13 @@ void OnEffectListChanged(const NMLISTVIEW& item)
     // The row index is the effect index: the list mirrors the effect array.
     const bool checkChanged =
         ((item.uOldState ^ item.uNewState) & LVIS_STATEIMAGEMASK) != 0;
+    if (item.iItem == 0 && checkChanged) {
+        // Input is always on. Restore the glyph instead of changing settings.
+        g_effectLoading = true;
+        ListView_SetCheckState(g_effectList, 0, TRUE);
+        g_effectLoading = false;
+        return;
+    }
     if (checkChanged) {
         const bool checked =
             ((item.uNewState & LVIS_STATEIMAGEMASK) >> 12) == 2;
@@ -1839,6 +1916,13 @@ LRESULT HandleNotify(LPARAM lParam)
         case LVN_ITEMCHANGING: {
             auto* item = reinterpret_cast<NMLISTVIEW*>(lParam);
             if (g_busy && (item->uChanged & LVIF_STATE) != 0) {
+                return TRUE;
+            }
+            const bool checkChanged =
+                (item->uChanged & LVIF_STATE) != 0 &&
+                ((item->uOldState ^ item->uNewState) & LVIS_STATEIMAGEMASK) != 0;
+            if (item->iItem == 0 && checkChanged &&
+                ((item->uNewState & LVIS_STATEIMAGEMASK) >> 12) != 2) {
                 return TRUE;
             }
             break;
@@ -1992,6 +2076,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         Refresh(startupDeviceId);
         RepaintAll();
         SetTimer(window, kRefreshTimer, kRefreshPollMs, nullptr);
+        SetTimer(window, kStageMonitorTimer, kStageMonitorPollMs, nullptr);
         return 0;
     }
 
@@ -2178,6 +2263,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_DYN_HOLD_SLIDER:
         case IDC_DYN_OUTPUT_SLIDER:
         case IDC_DYN_LOOKAHEAD_SLIDER:
+        case IDC_INPUT_GAIN_SLIDER:
         case IDC_GAIN_SLIDER:
         case IDC_NOISE_REDUCTION_SLIDER:
         case IDC_EQ_FREQUENCY_SLIDER:
@@ -2185,6 +2271,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_EQ_THRESHOLD_SLIDER:
         case IDC_EQ_RATIO_SLIDER:
         case IDC_EQ_RANGE_SLIDER:
+        case IDC_EQ_LEVEL_SLIDER:
         case IDC_EQ_ATTACK_SLIDER:
         case IDC_EQ_RELEASE_SLIDER:
         case IDC_REVERB_LEVEL_SLIDER:
@@ -2296,6 +2383,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             CheckForExternalChanges();
         } else if (wParam == kRefreshTimer) {
             CheckForExternalChanges();
+        } else if (wParam == kStageMonitorTimer) {
+            PollStageMonitor();
         }
         break;
 
@@ -2324,7 +2413,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         KillTimer(window, kLiveApplyTimer);
         KillTimer(window, kRefreshTimer);
         KillTimer(window, kDeviceChangeTimer);
+        KillTimer(window, kStageMonitorTimer);
         g_liveApplyPending = false;
+        g_stageMonitor.Close();
         apo::StopMonitor();
         if (g_worker.joinable()) {
             g_worker.join();

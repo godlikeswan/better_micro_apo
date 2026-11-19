@@ -36,7 +36,10 @@ created frames otherwise land in front of the controls they frame and
 The list view is an `LVS_REPORT` control with `LVS_EX_CHECKBOXES`,
 `LVS_EX_FULLROWSELECT`, and `LVS_EX_DOUBLEBUFFER`. Column 0 is the effect name;
 column 1 is a narrow, centered `×` delete cell handled through `NM_CLICK`.
-`LVN_ITEMCHANGING` rejects changes while a background operation is busy.
+Input owns row 0 in every preset: its delete cell is empty, its checkbox is
+forced checked, and `LVN_ITEMCHANGING`/`HandleNotify` reject attempts to change
+either. `LVN_ITEMCHANGING` also rejects changes while a background operation is
+busy.
 
 ## Geometry flow
 
@@ -59,9 +62,11 @@ column 1 is a narrow, centered `×` delete cell handled through `NM_CLICK`.
 ## Dialogs and popups
 
 - **Add effect** (`gui/ui/effect_dialog.cpp`) is a modal effect-type picker.
-  Types that are already at their per-type capacity are omitted. The chosen
-  effect is inserted after the selected row, or appended if nothing is
-  selected.
+  Input is omitted because it already exists at row 0; types that are already at
+  their per-type capacity are omitted too. The chosen effect is inserted after
+  the selected row (never above Input), or appended if nothing is selected. The
+  graph panel includes per-stage meters for Input, Gain, Dynamics, Equalizer,
+  and Saturation.
 - **About → Info** (`gui/ui/info_dialog.cpp`) is a manual modal loop. It shows
   hashes, install path, CLSID, registry status, and `Applied to N devices`, and
   follows theme changes while open. Its OK button is a regular button.

@@ -328,13 +328,17 @@ void LayoutEffectParams(int x, int y, int width)
         placePair(g_eqFrequencyLabel, g_eqFrequencySlider,
                   ParamResetDynFrequency, g_eqQLabel, g_eqQSlider,
                   ParamResetDynQ);
-        placePair(g_eqThresholdLabel, g_eqThresholdSlider,
-                  ParamResetDynThreshold, g_eqRatioLabel, g_eqRatioSlider,
-                  ParamResetDynRatio);
-        placePair(g_eqRangeLabel, g_eqRangeSlider, ParamResetDynRange,
-                  g_eqAttackLabel, g_eqAttackSlider, ParamResetDynAttack);
-        placePair(g_eqReleaseLabel, g_eqReleaseSlider,
-                  ParamResetDynRelease, nullptr, nullptr, 0);
+        placePair(g_eqLevelLabel, g_eqLevelSlider, ParamResetDynLevel,
+                  g_eqThresholdLabel, g_eqThresholdSlider,
+                  ParamResetDynThreshold);
+        placePair(g_eqRatioLabel, g_eqRatioSlider, ParamResetDynRatio,
+                  g_eqRangeLabel, g_eqRangeSlider, ParamResetDynRange);
+        placePair(g_eqAttackLabel, g_eqAttackSlider, ParamResetDynAttack,
+                  g_eqReleaseLabel, g_eqReleaseSlider, ParamResetDynRelease);
+        break;
+    case apo::EffectType::Input:
+        placePair(g_inputGainLabel, g_inputGainSlider, ParamResetInputGain,
+                  nullptr, nullptr, 0);
         break;
     case apo::EffectType::Gain:
         placePair(g_gainLabel, g_gainSlider, ParamResetGain, nullptr, nullptr,
@@ -602,6 +606,12 @@ void CreateControls(HWND root)
     AddTooltip(g_dynamicsLookaheadIcon,
                L"Adds delay to the audio stream.");
 
+    g_inputGainLabel = ui::Label(window, IDC_INPUT_GAIN_LABEL,
+                                 L"Input gain (dB)");
+    g_inputGainSlider = ui::Slider(window, IDC_INPUT_GAIN_SLIDER,
+                                   {apo::kInputMinGainDb,
+                                    apo::kInputMaxGainDb, 0.5, false, 1});
+
     g_gainLabel = ui::Label(window, IDC_GAIN_LABEL, L"Gain (dB)");
     g_gainSlider = ui::Slider(window, IDC_GAIN_SLIDER,
                               {-24.0, 50.0, 0.5, false, 1});
@@ -611,10 +621,11 @@ void CreateControls(HWND root)
     g_eqFrequencyLabel =
         ui::Label(window, IDC_EQ_FREQUENCY_LABEL, L"Frequency (Hz)");
     g_eqFrequencySlider = ui::Slider(window, IDC_EQ_FREQUENCY_SLIDER,
-                                      {20.0, 2000.0, 0.0, true, 0});
+                                      {apo::kEqMinFrequencyHz,
+                                       apo::kEqMaxFrequencyHz, 0.0, true, 0});
     g_eqQLabel = ui::Label(window, IDC_EQ_Q_LABEL, L"Q");
     g_eqQSlider = ui::Slider(window, IDC_EQ_Q_SLIDER,
-                              {0.1, 10.0, 0.0, true, 0});
+                              {apo::kEqMinQ, apo::kEqMaxQ, 0.0, true, 0});
     g_eqThresholdLabel =
         ui::Label(window, IDC_EQ_THRESHOLD_LABEL, L"Threshold (dBFS)");
     g_eqThresholdSlider = ui::Slider(
@@ -625,6 +636,10 @@ void CreateControls(HWND root)
     g_eqRangeLabel = ui::Label(window, IDC_EQ_RANGE_LABEL, L"Range (dB)");
     g_eqRangeSlider = ui::Slider(window, IDC_EQ_RANGE_SLIDER,
                                   {0.0, 36.0, 1.0, false, 0});
+    g_eqLevelLabel = ui::Label(window, IDC_EQ_LEVEL_LABEL, L"Level (dB)");
+    g_eqLevelSlider = ui::Slider(window, IDC_EQ_LEVEL_SLIDER,
+                                  {apo::kEqMinLevelDb, apo::kEqMaxLevelDb,
+                                   0.5, false, 1});
     g_eqAttackLabel =
         ui::Label(window, IDC_EQ_ATTACK_LABEL, L"Attack (ms)");
     g_eqAttackSlider = ui::Slider(window, IDC_EQ_ATTACK_SLIDER,

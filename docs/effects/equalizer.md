@@ -20,20 +20,26 @@ chosen frequency, so the rest of your voice is left alone.
   point for a close voice. If the boom is higher up (around 200–300 Hz), move
   the slider there. **Q** controls how wide the band is. A low Q around 0.7 acts
   like a gentle shelf; a higher Q targets a narrower problem.
+- **Level** moves the whole band response up or down without changing the
+  dynamics. The graph draws the live input spectrum behind the shifted response,
+  and the meter to the right shows the Equalizer stage's output level. Level
+  reaches ±48 dB; boosts above the fixed +24 dB graph top simply run off-screen
+  rather than being limited.
 - **Ratio**, **Attack**, and **Release** work like the controls in the unified
   dynamics effect, but only on that band. Keep **Ratio** moderate and use a
   slower **Release** if the low end pumps between words.
-- A newly added Equalizer starts in reduce mode at 120 Hz, Q 0.7, and a −45 dBFS
-  threshold. The little ↺ buttons reset individual controls. Up to 16 instances
-  are supported.
+- A newly added Equalizer starts in reduce mode at 120 Hz, Q 0.7, a −45 dBFS
+  threshold, and 0 dB Level. The little ↺ buttons reset individual controls. Up
+  to 16 instances are supported.
 
 ## Controls
 
 | Control | Default | Range | What it does |
 | --- | --- | --- | --- |
 | Extend quiet lows | Off | On / off | Switches from cutting loud lows to lifting quiet lows. |
-| Frequency | 120 Hz | 20 to 2000 Hz | Center of the isolated band. |
-| Q | 0.7 | 0.1 to 10 | Bandwidth; low Q is broad. |
+| Frequency | 120 Hz | 20 to 20000 Hz | Center of the isolated band. |
+| Q | 0.7 | 0.1 to 30 | Bandwidth; low Q is broad. |
+| Level | 0 dB | −48 to +48 dB | Moves the isolated band response up or down. |
 | Threshold | −45 dBFS | −80 to 0 dBFS | Level where the dynamics start acting. |
 | Ratio | 4:1 | 1:1 to 20:1 | Slope applied above/below the threshold. |
 | Range | 18 dB | 0 to 36 dB | Maximum cut or boost. |
@@ -55,9 +61,12 @@ chosen frequency, so the rest of your voice is left alone.
   extend mode computes a positive target from the level below it. Both are
   limited by `rangeDb` and by the ratio slope, then smoothed with the configured
   attack/release.
-- The resulting gain is added back to the band only: `out = x + band *
-  (linearGain - 1)`. The rest of the signal is untouched.
+- The resulting gain is added back to the band only. `levelDb` shifts the band
+  before that step: `out = x + band * (DecibelsToLinear(gainDb + levelDb) - 1)`.
+  The rest of the signal is untouched.
 - Per-channel filter state (`ic1`, `ic2`, and the band value) is allocated and
   cleared in `Configure`/`Reset`. Changing enable state, frequency, or Q resets
   the filter. `Process` and `Update` do not allocate. The graph shows the analog
-  band-pass prototype the filter approximates.
+  band-pass prototype the filter approximates, shifted by Level, with the live
+  input spectrum drawn behind it and an output peak meter to the right. Those
+  overlays come from the APO's `.monitor` channel.

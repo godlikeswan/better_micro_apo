@@ -18,6 +18,7 @@
 #include "dsp/stages.h"
 #include "runtime_settings.h"
 #include "stage_capture.h"
+#include "stage_monitor.h"
 
 // Minimal capture APO.
 //
@@ -87,7 +88,8 @@ private:
     static bool IsSupportedFormat(const UNCOMPRESSEDAUDIOFORMAT& format);
 
     void ConfigureDsp();
-    void ProcessBuffer(const BYTE* source, BYTE* destination, UINT32 frames);
+    void ProcessBuffer(const BYTE* source, BYTE* destination, UINT32 frames,
+                       apo::StageMonitorSink* monitor);
 
     // Maps the GUI's per-endpoint settings file read-only. The APO polls the
     // generation counter in APOProcess and retunes the chain in place.
@@ -100,6 +102,8 @@ private:
     void OpenStageCapture();
     void CloseStageCapture();
     void PollStageCapture();
+    void OpenStageMonitor();
+    void CloseStageMonitor();
     void RebuildChain();
     bool FindCaptureTarget(int presetIndex, int effectId, size_t& chainIndex,
                            int& fftSize) const;
@@ -112,6 +116,7 @@ private:
     apo::dsp::StagePool m_stagePool;
     apo::StageCaptureView m_captureView;
     apo::StageCaptureTap m_captureTap;
+    apo::StageMonitor m_monitor;
     bool m_captureActive = false;
     size_t m_captureChainIndex = 0;
     LONG m_capturePresetIndex = -1;

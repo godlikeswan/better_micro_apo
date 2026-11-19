@@ -44,21 +44,43 @@ Subclass procedures in `widgets.cpp`:
 the actual palette use. Changing a widget's appearance is local to these
 functions; changing behavior is local to its subclass.
 
-## Effect graph
+## Effect graph and meters
 
 `gui/ui/graph.cpp` registers its own class and creates the graph with
 `ui::Graph`. `SetGraphEffect` stores the current effect and invalidates the
-control. `PaintGraph` draws a grid and one of:
+control. `GraphSupported` reports five graph types: Input, Gain,
+Saturation/Overdrive/Distortion, Gate/Compressor/Limiter/Expander, and
+Equalizer. `PaintGraph` draws a grid and one of:
 
-- saturation transfer curve,
+- Input live spectrum,
+- Gain input/output curve with a live operating-point dot,
+- saturation transfer curve with a mirrored input-peak operating point,
 - mode-aware transfer curve for Gate/Compressor/Limiter/Expander,
-- equalizer band shape.
+- equalizer band response shifted by Level, with the live spectrum behind it.
 
 The saturation and dynamics curves call the same inline functions in
 `src/dsp/transfer.h` as the DSP stages, so the displayed curve cannot drift from
 what is applied. The equalizer graph draws the analog band-pass prototype that
-`EqualizerStage` approximates. `GraphSupported` reports which effect types have
-a graph.
+`EqualizerStage` approximates. The Input, Gain, Dynamics, and Equalizer dB
+graphs keep the vertical range **−96…+24 dBFS**; boosts above +24 dB can extend
+off-screen. Saturation uses its normalized −1…1 transfer axes.
+
+`SetGraphMonitor` receives a snapshot from the APO's `.monitor` file and smooths
+the RMS/engagement values before repainting; `ClearGraphMonitor` resets them
+when telemetry is missing or the effect changes. Both spectrum graphs draw FFT
+bin 0 as well, clamped to the 20 Hz left edge, so the plot reaches the axis
+instead of leaving a gap up to the first non-DC bin. The Gain graph highlights
+the 0 dB cross and labels its axes as RMS. Each meter has green/yellow/red
+zones, dB labels to the right, a fill driven by a short (0.06 s) cross-buffer
+peak hold, and a slightly thicker line driven by a longer (0.6 s) hold. Both
+catch transients between GUI polls; the fill falls back sooner. The line's
+colour matches the bar zone it sits in: green below −12 dBFS, yellow from
+−12 to −3 dBFS, and red above −3 dBFS. The dynamics
+engagement bar is offset to stay clear of the left-hand dB labels. Saturation
+draws the fixed shaping curve and marks the operating point by feeding the
+input peak through the Drive pre-gain, so a higher Drive widens the marker gap
+toward the flat part instead of bending the curve. These are stage-local
+displays, independent of the bottom Peak/RMS label fed by the Listen stream.
 
 ## Icons, tooltips, and reset buttons
 

@@ -14,6 +14,12 @@ settings add warmth and bite; higher Drive and Curvature get buzzy.
 - **Curvature** controls how hard the curve bends. Around 0% it is almost
   linear; around 100% it is fully saturated. Move it slowly — the graph in the
   panel updates as you go.
+- While audio runs, the panel places mirrored dots and dotted vertical stripes
+  on the transfer curve from the stage's input peak after the Drive pre-gain.
+  Drive widens that gap toward the flat part of the curve; it does not bend the
+  curve itself. This is an operating-point cue, not a waveform display; the thin
+  meter to the right shows the stage's output peak with a short-held fill and a
+  thicker long-hold peak line whose colour matches the bar zone it sits in.
 - **Function** changes the character. **Tanh** is the smooth default; try the
   others if you want a different color.
 - **Output** sets the level after the effect. Saturation can sound much louder
@@ -45,4 +51,9 @@ names, while the GUI, effect list, and documentation use
   No state, no buffers, no latency.
 - All six curves are odd and map −1…1 to −1…1, so no DC blocker is needed.
 - The curve math lives in `src/dsp/transfer.h`; the GUI graph calls the same
-  inline functions, so the plotted curve matches what the DSP applies.
+  inline functions, so the plotted curve matches what the DSP applies. Drive is
+  a pre-gain, so the graph draws the shaping curve at unity input and feeds the
+  `.monitor` input peak through that gain to place the mirrored markers. Baking
+  Drive into the curve made every setting look like a different curve shape;
+  treating it as pre-gain keeps the shape fixed and only moves the operating
+  point.

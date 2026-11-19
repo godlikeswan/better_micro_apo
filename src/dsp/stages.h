@@ -25,6 +25,7 @@ public:
     {
         return m_settings.enabled && m_delayFrames > 0;
     }
+    double MonitorValue() const override;
     void Process(double* samples, UINT32 frames, UINT32 channels) override;
 
 private:
@@ -84,6 +85,7 @@ private:
     double m_thresholdLinear = 1.0;
     double m_ratio = 1.0;
     double m_rangeDb = 0.0;
+    double m_levelDb = 0.0;
     bool m_expand = false;
     double m_attackCoeff = 0.0;
     double m_releaseCoeff = 0.0;
@@ -97,7 +99,7 @@ private:
     std::vector<double> m_band;
 };
 
-// Flat gain, used for makeup gain.
+// Flat gain, used both by the fixed Input row and by makeup Gain effects.
 class GainStage final : public Stage
 {
 public:
@@ -301,8 +303,9 @@ class StagePool
 public:
     void Configure(const AudioFormat& format, const NoiseProfile& profile);
     void Clear();
-    void Update(const ApoSettings& settings, const AudioFormat& format,
-                Chain& chain);
+    // Returns the number of active stages bound into `chain`.
+    int Update(const ApoSettings& settings, const AudioFormat& format,
+               Chain& chain);
     // Retunes every allocated noise stage from a live capture. No allocation.
     void UpdateProfileBins(const NoiseProfile& profile);
 

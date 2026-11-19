@@ -11,7 +11,24 @@ namespace apo {
 
 // Settings files with any other version are discarded on load. There is no
 // migration path: a new schema starts from defaults.
-inline constexpr int kSettingsVersion = 7;
+inline constexpr int kSettingsVersion = 8;
+
+// The fixed first stage has its own gain range; it is stored in GainSettings
+// but is separate from the standalone makeup Gain effect.
+inline constexpr double kInputDefaultGainDb = 0.0;
+inline constexpr double kInputMinGainDb = -24.0;
+inline constexpr double kInputMaxGainDb = 24.0;
+
+// Equalizer band limits. The frequency reaches the top of the graph on normal
+// sample rates; the DSP still clamps to 49% of the active rate.
+inline constexpr double kEqMinFrequencyHz = 20.0;
+inline constexpr double kEqMaxFrequencyHz = 20000.0;
+inline constexpr double kEqMinQ = 0.1;
+inline constexpr double kEqMaxQ = 30.0;
+// Level can run far beyond the graph's +24 dB top; the curve is allowed to
+// clip off-screen rather than limiting the useful boost on a narrow band.
+inline constexpr double kEqMinLevelDb = -48.0;
+inline constexpr double kEqMaxLevelDb = 48.0;
 
 // Analysis sizes offered for spectral noise reduction. The buffers and FFT
 // plans for every size are created when the stream binds, so changing
@@ -133,6 +150,8 @@ struct EqualizerSettings
 
     // Maximum cut (compress) or boost (expand) applied to the band.
     double rangeDb = 18.0;
+    // Static vertical offset of the isolated band, added to the dynamic gain.
+    double levelDb = 0.0;
     double attackMs = 10.0;
     double releaseMs = 150.0;
 };
@@ -211,11 +230,12 @@ struct ReverbSettings
 };
 
 // Effect types the list can hold. The list order is the DSP order, and a type
-// may appear more than once. Gain is first so the usual makeup step is easy to
-// find and sits at the top of the chain.
+// may appear more than once. Input is generated automatically as row 0 and is
+// never addable or deletable; Gain is the first optional effect after it.
 enum class EffectType : int
 {
-    Gain = 0,
+    Input = 0,
+    Gain,
     Noise,
     Dynamics,
     Equalizer,

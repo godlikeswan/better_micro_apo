@@ -20,6 +20,7 @@ add_library(better_micro_apo SHARED
     src/dsp/stages.cpp
     src/runtime_settings.cpp
     src/stage_capture.cpp
+    src/stage_monitor.cpp
 )
 target_include_directories(better_micro_apo PRIVATE src)
 target_compile_definitions(better_micro_apo PRIVATE
@@ -66,6 +67,7 @@ add_executable(better_micro_apo_gui WIN32
     src/dsp/dsp.cpp
     src/runtime_settings.cpp
     src/stage_capture.cpp
+    src/stage_monitor.cpp
     gui/apo_monitor.cpp
     gui/apo_ops.cpp
     gui/apo_status.cpp
