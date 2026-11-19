@@ -30,7 +30,7 @@ filename-safe with `apo::SafeEndpointId`.
 | --- | --- | --- |
 | `sequence` | `volatile uint32_t` | Seqlock: odd while writing, even when complete. |
 | `magic` | `uint32_t` | `0x50414D42` (`"BMAP"`). |
-| `version` | `uint32_t` | `11`; bump whenever `ApoSettings` changes layout. |
+| `version` | `uint32_t` | `12`; bump whenever `ApoSettings` changes layout. |
 | `structSize` | `uint32_t` | Size of the full structure. |
 | `generation` | `volatile uint64_t` | Incremented on each published snapshot; this is what the APO polls. |
 | `settings` | `ApoSettings` | The complete settings blob, copied by value. |
@@ -117,24 +117,28 @@ preset_0_effect_0_noise_fft_size=512
 
 Each preset stores `effect_count`, `next_effect_id`, and one block per entry
 with `id`, `type`, `enabled`, and the type's parameter keys. Effect types are
-`input`, `gain`, `noise`, `dynamics`, `equalizer`, `mono`, `saturation`, and
-`reverb`; parameter keys include `gain_db` (also used by Input),
-`dynamics_threshold_db`, `dynamics_ratio`, `dynamics_hold_ms`,
+`input`, `gain`, `noise`, `gate`, `compressor`, `equalizer`, `mono`,
+`saturation`, and `reverb`; parameter keys include `gain_db` (also used by
+Input), `gate_threshold_db`, `gate_ratio`, `gate_hold_ms`,
+`compressor_threshold_db`, `compressor_ratio`, `compressor_hold_ms`,
 `equalizer_mode`, `equalizer_frequency_hz`, `equalizer_level_db`,
 `equalizer_ratio`, `equalizer_range_db`, `equalizer_hold_ms`,
 `equalizer_lookahead_ms`, `saturation_function`,
 `reverb_algorithm`, `reverb_level`, `reverb_max_length_ms`, and
-`reverb_predelay_ms`. Every preset has an Input row at index 0; it is forced on
-and clamped to −24…+24 dB.
+`reverb_predelay_ms`. Both dynamics blocks also store `input_db`, `output_db`,
+`attack_ms`, `release_ms`, and `lookahead_ms` under their own prefix; there is
+no mode key. Every preset has an Input row at index 0; it is forced on and
+clamped to −24…+24 dB.
 The `id` is the stable instance id the stage pool uses to tell whether a slot
 now holds a different effect. Four presets are always written; only
 `preset_index` is processed.
 
 `LoadSettings` starts with defaults. If `[dsp] version` is missing or is not
-**9**, it deletes the INI file and returns the defaults; there is no migration
+**10**, it deletes the INI file and returns the defaults; there is no migration
 path for old settings. For a current file, `ClampSettings` repairs invalid
-values: non-finite numbers fall back to defaults (except `dynamics_ratio` and
-`equalizer_ratio`, where positive infinity is valid and is written as `inf`),
+values: non-finite numbers fall back to defaults (except `gate_ratio`,
+`compressor_ratio`, and `equalizer_ratio`, where positive infinity is valid and
+is written as `inf`),
 every numeric field
 is clamped to its safe range (Noise reduction to 0–50 dB, unsupported
 `noise_fft_size` values fall back to 512), Input is inserted/repaired at row 0,
@@ -144,7 +148,7 @@ forced to `1` on every load/save/publish and is not a user option.
 ## Stage monitor channel
 
 `StageMonitorFile` (`src/stage_monitor.h`, magic `0x544F4D42` / `"BMOT"`,
-version 6) lives in `runtime\{id}.monitor`. It has a fixed header and one
+version 7) lives in `runtime\{id}.monitor`. It has a fixed header and one
 `StageMonitorSlot` per possible chain position (`kMaxEffects + 2`: the normal
 effect slots, the temporary capture tap, and one padding slot). Each slot has
 its own seqlock and carries

@@ -23,6 +23,18 @@ constexpr double kEqCurveMaxDb = 96.0;
 constexpr double kMinHz = 20.0;
 constexpr double kMaxHz = 20000.0;
 
+bool IsDynamicsEffect(apo::EffectType type)
+{
+    return type == apo::EffectType::Gate ||
+           type == apo::EffectType::Compressor;
+}
+
+apo::DynamicsMode DynamicsModeOf(apo::EffectType type)
+{
+    return type == apo::EffectType::Gate ? apo::DynamicsMode::ExpanderGate
+                                         : apo::DynamicsMode::CompressorLimiter;
+}
+
 struct GraphState
 {
     apo::EffectInstance effect;
@@ -288,11 +300,11 @@ GraphLayout ComputeLayout(HWND window, apo::EffectType type)
     const int bottomMargin = Scale(16);
     int left = client.left + Scale(34);
     int right = client.right - Scale(8);
-    const bool hasEngagement = type == apo::EffectType::Dynamics;
+    const bool isDynamics = IsDynamicsEffect(type);
+    const bool hasEngagement = isDynamics;
     const bool hasMeter =
         type == apo::EffectType::Input || type == apo::EffectType::Gain ||
-        type == apo::EffectType::Dynamics ||
-        type == apo::EffectType::Equalizer ||
+        isDynamics || type == apo::EffectType::Equalizer ||
         type == apo::EffectType::Saturation;
 
     GraphLayout layout;
@@ -588,7 +600,7 @@ void PaintGain(HDC dc, const RECT& client, const RECT& plot,
 
 void PaintDynamics(HDC dc, const RECT& client, const RECT& plot,
                    const apo::DynamicsSettings& settings,
-                   const GraphColors& colors)
+                   apo::DynamicsMode mode, const GraphColors& colors)
 {
     constexpr double kThresholdMin = apo::kMinThresholdDb;
     constexpr double kThresholdMax = apo::kMaxThresholdDb;
@@ -609,7 +621,7 @@ void PaintDynamics(HDC dc, const RECT& client, const RECT& plot,
         const double inputDb = kMinDb + (kMaxDb - kMinDb) * t;
         const double detectedDb = inputDb + settings.inputDb;
         const double transferredDb = apo::dsp::DynamicsTransferDb(
-            detectedDb, threshold, settings.ratio, settings.mode);
+            detectedDb, threshold, settings.ratio, mode);
         return DbPosition(transferredDb + settings.outputDb);
     });
 
@@ -800,8 +812,13 @@ void PaintGraph(HWND window, const GraphState& state, HDC dc)
         PaintDistortion(dc, client, plot, state.effect.distortion, state,
                         colors);
         break;
-    case apo::EffectType::Dynamics:
-        PaintDynamics(dc, client, plot, state.effect.dynamics, colors);
+    case apo::EffectType::Gate:
+        PaintDynamics(dc, client, plot, state.effect.gate,
+                      DynamicsModeOf(state.effect.type), colors);
+        break;
+    case apo::EffectType::Compressor:
+        PaintDynamics(dc, client, plot, state.effect.compressor,
+                      DynamicsModeOf(state.effect.type), colors);
         break;
     case apo::EffectType::Equalizer:
         PaintSpectrum(dc, plot, state.monitor, colors);
@@ -909,7 +926,8 @@ bool GraphSupported(apo::EffectType type)
     case apo::EffectType::Input:
     case apo::EffectType::Gain:
     case apo::EffectType::Saturation:
-    case apo::EffectType::Dynamics:
+    case apo::EffectType::Gate:
+    case apo::EffectType::Compressor:
     case apo::EffectType::Equalizer:
         return true;
     default:

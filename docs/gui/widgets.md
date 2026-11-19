@@ -48,14 +48,15 @@ functions; changing behavior is local to its subclass.
 
 `gui/ui/graph.cpp` registers its own class and creates the graph with
 `ui::Graph`. `SetGraphEffect` stores the current effect and invalidates the
-control. `GraphSupported` reports five graph types: Input, Gain,
-Saturation/Overdrive/Distortion, Gate/Compressor/Limiter/Expander, and
+control. `GraphSupported` reports six graph types: Input, Gain,
+Saturation/Overdrive/Distortion, Gate/Expander, Compressor/Limiter, and
 Equalizer. `PaintGraph` draws a grid and one of:
 
 - Input live spectrum,
 - Gain input/output curve with a live operating-point dot,
 - saturation transfer curve with a mirrored input-peak operating point,
-- mode-aware transfer curve for Gate/Compressor/Limiter/Expander,
+- expander/gate transfer curve for Gate/Expander,
+- compressor/limiter transfer curve for Compressor/Limiter,
 - equalizer Level bell with a dot at the selected frequency, a yellow live
   dynamic curve, and a dashed directional Range limit, with the live spectrum
   behind them.
@@ -71,7 +72,8 @@ band, and a dashed curve shows the Range limit: below zero for Compressor, above
 zero for Expander. The response curves use a centered **−96…+96 dB** scale with
 +96/0/−96 labels just inside the plot's right edge. The spectrum behind them
 keeps the left-hand **−96…+24 dBFS** scale and its labels; the plot rectangle is
-unchanged. Input, Gain, and Dynamics also use **−96…+24 dBFS**, so boosts above
+unchanged. Input, Gain, Gate/Expander, and Compressor/Limiter also use
+**−96…+24 dBFS**, so boosts above
 +24 dB can extend off-screen. Saturation uses normalized −1…1 transfer axes.
 
 `SetGraphMonitor` receives a snapshot from the APO's `.monitor` file; only the
@@ -89,8 +91,8 @@ catch transients between GUI polls; the fill falls back sooner. The line's
 colour is the same as the filled bar zone it sits in: green below −12 dBFS,
 yellow from −12 to −3 dBFS, and red above −3 dBFS. The Gain dot uses the same
 input/output peak holds as the meter, so a meter reading above 0 dB has a
-matching point above 0 on the graph. The dynamics
-engagement bar is offset to stay clear of the left-hand dB labels. Saturation
+matching point above 0 on the graph. The engagement bar on both dynamics
+effects is offset to stay clear of the left-hand dB labels. Saturation
 draws the fixed shaping curve and marks the operating point by feeding the
 input peak through the Drive pre-gain, so a higher Drive widens the marker gap
 toward the flat part instead of bending the curve. These are stage-local

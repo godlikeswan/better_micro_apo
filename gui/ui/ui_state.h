@@ -26,9 +26,8 @@ enum : int {
     IDC_MAIN_ENABLE_ICON,
     IDC_MONO_NOTE,
 
-    // Effect parameters.
-    IDC_DYN_MODE_LABEL,
-    IDC_DYN_MODE_COMBO,
+    // Effect parameters. The dynamics controls are shared by the standalone
+    // Gate/Expander and Compressor/Limiter effects.
     IDC_DYN_INPUT_LABEL,
     IDC_DYN_INPUT_SLIDER,
     IDC_DYN_THRESHOLD_LABEL,
@@ -116,7 +115,6 @@ enum : int {
 enum ParamReset : int {
     ParamResetNoiseReduction,
     ParamResetNoiseFftSize,
-    ParamResetDynamicsMode,
     ParamResetDynamicsInput,
     ParamResetDynamicsThreshold,
     ParamResetDynamicsRatio,
@@ -189,8 +187,6 @@ extern HWND g_mainEnableIcon;
 extern HWND g_monoNote;
 extern HWND g_paramResetButtons[ParamResetCount];
 
-extern HWND g_dynamicsModeLabel;
-extern HWND g_dynamicsModeCombo;
 extern HWND g_dynamicsInputLabel;
 extern HWND g_dynamicsInputSlider;
 extern HWND g_dynamicsThresholdLabel;

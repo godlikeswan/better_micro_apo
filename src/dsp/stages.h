@@ -8,15 +8,16 @@
 
 namespace apo::dsp {
 
-// Unified dynamics. One linked peak detector drives either compression/limiting
-// above the threshold or expansion/gating below it. Input gain feeds the
-// detector and the signal; output gain is applied after the dynamics. Optional
-// lookahead delays the audio so the gain change can begin before a transient
-// reaches the output.
+// Shared implementation for the two standalone dynamics effects. The effect
+// type fixes the transfer half at construction; the settings carry no mode.
+// One linked peak detector drives compression/limiting above the threshold or
+// expansion/gating below it. Input gain feeds the detector and the signal;
+// output gain is applied after the dynamics. Optional lookahead delays the
+// audio so the gain change can begin before a transient reaches the output.
 class DynamicsStage final : public Stage
 {
 public:
-    DynamicsStage() = default;
+    explicit DynamicsStage(DynamicsMode mode) : m_mode(mode) {}
 
     void Configure(const AudioFormat& format) override;
     void Update(const EffectInstance& effect, const AudioFormat& format) override;
@@ -32,6 +33,7 @@ private:
     void ApplyCoefficients(const AudioFormat& format);
 
     DynamicsSettings m_settings;
+    DynamicsMode m_mode = DynamicsMode::CompressorLimiter;
     double m_thresholdDb = 0.0;
     double m_inputGain = 1.0;
     double m_outputGain = 1.0;

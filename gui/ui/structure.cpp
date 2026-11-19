@@ -293,32 +293,23 @@ void LayoutEffectParams(int x, int y, int width)
         MoveWindow(g_noiseNote, rightX, y, columnWidth, Scale(36), TRUE);
         break;
     }
-    case apo::EffectType::Dynamics: {
+    case apo::EffectType::Gate:
+    case apo::EffectType::Compressor: {
         const int rightX = x + columnWidth + columnGap;
-        MoveWindow(g_dynamicsModeLabel, x, y, labelWidth, Scale(20), TRUE);
-        MoveWindow(g_dynamicsModeCombo, x + labelWidth, y, sliderWidth,
-                   Scale(200), TRUE);
-        placeReset(ParamResetDynamicsMode, x, y);
-        MoveWindow(g_dynamicsInputLabel, rightX, y, labelWidth, Scale(20),
-                   TRUE);
-        MoveWindow(g_dynamicsInputSlider, rightX + labelWidth, y, sliderWidth,
-                   controlHeight, TRUE);
-        placeReset(ParamResetDynamicsInput, rightX, y);
-        y += rowStep;
-
-        placePair(g_dynamicsThresholdLabel, g_dynamicsThresholdSlider,
-                  ParamResetDynamicsThreshold, g_dynamicsRatioLabel,
-                  g_dynamicsRatioSlider, ParamResetDynamicsRatio);
-        placePair(g_dynamicsAttackLabel, g_dynamicsAttackSlider,
-                  ParamResetDynamicsAttack, g_dynamicsReleaseLabel,
-                  g_dynamicsReleaseSlider, ParamResetDynamicsRelease);
-        placePair(g_dynamicsOutputLabel, g_dynamicsOutputSlider,
-                  ParamResetDynamicsOutput, g_dynamicsLookaheadLabel,
+        placePair(g_dynamicsInputLabel, g_dynamicsInputSlider,
+                  ParamResetDynamicsInput, g_dynamicsThresholdLabel,
+                  g_dynamicsThresholdSlider, ParamResetDynamicsThreshold);
+        placePair(g_dynamicsRatioLabel, g_dynamicsRatioSlider,
+                  ParamResetDynamicsRatio, g_dynamicsAttackLabel,
+                  g_dynamicsAttackSlider, ParamResetDynamicsAttack);
+        placePair(g_dynamicsReleaseLabel, g_dynamicsReleaseSlider,
+                  ParamResetDynamicsRelease, g_dynamicsOutputLabel,
+                  g_dynamicsOutputSlider, ParamResetDynamicsOutput);
+        placePair(g_dynamicsHoldLabel, g_dynamicsHoldSlider,
+                  ParamResetDynamicsHold, g_dynamicsLookaheadLabel,
                   g_dynamicsLookaheadSlider, ParamResetDynamicsLookahead);
         placeIcon(g_dynamicsLookaheadIcon, g_dynamicsLookaheadLabel, rightX,
                   y - rowStep);
-        placePair(g_dynamicsHoldLabel, g_dynamicsHoldSlider,
-                  ParamResetDynamicsHold, nullptr, nullptr, 0);
         break;
     }
     case apo::EffectType::Equalizer: {
@@ -566,20 +557,6 @@ void CreateControls(HWND root)
         ui::Label(window, IDC_DIST_OUTPUT_LABEL, L"Output (dB)");
     g_distOutputSlider = ui::Slider(window, IDC_DIST_OUTPUT_SLIDER,
                                     {-24.0, 12.0, 0.5, false, 1});
-
-    g_dynamicsModeLabel =
-        ui::Label(window, IDC_DYN_MODE_LABEL, L"Mode");
-    g_dynamicsModeCombo =
-        ui::ComboBox(window, IDC_DYN_MODE_COMBO, CBS_DROPDOWNLIST);
-    for (int mode = 0;
-         mode < static_cast<int>(apo::DynamicsMode::Count); ++mode) {
-        SendMessageW(
-            g_dynamicsModeCombo, CB_ADDSTRING, 0,
-            reinterpret_cast<LPARAM>(apo::DynamicsModeName(
-                static_cast<apo::DynamicsMode>(mode))));
-    }
-    SendMessageW(g_dynamicsModeCombo, CB_SETCURSEL,
-                 static_cast<int>(apo::DynamicsMode::CompressorLimiter), 0);
 
     g_dynamicsInputLabel =
         ui::Label(window, IDC_DYN_INPUT_LABEL, L"Input (dB)");

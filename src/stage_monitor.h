@@ -19,7 +19,7 @@ namespace apo {
 // sampling the meters never changes settings, rebuilds the chain, or stops
 // audio.
 inline constexpr std::uint32_t kStageMonitorMagic = 0x544F4D42u; // "BMOT"
-inline constexpr std::uint32_t kStageMonitorVersion = 6u;
+inline constexpr std::uint32_t kStageMonitorVersion = 7u;
 inline constexpr int kStageMonitorFftSize = 256;
 inline constexpr int kStageMonitorBins = kStageMonitorFftSize / 2;
 // One spare slot covers the temporary capture tap, another covers future chain

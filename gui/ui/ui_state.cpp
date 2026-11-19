@@ -22,8 +22,6 @@ HWND g_mainEnableIcon = nullptr;
 HWND g_monoNote = nullptr;
 HWND g_paramResetButtons[ParamResetCount]{};
 
-HWND g_dynamicsModeLabel = nullptr;
-HWND g_dynamicsModeCombo = nullptr;
 HWND g_dynamicsInputLabel = nullptr;
 HWND g_dynamicsInputSlider = nullptr;
 HWND g_dynamicsThresholdLabel = nullptr;

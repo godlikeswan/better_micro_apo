@@ -11,7 +11,7 @@ namespace apo {
 
 // Settings files with any other version are discarded on load. There is no
 // migration path: a new schema starts from defaults.
-inline constexpr int kSettingsVersion = 9;
+inline constexpr int kSettingsVersion = 10;
 
 // The fixed first stage has its own gain range; it is stored in GainSettings
 // but is separate from the standalone makeup Gain effect.
@@ -92,16 +92,13 @@ struct NoiseProfile
     std::vector<double> magnitudes;
 };
 
-// The two sides of the unified dynamics effect. Compressor/Limiter acts on
-// signal above the threshold; Expander/Gate acts on signal below it.
+// Internal DSP mode for the two standalone dynamics effects. It is selected by
+// the effect type, never stored in settings or shown in the GUI.
 enum class DynamicsMode : int
 {
     CompressorLimiter = 0,
     ExpanderGate = 1,
-    Count,
 };
-
-const wchar_t* DynamicsModeName(DynamicsMode mode);
 
 // Dynamics applied to the Equalizer's isolated band. `None` leaves only the
 // static Level shift; the other modes cut loud lows or lift quiet lows.
@@ -115,7 +112,7 @@ enum class EqualizerDynamicsMode : int
 
 const wchar_t* EqualizerDynamicsModeName(EqualizerDynamicsMode mode);
 
-// Threshold bounds shared by the unified Dynamics and Equalizer detectors.
+// Threshold bounds shared by the standalone dynamics and Equalizer detectors.
 inline constexpr double kMinThresholdDb = -96.0;
 inline constexpr double kMaxThresholdDb = 24.0;
 
@@ -130,10 +127,12 @@ inline double InfiniteRatio()
     return std::numeric_limits<double>::infinity();
 }
 
+// Shared parameter block for the standalone Gate/Expander and
+// Compressor/Limiter effects. Which half of the transfer curve it uses comes
+// from the effect type, so no mode is stored here.
 struct DynamicsSettings
 {
     bool enabled = false;
-    DynamicsMode mode = DynamicsMode::CompressorLimiter;
     double thresholdDb = -15.0;
     double ratio = 5.0;
     double inputDb = 0.0;
@@ -261,7 +260,8 @@ enum class EffectType : int
     Input = 0,
     Gain,
     Noise,
-    Dynamics,
+    Gate,
+    Compressor,
     Equalizer,
     Mono,
     Saturation,
@@ -302,7 +302,8 @@ struct EffectInstance
     EffectType type = EffectType::Gain;
 
     NoiseSettings noise;
-    DynamicsSettings dynamics;
+    DynamicsSettings gate;
+    DynamicsSettings compressor;
     EqualizerSettings equalizer;
     GainSettings gain;
     MonoSettings mono;
@@ -344,7 +345,7 @@ EffectPreset& ActivePreset(ApoSettings& settings);
 const EffectPreset& ActivePreset(const ApoSettings& settings);
 
 // Clamp every field into a range the DSP can handle safely. Non-finite values
-// fall back to the defaults except the dynamics ratio, where infinity is the
+// fall back to the defaults except the dynamics ratios, where infinity is the
 // end of the slider. Also normalizes effect ids so each instance has a unique
 // positive id.
 void ClampSettings(ApoSettings& settings);

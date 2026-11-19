@@ -97,8 +97,8 @@ inline double ShapeDistortion(const DistortionCurve& curve, int function,
     }
 }
 
-// Settled gain change of the unified dynamics effect. Compressor/Limiter acts
-// above the threshold; Expander/Gate acts below it. Ratios are the slope in
+// Settled gain change of the standalone dynamics effects. Compressor/Limiter
+// acts above the threshold; Expander/Gate acts below it. Ratios are the slope in
 // each region: 1 is unity, infinity is a hard limiter/gate, and values below 1
 // move the affected side toward (or past) the threshold.
 inline constexpr double kDynamicsMaxBoostDb = 48.0;

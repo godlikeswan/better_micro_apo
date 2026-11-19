@@ -9,7 +9,8 @@ effect menu. The other rows are addable in the order shown.
 | [Input](input.md) | Fixed | First in every chain, always enabled; trims the incoming level and shows a live input spectrum. |
 | [Gain](gain.md) | Level | Turns the whole signal up or down, starting at +12 dB. |
 | [Noise reduction](noise-reduction.md) | Cleanup | Hushes steady room noise such as hiss, fans, and air conditioning. |
-| [Gate/Compressor/Limiter/Expander](dynamics.md) | Dynamics | Controls signal above or below a threshold in one effect, depending on mode. |
+| [Gate/Expander](gate-expander.md) | Dynamics | Quiets signal below a threshold; finite Ratio expands, ∞ is a hard gate. |
+| [Compressor/Limiter](compressor-limiter.md) | Dynamics | Reduces signal above a threshold; finite Ratio compresses, ∞ is a hard limiter. |
 | [Equalizer](equalizer.md) | Dynamics | Tames boomy close-mic lows or fills out thin, distant ones in a chosen band. |
 | [Mono](mono.md) | Channels | Copies the left channel to all channels for a mono mic plugged into a stereo input. |
 | [Saturation/Overdrive/Distortion](saturation.md) | Tone | Adds soft saturation or a harder overdriven edge. |
@@ -39,7 +40,7 @@ All effects implement `apo::dsp::Stage` (`src/dsp/dsp.h`):
 | `Update(effect, format)` | Setup and runtime polling | Retune from one `EffectInstance` without allocating. |
 | `Reset()` | Setup and when instance identity/shape changes | Clear internal state, keep configuration. |
 | `NeedsSilence()` | Query from the chain | True when the stage buffers audio across calls and needs silent buffers to flush its tail. |
-| `MonitorValue()` | Every monitored buffer | Optional 0..1 stage-specific engagement value; Dynamics reports gain change, others return zero. |
+| `MonitorValue()` | Every monitored buffer | Optional 0..1 stage-specific engagement value; Gate/Expander and Compressor/Limiter report gain change, others return zero. |
 | `MonitorGainDb()` | Every monitored buffer | Optional signed gain change in dB; Equalizer reports its current dynamic cut/boost, others return zero. |
 | `Process(samples, frames, channels)` | Every `APOProcess` | Process `frames * channels` interleaved `double` values in `[-1, 1]`, in place. Real-time safe. |
 
@@ -67,40 +68,43 @@ runtime polling path.
 
 - The list holds at most `kMaxEffects` (16) effects in total, including the
   fixed Input row.
-- Input allows one instance; Noise reduction, the unified dynamics effect, and
-  reverb are heavy and allow at most 4 instances each (`kMaxHeavyEffects`).
+- Input allows one instance; Noise reduction, Gate/Expander,
+  Compressor/Limiter, and reverb are heavy and allow at most 4 instances each
+  (`kMaxHeavyEffects`).
   Other addable types can fill the remaining slots.
 - `apo::MakeEffect(type, id)` builds an instance from the type's struct defaults
   and **enables it**. The struct's own `enabled = false` is the "not set yet"
   value; a newly added effect in the GUI is always on. Input is forced on even
   if a stale file says otherwise.
 - `ClampSettings` repairs non-finite values using the fallback defaults in each
-  effect's page, clamps every number to its listed range (the dynamics and
-  equalizer ratios also accept positive infinity), inserts or repairs Input at
-  row 0, normalizes ids, and forces `isolateEffects = true`.
-- Settings schema version 9 is the only accepted version. A file with a missing
+  effect's page, clamps every number to its listed range (the Gate/Expander,
+  Compressor/Limiter, and Equalizer ratios also accept positive infinity),
+  inserts or repairs Input at row 0, normalizes ids, and forces
+  `isolateEffects = true`.
+- Settings schema version 10 is the only accepted version. A file with a missing
   or mismatched `[dsp] version` is deleted on load instead of migrated.
 
 ### Graph and transfer math
 
-The GUI draws an Input spectrum, a Gain input/output dot on a transfer curve, a
-mode-aware Dynamics transfer curve with an engagement bar, an Equalizer spectrum
-behind a static Level curve with a center-frequency dot, a yellow live dynamic
-curve, and a dashed mode-dependent Range limit, and a Saturation transfer curve
-with a mirrored operating point driven by the input peak after Drive. The
-selected effect also
+The GUI draws an Input spectrum, a Gain input/output dot on a transfer curve,
+Gate/Expander and Compressor/Limiter transfer curves with an engagement bar, an
+Equalizer spectrum behind a static Level curve with a center-frequency dot, a
+yellow live dynamic curve, and a dashed mode-dependent Range limit, and a
+Saturation transfer curve with a mirrored operating point driven by the input
+peak after Drive. The selected effect also
 gets a thin output meter with green, yellow, and red zones, dB labels, a
 short-held fill driven by a 0.06 s peak hold, and a slightly thicker 0.6 s
-peak-hold line whose colour matches the bar zone it sits in; Dynamics gets a
-separate engagement bar on the left. The Gain dot and Saturation marker use the
-same short APO-side holds as the meter fill, so short sounds are not skipped
-between 100 ms GUI polls. Input, Gain, and Dynamics keep a vertical range of
-**−96 to +24 dBFS**. The Equalizer's spectrum keeps that left-hand dBFS scale and
+peak-hold line whose colour matches the bar zone it sits in; both dynamics
+effects get a separate engagement bar on the left. The Gain dot and Saturation
+marker use the same short APO-side holds as the meter fill, so short sounds are
+not skipped between 100 ms GUI polls. Input, Gain, Gate/Expander, and
+Compressor/Limiter keep a vertical range of **−96 to +24 dBFS**. The Equalizer's
+spectrum keeps that left-hand dBFS scale and
 its labels, while its response curves use a centered **−96…+96 dB** scale with
 +96/0/−96 marks just inside the right edge; the plot rectangle does not move.
 Saturation uses normalized −1…1 transfer axes.
 
-The saturation and dynamics stages and their graphs call the same inline
+The saturation stage, both dynamics effects, and their graphs call the same inline
 functions in `src/dsp/transfer.h`, so the displayed curve cannot drift from the
 audio path. The equalizer graph normalizes the analog band-pass prototype
 approximated by `EqualizerStage` and multiplies it by the signed **Level** for

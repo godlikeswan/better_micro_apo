@@ -74,14 +74,15 @@ void DynamicsStage::Update(const EffectInstance& effect,
 {
     const bool wasEnabled = m_settings.enabled;
     const double oldLookahead = m_settings.lookaheadMs;
-    const DynamicsMode oldMode = m_settings.mode;
-    m_settings = effect.dynamics;
+    m_settings = (m_mode == DynamicsMode::CompressorLimiter)
+                     ? effect.compressor
+                     : effect.gate;
     ApplyCoefficients(format);
 
-    // A bypass change, a different delay length, or a mode flip invalidates the
-    // buffered tail and the smoothed gain.
+    // A bypass change or a different delay length invalidates the buffered
+    // tail and the smoothed gain. The transfer half is fixed for this stage.
     if (wasEnabled != m_settings.enabled ||
-        oldLookahead != m_settings.lookaheadMs || oldMode != m_settings.mode)
+        oldLookahead != m_settings.lookaheadMs)
     {
         Reset();
     }
@@ -159,11 +160,10 @@ void DynamicsStage::Process(double* samples, UINT32 frames, UINT32 channels)
         const double levelDb = LinearToDecibels(peak);
         const double delta = levelDb - m_thresholdDb;
         double targetDb =
-            DynamicsGainDb(levelDb, m_thresholdDb, m_settings.ratio,
-                           m_settings.mode);
+            DynamicsGainDb(levelDb, m_thresholdDb, m_settings.ratio, m_mode);
 
         bool holding = false;
-        if (m_settings.mode == DynamicsMode::CompressorLimiter)
+        if (m_mode == DynamicsMode::CompressorLimiter)
         {
             // Latch a deeper gain change so a short peak keeps its target
             // active long enough for attack to reach it. Hold includes the
@@ -227,8 +227,8 @@ void DynamicsStage::Process(double* samples, UINT32 frames, UINT32 channels)
         const bool deepening =
             std::fabs(targetDb) > std::fabs(m_gainDb) + 1e-6;
         const bool useAttack =
-            (m_settings.mode == DynamicsMode::CompressorLimiter) ? deepening
-                                                                 : !deepening;
+            (m_mode == DynamicsMode::CompressorLimiter) ? deepening
+                                                        : !deepening;
         m_gainDb += (targetDb - m_gainDb) *
                     (useAttack ? m_attackCoeff : m_releaseCoeff);
         const double gain = DecibelsToLinear(m_gainDb) * m_outputGain;
@@ -1447,8 +1447,13 @@ void StagePool::Configure(const AudioFormat& format,
                 // their bins without rebuilding the pool.
                 stage = std::make_unique<NoiseStage>(profile);
                 break;
-            case EffectType::Dynamics:
-                stage = std::make_unique<DynamicsStage>();
+            case EffectType::Gate:
+                stage = std::make_unique<DynamicsStage>(
+                    DynamicsMode::ExpanderGate);
+                break;
+            case EffectType::Compressor:
+                stage = std::make_unique<DynamicsStage>(
+                    DynamicsMode::CompressorLimiter);
                 break;
             case EffectType::Equalizer:
                 stage = std::make_unique<EqualizerStage>();

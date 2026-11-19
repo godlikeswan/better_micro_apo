@@ -57,7 +57,7 @@ All of these happen once per stream bind; none happen in `APOProcess`.
 | --- | --- | --- |
 | `BetterMicroApo` | `m_scratch` | `maxFrames * channels` `double`s. The interleaved input is decoded here, stages run in place, and the result is encoded to the output. |
 | `Chain` | `m_stages` | Reserves `kMaxEffects + 2` (18) `Stage*` slots and monitor bindings at construction so the temporary capture tap never allocates; `Clear`/refill never allocates. |
-| `StagePool` | stage objects | One stage per possible slot per type, `Configure`d once. Input allows 1, heavy types (noise, dynamics, reverb) allow 4, and other addable types allow 16. Noise stages are always created and pass audio through until a profile is available. |
+| `StagePool` | stage objects | One stage per possible slot per type, `Configure`d once. Input allows 1, heavy types (noise, gate/expander, compressor/limiter, reverb) allow 4, and other addable types allow 16. Noise stages are always created and pass audio through until a profile is available. |
 | `DynamicsStage` | `m_delay` | `ceil(300 ms * sampleRate) * channels` `double`s, sized for the maximum clamp so a live lookahead change never allocates. |
 | `EqualizerStage` | `m_ic1`, `m_ic2`, `m_band` | Per-channel filter and band state. |
 | `NoiseStage` | FFT plans + analysis buffers | Radix-2 tables and windows for every supported size (256–4096), profile bins, gain arrays, input/output/history/overlap-add and real/imag arrays sized for the largest size. `Update` switches the active size without allocating. |
@@ -111,8 +111,9 @@ now holds a different stable instance id, the stage is reset before being
 retuned from the new instance. Each enabled effect then gets
 `Stage::Update(effect, format)`, is added to the non-owning `Chain` with a
 monitor binding (stable id, type, and spectrum flag), and is included in the
-returned active count. Input and Equalizer request spectra; Dynamics supplies
-engagement through `Stage::MonitorValue()`, and Equalizer supplies its signed
+returned active count. Input and Equalizer request spectra; Gate/Expander and
+Compressor/Limiter supply engagement through `Stage::MonitorValue()`, and
+Equalizer supplies its signed
 dynamic gain through `Stage::MonitorGainDb()`. The chain is cleared and refilled
 without allocation, which is what makes live settings changes safe from the
 real-time path. `RebuildChain` is the single place that fills the chain, so a

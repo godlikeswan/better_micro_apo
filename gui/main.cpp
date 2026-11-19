@@ -66,6 +66,18 @@ DWORD g_clipHoldUntil = 0;
 unsigned g_dropTotal = 0;
 bool g_liveApplyPending = false;
 
+apo::DynamicsSettings& DynamicsOf(apo::EffectInstance& effect)
+{
+    return effect.type == apo::EffectType::Gate ? effect.gate
+                                                 : effect.compressor;
+}
+
+const apo::DynamicsSettings& DynamicsOf(const apo::EffectInstance& effect)
+{
+    return effect.type == apo::EffectType::Gate ? effect.gate
+                                                 : effect.compressor;
+}
+
 struct MeterEntry {
     DWORD tick = 0;
     double peak = 0.0;
@@ -259,9 +271,9 @@ void ShowEffectControls(apo::EffectType type, bool show)
                  g_noiseFftSizeLabel, g_noiseFftSizeCombo, g_noiseCapture,
                  g_noiseNote});
         break;
-    case apo::EffectType::Dynamics:
-        showAll({g_dynamicsModeLabel, g_dynamicsModeCombo,
-                 g_dynamicsInputLabel, g_dynamicsInputSlider,
+    case apo::EffectType::Gate:
+    case apo::EffectType::Compressor:
+        showAll({g_dynamicsInputLabel, g_dynamicsInputSlider,
                  g_dynamicsThresholdLabel, g_dynamicsThresholdSlider,
                  g_dynamicsRatioLabel, g_dynamicsRatioSlider,
                  g_dynamicsAttackLabel, g_dynamicsAttackSlider,
@@ -310,7 +322,6 @@ void ShowEffectControls(apo::EffectType type, bool show)
 void EnableEffectControls(bool enabled)
 {
     const HWND controls[] = {
-        g_dynamicsModeLabel, g_dynamicsModeCombo,
         g_dynamicsInputLabel, g_dynamicsInputSlider,
         g_dynamicsThresholdLabel, g_dynamicsThresholdSlider,
         g_dynamicsRatioLabel, g_dynamicsRatioSlider,
@@ -389,8 +400,6 @@ void ClearEffectEditor()
     for (int i = 0; i < static_cast<int>(apo::EffectType::Count); ++i) {
         ShowEffectControls(static_cast<apo::EffectType>(i), false);
     }
-    SendMessageW(g_dynamicsModeCombo, CB_SETCURSEL,
-                 static_cast<int>(apo::DynamicsMode::CompressorLimiter), 0);
     SendMessageW(g_eqDynamicCombo, CB_SETCURSEL,
                  static_cast<int>(apo::EqualizerDynamicsMode::None), 0);
     SendMessageW(g_distFunctionCombo, CB_SETCURSEL, apo::kDistortionTanh, 0);
@@ -484,22 +493,17 @@ void ReadEffectControls(apo::EffectInstance& effect)
         }
         break;
     }
-    case apo::EffectType::Dynamics: {
-        const int mode = static_cast<int>(
-            SendMessageW(g_dynamicsModeCombo, CB_GETCURSEL, 0, 0));
-        if (mode >= 0 && mode < static_cast<int>(apo::DynamicsMode::Count)) {
-            effect.dynamics.mode = static_cast<apo::DynamicsMode>(mode);
-        }
-        GetSliderValue(g_dynamicsInputSlider, effect.dynamics.inputDb);
-        GetSliderValue(g_dynamicsThresholdSlider,
-                       effect.dynamics.thresholdDb);
-        GetSliderValue(g_dynamicsRatioSlider, effect.dynamics.ratio);
-        GetSliderValue(g_dynamicsAttackSlider, effect.dynamics.attackMs);
-        GetSliderValue(g_dynamicsReleaseSlider, effect.dynamics.releaseMs);
-        GetSliderValue(g_dynamicsHoldSlider, effect.dynamics.holdMs);
-        GetSliderValue(g_dynamicsOutputSlider, effect.dynamics.outputDb);
-        GetSliderValue(g_dynamicsLookaheadSlider,
-                       effect.dynamics.lookaheadMs);
+    case apo::EffectType::Gate:
+    case apo::EffectType::Compressor: {
+        apo::DynamicsSettings& dynamics = DynamicsOf(effect);
+        GetSliderValue(g_dynamicsInputSlider, dynamics.inputDb);
+        GetSliderValue(g_dynamicsThresholdSlider, dynamics.thresholdDb);
+        GetSliderValue(g_dynamicsRatioSlider, dynamics.ratio);
+        GetSliderValue(g_dynamicsAttackSlider, dynamics.attackMs);
+        GetSliderValue(g_dynamicsReleaseSlider, dynamics.releaseMs);
+        GetSliderValue(g_dynamicsHoldSlider, dynamics.holdMs);
+        GetSliderValue(g_dynamicsOutputSlider, dynamics.outputDb);
+        GetSliderValue(g_dynamicsLookaheadSlider, dynamics.lookaheadMs);
         break;
     }
     case apo::EffectType::Equalizer: {
@@ -602,16 +606,15 @@ void ShowEffectForSelected()
     SetSliderValue(g_noiseReductionSlider, effect.noise.reductionDb);
     SendMessageW(g_noiseFftSizeCombo, CB_SETCURSEL,
                  apo::NoiseFftSizeIndex(effect.noise.fftSize), 0);
-    SendMessageW(g_dynamicsModeCombo, CB_SETCURSEL,
-                 static_cast<int>(effect.dynamics.mode), 0);
-    SetSliderValue(g_dynamicsInputSlider, effect.dynamics.inputDb);
-    SetSliderValue(g_dynamicsThresholdSlider, effect.dynamics.thresholdDb);
-    SetSliderValue(g_dynamicsRatioSlider, effect.dynamics.ratio);
-    SetSliderValue(g_dynamicsAttackSlider, effect.dynamics.attackMs);
-    SetSliderValue(g_dynamicsReleaseSlider, effect.dynamics.releaseMs);
-    SetSliderValue(g_dynamicsHoldSlider, effect.dynamics.holdMs);
-    SetSliderValue(g_dynamicsOutputSlider, effect.dynamics.outputDb);
-    SetSliderValue(g_dynamicsLookaheadSlider, effect.dynamics.lookaheadMs);
+    const apo::DynamicsSettings& dynamics = DynamicsOf(effect);
+    SetSliderValue(g_dynamicsInputSlider, dynamics.inputDb);
+    SetSliderValue(g_dynamicsThresholdSlider, dynamics.thresholdDb);
+    SetSliderValue(g_dynamicsRatioSlider, dynamics.ratio);
+    SetSliderValue(g_dynamicsAttackSlider, dynamics.attackMs);
+    SetSliderValue(g_dynamicsReleaseSlider, dynamics.releaseMs);
+    SetSliderValue(g_dynamicsHoldSlider, dynamics.holdMs);
+    SetSliderValue(g_dynamicsOutputSlider, dynamics.outputDb);
+    SetSliderValue(g_dynamicsLookaheadSlider, dynamics.lookaheadMs);
     SetSliderValue(g_gainSlider, effect.gain.gainDb);
     SendMessageW(g_eqDynamicCombo, CB_SETCURSEL,
                  static_cast<int>(effect.equalizer.mode), 0);
@@ -699,20 +702,19 @@ bool CommitEffectEditor(bool showValues = true)
         case apo::EffectType::Noise:
             SetSliderValue(g_noiseReductionSlider, shown.noise.reductionDb);
             break;
-        case apo::EffectType::Dynamics:
-            SendMessageW(g_dynamicsModeCombo, CB_SETCURSEL,
-                         static_cast<int>(shown.dynamics.mode), 0);
-            SetSliderValue(g_dynamicsInputSlider, shown.dynamics.inputDb);
-            SetSliderValue(g_dynamicsThresholdSlider,
-                           shown.dynamics.thresholdDb);
-            SetSliderValue(g_dynamicsRatioSlider, shown.dynamics.ratio);
-            SetSliderValue(g_dynamicsAttackSlider, shown.dynamics.attackMs);
-            SetSliderValue(g_dynamicsReleaseSlider, shown.dynamics.releaseMs);
-            SetSliderValue(g_dynamicsHoldSlider, shown.dynamics.holdMs);
-            SetSliderValue(g_dynamicsOutputSlider, shown.dynamics.outputDb);
-            SetSliderValue(g_dynamicsLookaheadSlider,
-                           shown.dynamics.lookaheadMs);
+        case apo::EffectType::Gate:
+        case apo::EffectType::Compressor: {
+            const apo::DynamicsSettings& dynamics = DynamicsOf(shown);
+            SetSliderValue(g_dynamicsInputSlider, dynamics.inputDb);
+            SetSliderValue(g_dynamicsThresholdSlider, dynamics.thresholdDb);
+            SetSliderValue(g_dynamicsRatioSlider, dynamics.ratio);
+            SetSliderValue(g_dynamicsAttackSlider, dynamics.attackMs);
+            SetSliderValue(g_dynamicsReleaseSlider, dynamics.releaseMs);
+            SetSliderValue(g_dynamicsHoldSlider, dynamics.holdMs);
+            SetSliderValue(g_dynamicsOutputSlider, dynamics.outputDb);
+            SetSliderValue(g_dynamicsLookaheadSlider, dynamics.lookaheadMs);
             break;
+        }
         case apo::EffectType::Equalizer:
             SendMessageW(g_eqDynamicCombo, CB_SETCURSEL,
                          static_cast<int>(shown.equalizer.mode), 0);
@@ -773,32 +775,29 @@ bool SameValue(double left, double right)
 bool ParameterAtDefault(const apo::EffectInstance& effect,
                         const apo::EffectInstance& defaults, int param)
 {
+    const apo::DynamicsSettings& dynamics = DynamicsOf(effect);
+    const apo::DynamicsSettings& defaultDynamics = DynamicsOf(defaults);
     switch (param) {
     case ParamResetNoiseReduction:
         return SameValue(effect.noise.reductionDb, defaults.noise.reductionDb);
     case ParamResetNoiseFftSize:
         return effect.noise.fftSize == defaults.noise.fftSize;
-    case ParamResetDynamicsMode:
-        return effect.dynamics.mode == defaults.dynamics.mode;
     case ParamResetDynamicsInput:
-        return SameValue(effect.dynamics.inputDb, defaults.dynamics.inputDb);
+        return SameValue(dynamics.inputDb, defaultDynamics.inputDb);
     case ParamResetDynamicsThreshold:
-        return SameValue(effect.dynamics.thresholdDb,
-                         defaults.dynamics.thresholdDb);
+        return SameValue(dynamics.thresholdDb, defaultDynamics.thresholdDb);
     case ParamResetDynamicsRatio:
-        return SameValue(effect.dynamics.ratio, defaults.dynamics.ratio);
+        return SameValue(dynamics.ratio, defaultDynamics.ratio);
     case ParamResetDynamicsAttack:
-        return SameValue(effect.dynamics.attackMs, defaults.dynamics.attackMs);
+        return SameValue(dynamics.attackMs, defaultDynamics.attackMs);
     case ParamResetDynamicsRelease:
-        return SameValue(effect.dynamics.releaseMs,
-                         defaults.dynamics.releaseMs);
+        return SameValue(dynamics.releaseMs, defaultDynamics.releaseMs);
     case ParamResetDynamicsHold:
-        return SameValue(effect.dynamics.holdMs, defaults.dynamics.holdMs);
+        return SameValue(dynamics.holdMs, defaultDynamics.holdMs);
     case ParamResetDynamicsOutput:
-        return SameValue(effect.dynamics.outputDb, defaults.dynamics.outputDb);
+        return SameValue(dynamics.outputDb, defaultDynamics.outputDb);
     case ParamResetDynamicsLookahead:
-        return SameValue(effect.dynamics.lookaheadMs,
-                         defaults.dynamics.lookaheadMs);
+        return SameValue(dynamics.lookaheadMs, defaultDynamics.lookaheadMs);
     case ParamResetInputGain:
         return SameValue(effect.gain.gainDb, defaults.gain.gainDb);
     case ParamResetGain:
@@ -903,6 +902,8 @@ void ResetParameter(int param)
         apo::ActivePreset(settings).effects[g_effectSelection];
     const apo::EffectInstance defaults =
         apo::MakeEffect(effect.type, effect.id);
+    apo::DynamicsSettings& dynamics = DynamicsOf(effect);
+    const apo::DynamicsSettings& defaultDynamics = DynamicsOf(defaults);
 
     switch (param) {
     case ParamResetNoiseReduction:
@@ -911,32 +912,29 @@ void ResetParameter(int param)
     case ParamResetNoiseFftSize:
         effect.noise.fftSize = defaults.noise.fftSize;
         break;
-    case ParamResetDynamicsMode:
-        effect.dynamics.mode = defaults.dynamics.mode;
-        break;
     case ParamResetDynamicsInput:
-        effect.dynamics.inputDb = defaults.dynamics.inputDb;
+        dynamics.inputDb = defaultDynamics.inputDb;
         break;
     case ParamResetDynamicsThreshold:
-        effect.dynamics.thresholdDb = defaults.dynamics.thresholdDb;
+        dynamics.thresholdDb = defaultDynamics.thresholdDb;
         break;
     case ParamResetDynamicsRatio:
-        effect.dynamics.ratio = defaults.dynamics.ratio;
+        dynamics.ratio = defaultDynamics.ratio;
         break;
     case ParamResetDynamicsAttack:
-        effect.dynamics.attackMs = defaults.dynamics.attackMs;
+        dynamics.attackMs = defaultDynamics.attackMs;
         break;
     case ParamResetDynamicsRelease:
-        effect.dynamics.releaseMs = defaults.dynamics.releaseMs;
+        dynamics.releaseMs = defaultDynamics.releaseMs;
         break;
     case ParamResetDynamicsHold:
-        effect.dynamics.holdMs = defaults.dynamics.holdMs;
+        dynamics.holdMs = defaultDynamics.holdMs;
         break;
     case ParamResetDynamicsOutput:
-        effect.dynamics.outputDb = defaults.dynamics.outputDb;
+        dynamics.outputDb = defaultDynamics.outputDb;
         break;
     case ParamResetDynamicsLookahead:
-        effect.dynamics.lookaheadMs = defaults.dynamics.lookaheadMs;
+        dynamics.lookaheadMs = defaultDynamics.lookaheadMs;
         break;
     case ParamResetInputGain:
         effect.gain.gainDb = defaults.gain.gainDb;
@@ -2311,7 +2309,6 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             }
             break;
         case IDC_DIST_FUNCTION_COMBO:
-        case IDC_DYN_MODE_COMBO:
         case IDC_EQ_DYNAMIC_COMBO:
         case IDC_REVERB_ALGORITHM_COMBO:
         case IDC_NOISE_FFT_SIZE_COMBO:

@@ -15,9 +15,9 @@ the Add effect menu and is enabled with a default of **+12 dB**.
   speech, peaks around **−5 dBFS** and RMS around **−20 dBFS** are a good place
   to land. There should be no **CLIP** — if it shows up, slide the gain down.
 - If turning the mic up also makes room noise obvious, fix that with
-  [Noise reduction](noise-reduction.md) or the unified
-  [Gate/Compressor/Limiter/Expander](dynamics.md) effect instead of lowering the
-  voice level again.
+  [Noise reduction](noise-reduction.md), [Gate/Expander](gate-expander.md), or
+  [Compressor/Limiter](compressor-limiter.md) instead of lowering the voice level
+  again.
 - A newly added Gain starts at **+12 dB**, so it raises the level immediately.
   The little ↺ button next to it goes back to +12 dB.
 

@@ -65,8 +65,8 @@ busy.
   Input is omitted because it already exists at row 0; types that are already at
   their per-type capacity are omitted too. The chosen effect is inserted after
   the selected row (never above Input), or appended if nothing is selected. The
-  graph panel includes per-stage meters for Input, Gain, Dynamics, Equalizer,
-  and Saturation.
+  graph panel includes per-stage meters for Input, Gain, Gate/Expander,
+  Compressor/Limiter, Equalizer, and Saturation.
 - **About → Info** (`gui/ui/info_dialog.cpp`) is a manual modal loop. It shows
   hashes, install path, CLSID, registry status, and `Applied to N devices`, and
   follows theme changes while open. Its OK button is a regular button.

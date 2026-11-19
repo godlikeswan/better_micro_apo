@@ -211,22 +211,13 @@ const wchar_t* EffectTypeName(EffectType type)
     case EffectType::Input:      return L"Input";
     case EffectType::Gain:       return L"Gain";
     case EffectType::Noise:      return L"Noise reduction";
-    case EffectType::Dynamics:   return L"Gate/Compressor/Limiter/Expander";
+    case EffectType::Gate:       return L"Gate/Expander";
+    case EffectType::Compressor: return L"Compressor/Limiter";
     case EffectType::Equalizer:  return L"Equalizer";
     case EffectType::Mono:       return L"Mono";
     case EffectType::Saturation: return L"Saturation/Overdrive/Distortion";
     case EffectType::Reverb:     return L"Reverb";
     default:                     return L"";
-    }
-}
-
-const wchar_t* DynamicsModeName(DynamicsMode mode)
-{
-    switch (mode)
-    {
-    case DynamicsMode::CompressorLimiter: return L"Compressor/Limiter";
-    case DynamicsMode::ExpanderGate:      return L"Expander/Gate";
-    default:                              return L"";
     }
 }
 
@@ -273,7 +264,8 @@ const char* EffectTypeKey(EffectType type)
     case EffectType::Input:      return "input";
     case EffectType::Gain:       return "gain";
     case EffectType::Noise:      return "noise";
-    case EffectType::Dynamics:   return "dynamics";
+    case EffectType::Gate:       return "gate";
+    case EffectType::Compressor: return "compressor";
     case EffectType::Equalizer:  return "equalizer";
     case EffectType::Mono:       return "mono";
     case EffectType::Saturation: return "saturation";
@@ -303,7 +295,8 @@ int EffectTypeCapacity(EffectType type)
     case EffectType::Input:
         return 1;
     case EffectType::Noise:
-    case EffectType::Dynamics:
+    case EffectType::Gate:
+    case EffectType::Compressor:
     case EffectType::Reverb:
         return kMaxHeavyEffects;
     default:
@@ -318,7 +311,8 @@ bool EffectEnabled(const EffectInstance& effect)
     case EffectType::Input:      return true;
     case EffectType::Gain:       return effect.gain.enabled;
     case EffectType::Noise:      return effect.noise.enabled;
-    case EffectType::Dynamics:   return effect.dynamics.enabled;
+    case EffectType::Gate:       return effect.gate.enabled;
+    case EffectType::Compressor: return effect.compressor.enabled;
     case EffectType::Equalizer:  return effect.equalizer.enabled;
     case EffectType::Mono:       return effect.mono.enabled;
     case EffectType::Saturation: return effect.distortion.enabled;
@@ -334,7 +328,8 @@ void SetEffectEnabled(EffectInstance& effect, bool enabled)
     case EffectType::Input:      effect.gain.enabled = true; break;
     case EffectType::Gain:       effect.gain.enabled = enabled; break;
     case EffectType::Noise:      effect.noise.enabled = enabled; break;
-    case EffectType::Dynamics:   effect.dynamics.enabled = enabled; break;
+    case EffectType::Gate:       effect.gate.enabled = enabled; break;
+    case EffectType::Compressor: effect.compressor.enabled = enabled; break;
     case EffectType::Equalizer:  effect.equalizer.enabled = enabled; break;
     case EffectType::Mono:       effect.mono.enabled = enabled; break;
     case EffectType::Saturation: effect.distortion.enabled = enabled; break;
@@ -411,6 +406,23 @@ void ClampRatio(double& value)
     value = Clamp(value, kDynamicsMinRatio, kDynamicsMaxFiniteRatio);
 }
 
+namespace {
+
+void ClampDynamics(DynamicsSettings& dynamics)
+{
+    ClampFinite(dynamics.thresholdDb, -15.0, kMinThresholdDb,
+                kMaxThresholdDb);
+    ClampRatio(dynamics.ratio);
+    ClampFinite(dynamics.inputDb, 0.0, -24.0, 30.0);
+    ClampFinite(dynamics.outputDb, 0.0, -24.0, 24.0);
+    ClampFinite(dynamics.attackMs, 5.0, 0.1, 1000.0);
+    ClampFinite(dynamics.releaseMs, 100.0, 1.0, 5000.0);
+    ClampFinite(dynamics.holdMs, 50.0, 0.0, 2000.0);
+    ClampFinite(dynamics.lookaheadMs, 0.0, 0.0, kDynamicsMaxLookaheadMs);
+}
+
+} // namespace
+
 void ClampEffect(EffectInstance& effect)
 {
     switch (effect.type)
@@ -430,21 +442,12 @@ void ClampEffect(EffectInstance& effect)
         effect.noise.fftSize = ValidNoiseFftSize(effect.noise.fftSize);
         break;
 
-    case EffectType::Dynamics:
-        if (effect.dynamics.mode < DynamicsMode::CompressorLimiter ||
-            effect.dynamics.mode >= DynamicsMode::Count) {
-            effect.dynamics.mode = DynamicsMode::CompressorLimiter;
-        }
-        ClampFinite(effect.dynamics.thresholdDb, -15.0, kMinThresholdDb,
-                    kMaxThresholdDb);
-        ClampRatio(effect.dynamics.ratio);
-        ClampFinite(effect.dynamics.inputDb, 0.0, -24.0, 30.0);
-        ClampFinite(effect.dynamics.outputDb, 0.0, -24.0, 24.0);
-        ClampFinite(effect.dynamics.attackMs, 5.0, 0.1, 1000.0);
-        ClampFinite(effect.dynamics.releaseMs, 100.0, 1.0, 5000.0);
-        ClampFinite(effect.dynamics.holdMs, 50.0, 0.0, 2000.0);
-        ClampFinite(effect.dynamics.lookaheadMs, 0.0, 0.0,
-                    kDynamicsMaxLookaheadMs);
+    case EffectType::Gate:
+        ClampDynamics(effect.gate);
+        break;
+
+    case EffectType::Compressor:
+        ClampDynamics(effect.compressor);
         break;
 
     case EffectType::Equalizer: {
@@ -460,7 +463,7 @@ void ClampEffect(EffectInstance& effect)
         ClampFinite(effect.equalizer.thresholdDb, -45.0, kMinThresholdDb,
                     kMaxThresholdDb);
         // Positive infinity is allowed here too: the right end stop is a hard
-        // limiter/expander, matching the unified dynamics ratio slider.
+        // limiter/expander, matching the standalone dynamics ratio sliders.
         double& equalizerRatio = effect.equalizer.ratio;
         if (std::isinf(equalizerRatio) && equalizerRatio > 0.0) {
             // Keep true infinity.
@@ -634,10 +637,25 @@ void LoadEffectFields(const std::vector<KeyValue>& entries,
             ParseInt(*text, value);
         }
     };
+    auto loadDynamics = [&](const wchar_t* key, DynamicsSettings& dynamics) {
+        const std::wstring fieldPrefix = std::wstring(key) + L"_";
+        auto read = [&](const wchar_t* field, double& value) {
+            getDouble((fieldPrefix + field).c_str(), value);
+        };
+        read(L"threshold_db", dynamics.thresholdDb);
+        read(L"ratio", dynamics.ratio);
+        read(L"input_db", dynamics.inputDb);
+        read(L"output_db", dynamics.outputDb);
+        read(L"attack_ms", dynamics.attackMs);
+        read(L"release_ms", dynamics.releaseMs);
+        read(L"hold_ms", dynamics.holdMs);
+        read(L"lookahead_ms", dynamics.lookaheadMs);
+    };
 
     getBool(L"enabled", effect.gain.enabled);
     getBool(L"enabled", effect.noise.enabled);
-    getBool(L"enabled", effect.dynamics.enabled);
+    getBool(L"enabled", effect.gate.enabled);
+    getBool(L"enabled", effect.compressor.enabled);
     getBool(L"enabled", effect.equalizer.enabled);
     getBool(L"enabled", effect.mono.enabled);
     getBool(L"enabled", effect.distortion.enabled);
@@ -655,20 +673,13 @@ void LoadEffectFields(const std::vector<KeyValue>& entries,
         getInt(L"noise_fft_size", effect.noise.fftSize);
         break;
 
-    case EffectType::Dynamics: {
-        int mode = static_cast<int>(DynamicsMode::CompressorLimiter);
-        getInt(L"dynamics_mode", mode);
-        effect.dynamics.mode = static_cast<DynamicsMode>(mode);
-        getDouble(L"dynamics_threshold_db", effect.dynamics.thresholdDb);
-        getDouble(L"dynamics_ratio", effect.dynamics.ratio);
-        getDouble(L"dynamics_input_db", effect.dynamics.inputDb);
-        getDouble(L"dynamics_output_db", effect.dynamics.outputDb);
-        getDouble(L"dynamics_attack_ms", effect.dynamics.attackMs);
-        getDouble(L"dynamics_release_ms", effect.dynamics.releaseMs);
-        getDouble(L"dynamics_hold_ms", effect.dynamics.holdMs);
-        getDouble(L"dynamics_lookahead_ms", effect.dynamics.lookaheadMs);
+    case EffectType::Gate:
+        loadDynamics(L"gate", effect.gate);
         break;
-    }
+
+    case EffectType::Compressor:
+        loadDynamics(L"compressor", effect.compressor);
+        break;
 
     case EffectType::Equalizer: {
         int mode = static_cast<int>(EqualizerDynamicsMode::None);
@@ -826,6 +837,27 @@ bool LoadSettings(const std::wstring& endpointId, ApoSettings& settings)
     return true;
 }
 
+namespace {
+
+void AppendDynamics(std::string& text, const std::string& prefix,
+                    const char* key, const DynamicsSettings& dynamics)
+{
+    const std::string fieldPrefix = prefix + key + "_";
+    text += fieldPrefix + "threshold_db=" +
+            FormatDouble(dynamics.thresholdDb) + "\n";
+    text += fieldPrefix + "ratio=" + FormatDouble(dynamics.ratio) + "\n";
+    text += fieldPrefix + "input_db=" + FormatDouble(dynamics.inputDb) + "\n";
+    text += fieldPrefix + "output_db=" + FormatDouble(dynamics.outputDb) + "\n";
+    text += fieldPrefix + "attack_ms=" + FormatDouble(dynamics.attackMs) + "\n";
+    text += fieldPrefix + "release_ms=" +
+            FormatDouble(dynamics.releaseMs) + "\n";
+    text += fieldPrefix + "hold_ms=" + FormatDouble(dynamics.holdMs) + "\n";
+    text += fieldPrefix + "lookahead_ms=" +
+            FormatDouble(dynamics.lookaheadMs) + "\n";
+}
+
+} // namespace
+
 bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
 {
     ApoSettings settings = input;
@@ -875,26 +907,12 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
                         std::to_string(effect.noise.fftSize) + "\n";
                 break;
 
-            case EffectType::Dynamics:
-                text += prefix + "dynamics_mode=" +
-                        std::to_string(static_cast<int>(effect.dynamics.mode)) +
-                        "\n";
-                text += prefix + "dynamics_threshold_db=" +
-                        FormatDouble(effect.dynamics.thresholdDb) + "\n";
-                text += prefix + "dynamics_ratio=" +
-                        FormatDouble(effect.dynamics.ratio) + "\n";
-                text += prefix + "dynamics_input_db=" +
-                        FormatDouble(effect.dynamics.inputDb) + "\n";
-                text += prefix + "dynamics_output_db=" +
-                        FormatDouble(effect.dynamics.outputDb) + "\n";
-                text += prefix + "dynamics_attack_ms=" +
-                        FormatDouble(effect.dynamics.attackMs) + "\n";
-                text += prefix + "dynamics_release_ms=" +
-                        FormatDouble(effect.dynamics.releaseMs) + "\n";
-                text += prefix + "dynamics_hold_ms=" +
-                        FormatDouble(effect.dynamics.holdMs) + "\n";
-                text += prefix + "dynamics_lookahead_ms=" +
-                        FormatDouble(effect.dynamics.lookaheadMs) + "\n";
+            case EffectType::Gate:
+                AppendDynamics(text, prefix, "gate", effect.gate);
+                break;
+
+            case EffectType::Compressor:
+                AppendDynamics(text, prefix, "compressor", effect.compressor);
                 break;
 
             case EffectType::Equalizer:

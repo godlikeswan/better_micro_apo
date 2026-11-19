@@ -84,5 +84,5 @@ effects; use it sparingly on speech or the words get muddy.
 - `NeedsSilence()` is true while enabled with a nonzero Level so the tail is
   flushed through silent buffers instead of being cut off or replayed later.
 - `Process` itself is allocation-free. There is no graph for reverb; the
-  transfer-curve control is used by Saturation/Overdrive/Distortion and the
-  unified Gate/Compressor/Limiter/Expander effect.
+  transfer-curve control is used by Saturation/Overdrive/Distortion,
+  Gate/Expander, and Compressor/Limiter.

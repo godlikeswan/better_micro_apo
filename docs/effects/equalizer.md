@@ -7,8 +7,8 @@ band is changed; the rest of the voice is left alone.
 
 ## Try this
 
-- Put Equalizer before the unified
-  [Gate/Compressor/Limiter/Expander](dynamics.md), while the level still has its
+- Put Equalizer before [Gate/Expander](gate-expander.md) or
+  [Compressor/Limiter](compressor-limiter.md), while the level still has its
   natural movement.
 - Leave **Dynamic** at **No** to start. Talk normally and move **Level** down
   until the chesty low end is under control, or up if the voice needs body. The
@@ -40,8 +40,9 @@ band is changed; the rest of the voice is left alone.
   **Lookahead** delays the audio so the detector can act before a transient
   reaches the output; it adds the same latency to the stream. Both start at 0,
   with Hold defaulting to 50 ms.
-- **Ratio**, **Attack**, and **Release** work like the controls in the unified
-  dynamics effect, but only on this band. Keep Ratio moderate and use a slower
+- **Ratio**, **Attack**, and **Release** work like the controls in the
+  standalone Gate/Expander and Compressor/Limiter effects, but only on this
+  band. Keep Ratio moderate and use a slower
   Release if the low end pumps between words.
 - When Dynamic is **No**, the detector controls are greyed out but keep their
   values. Changing back to Compressor or Expander restores them.

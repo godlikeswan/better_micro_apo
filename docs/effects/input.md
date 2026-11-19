@@ -18,9 +18,9 @@ Its row has no `×` delete cell, and the checkbox stays checked.
   **−20 dBFS** on the bottom Listen meter. The meter next to the graph follows
   the Input stage output, after the gain trim.
 - If turning the mic up also makes room noise obvious, fix that with
-  [Noise reduction](noise-reduction.md) or the unified
-  [Gate/Compressor/Limiter/Expander](dynamics.md) effect instead of lowering the
-  voice level again.
+  [Noise reduction](noise-reduction.md), [Gate/Expander](gate-expander.md), or
+  [Compressor/Limiter](compressor-limiter.md) instead of lowering the voice level
+  again.
 - The ↺ button resets Input gain to 0 dB.
 
 ## Controls
