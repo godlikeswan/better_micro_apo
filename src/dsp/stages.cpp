@@ -1,4 +1,5 @@
 ﻿#include "dsp/stages.h"
+#include "pitch.h"
 
 #include <algorithm>
 #include <cmath>
@@ -25,6 +26,17 @@ double EffectiveSampleRate(const AudioFormat& format)
 {
     return (format.sampleRate > 0) ? static_cast<double>(format.sampleRate)
                                    : 48000.0;
+}
+
+// Tuner analysis rejects sub-audio rumble before pitch detection. These affect
+// only the detector's mono copy, never the audio buffer.
+constexpr double kTunerRumbleHighPassHz = 45.0;
+constexpr double kTunerMinPitchHz = 55.0;
+
+double TunerRumbleHighPassCoeff(double sampleRate)
+{
+    constexpr double pi = 3.14159265358979323846;
+    return 1.0 / (1.0 + 2.0 * pi * kTunerRumbleHighPassHz / sampleRate);
 }
 
 // Mono excitation feeds the common mode. The stereo output taps contain a
@@ -1418,6 +1430,399 @@ void ReverbStage::Process(double* samples, UINT32 frames, UINT32 channels)
     }
 }
 
+void TunerStage::Configure(const AudioFormat& format)
+{
+    m_sampleRate = EffectiveSampleRate(format);
+    m_highPassCoeff = TunerRumbleHighPassCoeff(m_sampleRate);
+    const std::size_t maxSize =
+        static_cast<std::size_t>(kTunerSampleSizes.back());
+
+    m_window.assign(maxSize, 0.0);
+    m_mono.assign(maxSize, 0.0);
+    m_decimated.assign(maxSize, 0.0);
+    m_lagValues.assign(maxSize / 2 + 1, 0.0);
+    m_real.assign(maxSize, 0.0);
+    m_imag.assign(maxSize, 0.0);
+
+    constexpr double kPi = 3.14159265358979323846;
+    for (std::size_t i = 0; i < maxSize; ++i) {
+        m_window[i] =
+            0.5 - 0.5 * std::cos(2.0 * kPi * static_cast<double>(i) /
+                                 static_cast<double>(maxSize - 1));
+    }
+
+    m_fftPlans.clear();
+    m_fftPlans.reserve(kTunerSampleSizes.size());
+    for (int size : kTunerSampleSizes) {
+        m_fftPlans.emplace_back(static_cast<std::size_t>(size));
+    }
+
+    m_sampleSize =
+        static_cast<std::size_t>(ValidTunerSampleSize(m_settings.sampleSize));
+    Reset();
+}
+
+void TunerStage::Update(const EffectInstance& effect, const AudioFormat& format)
+{
+    const double sampleRate = EffectiveSampleRate(format);
+    const bool shapeChanged =
+        m_settings.sampleSize != effect.tuner.sampleSize ||
+        m_settings.algorithm != effect.tuner.algorithm ||
+        m_sampleRate != sampleRate;
+    m_settings = effect.tuner;
+    m_sampleRate = sampleRate;
+    m_highPassCoeff = TunerRumbleHighPassCoeff(m_sampleRate);
+    m_sampleSize =
+        static_cast<std::size_t>(ValidTunerSampleSize(m_settings.sampleSize));
+    if (shapeChanged) {
+        ResetAnalysis();
+    }
+}
+
+void TunerStage::Reset()
+{
+    ResetAnalysis();
+}
+
+void TunerStage::ResetAnalysis()
+{
+    m_filled = 0;
+    m_highPassInput = 0.0;
+    m_highPassOutput = 0.0;
+    m_lastMidi = 0.0;
+    m_hasLastMidi = false;
+    m_monitor = {};
+}
+
+void TunerStage::Process(double* samples, UINT32 frames, UINT32 channels)
+{
+    if (samples == nullptr || frames == 0 || channels == 0 ||
+        m_sampleSize == 0) {
+        return;
+    }
+
+    for (UINT32 frame = 0; frame < frames; ++frame) {
+        double value = 0.0;
+        const double* frameSamples =
+            samples + static_cast<std::size_t>(frame) * channels;
+        for (UINT32 channel = 0; channel < channels; ++channel) {
+            value += frameSamples[channel];
+        }
+        const double mono = value / static_cast<double>(channels);
+        // One-pole rumble high-pass on the analysis copy only. The sample
+        // buffer is never touched, so this adds no filtering or latency.
+        const double filtered =
+            m_highPassCoeff * (m_highPassOutput + mono - m_highPassInput);
+        m_highPassInput = mono;
+        m_highPassOutput = filtered;
+        m_mono[m_filled++] = filtered;
+
+        if (m_filled < m_sampleSize) {
+            continue;
+        }
+
+        double frequencyHz = 0.0;
+        double confidence = 0.0;
+        const bool detected =
+            m_settings.algorithm == TunerAlgorithm::FftPeak
+                ? DetectFftPeak(frequencyHz, confidence)
+                : DetectAutocorrelation(frequencyHz, confidence);
+        ApplyDetection(detected ? frequencyHz : 0.0,
+                       detected ? confidence : 0.0);
+
+        // Overlapping windows keep the display responsive without allocating;
+        // a quarter-window hop is about 43 ms for 8192 samples at 48 kHz.
+        const std::size_t hop = std::max<std::size_t>(1, m_sampleSize / 4);
+        const std::size_t keep = m_sampleSize - hop;
+        std::memmove(m_mono.data(), m_mono.data() + hop,
+                     keep * sizeof(double));
+        m_filled = keep;
+    }
+}
+
+bool TunerStage::DetectAutocorrelation(double& frequencyHz, double& confidence)
+{
+    // Decimating to about 12 kHz keeps the lag search cheap while still
+    // covering the upper end of the note map.
+    const int decimation =
+        std::max(1, static_cast<int>(std::ceil(m_sampleRate / 12000.0)));
+    const std::size_t count = m_sampleSize / static_cast<std::size_t>(decimation);
+    if (count < 64) {
+        return false;
+    }
+    const double rate = m_sampleRate / static_cast<double>(decimation);
+    for (std::size_t i = 0; i < count; ++i) {
+        double average = 0.0;
+        const std::size_t start = i * static_cast<std::size_t>(decimation);
+        for (int k = 0; k < decimation; ++k) {
+            average += m_mono[start + static_cast<std::size_t>(k)];
+        }
+        m_decimated[i] = average / static_cast<double>(decimation);
+    }
+
+    double energy = 0.0;
+    for (std::size_t i = 0; i < count; ++i) {
+        energy += m_decimated[i] * m_decimated[i];
+    }
+    const double rms = std::sqrt(energy / static_cast<double>(count));
+    if (!std::isfinite(rms) || rms < 1e-4) {
+        return false;
+    }
+
+    const double minHz =
+        std::max(kTunerMinPitchHz, rate * 2.0 / static_cast<double>(count));
+    const double maxHz = std::min(4000.0, rate * 0.45);
+    if (!(maxHz > minHz)) {
+        return false;
+    }
+
+    const std::size_t maxLagLimit = count / 2 - 1;
+    const auto clampLag = [maxLagLimit](double value) {
+        const long long rounded = std::lround(value);
+        return static_cast<std::size_t>(
+            std::clamp(rounded, 2LL, static_cast<long long>(maxLagLimit)));
+    };
+    const std::size_t minLag = clampLag(std::floor(rate / maxHz));
+    const std::size_t maxLag = clampLag(std::ceil(rate / minHz));
+    if (maxLag <= minLag) {
+        return false;
+    }
+
+    // Cumulative-mean normalized difference (the YIN cost function). Its
+    // minimum at a lag gives the period; the first clear local minimum avoids
+    // jumping to an octave of the true pitch.
+    double running = 0.0;
+    double bestValue = std::numeric_limits<double>::infinity();
+    std::size_t bestLag = minLag;
+    for (std::size_t lag = 1; lag <= maxLag; ++lag) {
+        double sum = 0.0;
+        for (std::size_t i = 0; i + lag < count; ++i) {
+            const double difference = m_decimated[i] - m_decimated[i + lag];
+            sum += difference * difference;
+        }
+        running += sum;
+        const double normalized =
+            running > 1e-12
+                ? sum * static_cast<double>(lag) / running
+                : 1.0;
+        m_lagValues[lag] = normalized;
+        if (lag >= minLag && normalized < bestValue) {
+            bestValue = normalized;
+            bestLag = lag;
+        }
+    }
+
+    constexpr double kThreshold = 0.18;
+    std::size_t chosen = bestLag;
+    for (std::size_t lag = minLag; lag < maxLag; ++lag) {
+        if (m_lagValues[lag] <= kThreshold &&
+            m_lagValues[lag] <= m_lagValues[lag - 1] &&
+            m_lagValues[lag] <= m_lagValues[lag + 1]) {
+            chosen = lag;
+            break;
+        }
+    }
+
+    double value = m_lagValues[chosen];
+    if (!std::isfinite(value) || value > 0.35) {
+        return false;
+    }
+
+    // A strong upper harmonic can make the first clear dip sit at half or a
+    // third of the true period. Promote an integer-longer dip only when it is
+    // much deeper, so ordinary period-doubling noise cannot pull the reading
+    // down an octave. Comparable dips prefer the longer one once a correction
+    // has started, which handles missing fundamentals cleanly.
+    std::size_t promoted = chosen;
+    double promotedValue = value;
+    bool corrected = false;
+    constexpr int factors[] = {2, 3};
+    for (int factor : factors) {
+        const std::size_t candidate =
+            chosen * static_cast<std::size_t>(factor);
+        if (candidate > maxLag || candidate + 1 >= m_lagValues.size()) {
+            continue;
+        }
+        const double candidateValue = m_lagValues[candidate];
+        if (!std::isfinite(candidateValue) || candidateValue > 0.25) {
+            continue;
+        }
+        const bool localMinimum =
+            candidateValue <= m_lagValues[candidate - 1] &&
+            candidateValue <= m_lagValues[candidate + 1];
+        const bool substantiallyDeeper = candidateValue < promotedValue * 0.6;
+        const bool comparableAndLonger =
+            corrected && candidate > promoted &&
+            candidateValue <= promotedValue + 0.02;
+        if (localMinimum && (substantiallyDeeper || comparableAndLonger)) {
+            promoted = candidate;
+            promotedValue = candidateValue;
+            corrected = true;
+        }
+    }
+    chosen = promoted;
+    value = promotedValue;
+
+    const double left = m_lagValues[chosen - 1];
+    const double right = m_lagValues[chosen + 1];
+    const double denominator = left - 2.0 * value + right;
+    double delta = 0.0;
+    if (std::fabs(denominator) > 1e-12) {
+        delta = std::clamp(0.5 * (left - right) / denominator, -0.5, 0.5);
+    }
+    const double period = static_cast<double>(chosen) + delta;
+    if (period <= 0.0) {
+        return false;
+    }
+
+    frequencyHz = rate / period;
+    confidence = std::clamp(1.0 - value / 0.35, 0.0, 1.0);
+    return frequencyHz >= minHz && frequencyHz <= maxHz;
+}
+
+bool TunerStage::DetectFftPeak(double& frequencyHz, double& confidence)
+{
+    const std::size_t size = m_sampleSize;
+    std::size_t planIndex = 0;
+    for (std::size_t i = 0; i < kTunerSampleSizes.size(); ++i) {
+        if (kTunerSampleSizes[i] == static_cast<int>(size)) {
+            planIndex = i;
+            break;
+        }
+    }
+    if (planIndex >= m_fftPlans.size()) {
+        return false;
+    }
+
+    double energy = 0.0;
+    for (std::size_t i = 0; i < size; ++i) {
+        energy += m_mono[i] * m_mono[i];
+        m_real[i] = m_mono[i] * m_window[i];
+        m_imag[i] = 0.0;
+    }
+    const double rms = std::sqrt(energy / static_cast<double>(size));
+    if (!std::isfinite(rms) || rms < 1e-4) {
+        return false;
+    }
+
+    m_fftPlans[planIndex].Forward(m_real.data(), m_imag.data());
+
+    const double binHz = m_sampleRate / static_cast<double>(size);
+    // Include the bin at the lower limit while excluding sub-audio rumble.
+    const int firstBin =
+        std::max(1, static_cast<int>(std::ceil(kTunerMinPitchHz / binHz)) - 1);
+    const int lastBin = std::min(
+        static_cast<int>(size / 2) - 1,
+        static_cast<int>(std::ceil(4000.0 / binHz)));
+    if (lastBin <= firstBin) {
+        return false;
+    }
+
+    auto magnitudeAt = [&](int bin) {
+        return std::hypot(m_real[static_cast<std::size_t>(bin)],
+                          m_imag[static_cast<std::size_t>(bin)]);
+    };
+    int peakBin = firstBin;
+    double peak = 0.0;
+    double total = 0.0;
+    for (int bin = firstBin; bin <= lastBin; ++bin) {
+        const double magnitude = magnitudeAt(bin);
+        total += magnitude;
+        if (magnitude > peak) {
+            peak = magnitude;
+            peakBin = bin;
+        }
+    }
+    if (peak <= 1e-9) {
+        return false;
+    }
+
+    // If the largest bin is an upper harmonic, a weaker fundamental can still
+    // be a clear peak at half or a third of its frequency. Prefer a reasonably
+    // strong subharmonic so the readout stops hopping between octaves.
+    int selectedBin = peakBin;
+    double selectedMagnitude = peak;
+    constexpr int divisors[] = {3, 2};
+    for (int divisor : divisors) {
+        const double subharmonicHz =
+            static_cast<double>(peakBin) * binHz /
+            static_cast<double>(divisor);
+        if (subharmonicHz < kTunerMinPitchHz) {
+            continue;
+        }
+        const int targetBin =
+            static_cast<int>(std::lround(subharmonicHz / binHz));
+        int bestBin = -1;
+        double bestMagnitude = 0.0;
+        const int low = std::max(firstBin, targetBin - 2);
+        const int high = std::min(lastBin, targetBin + 2);
+        for (int bin = low; bin <= high; ++bin) {
+            const double magnitude = magnitudeAt(bin);
+            if (magnitude > bestMagnitude) {
+                bestMagnitude = magnitude;
+                bestBin = bin;
+            }
+        }
+        if (bestBin >= 0 && bestBin < selectedBin &&
+            bestMagnitude >= peak * 0.25) {
+            selectedBin = bestBin;
+            selectedMagnitude = bestMagnitude;
+        }
+    }
+
+    const double average = total / static_cast<double>(lastBin - firstBin + 1);
+    const double baseConfidence =
+        std::clamp((peak / std::max(average, 1e-9) - 1.0) / 5.0, 0.0, 1.0);
+    // A promoted subharmonic is less certain than the strongest bin itself.
+    confidence = baseConfidence *
+                 (0.5 + 0.5 * std::clamp(selectedMagnitude / peak, 0.0, 1.0));
+
+    const double left = std::log(magnitudeAt(selectedBin - 1) + 1e-12);
+    const double center = std::log(selectedMagnitude + 1e-12);
+    const double right = std::log(magnitudeAt(selectedBin + 1) + 1e-12);
+    const double denominator = left - 2.0 * center + right;
+    double delta = 0.0;
+    if (std::fabs(denominator) > 1e-12) {
+        delta = std::clamp(0.5 * (left - right) / denominator, -0.5, 0.5);
+    }
+    frequencyHz = static_cast<double>(selectedBin + delta) * binHz;
+    return std::isfinite(frequencyHz) &&
+           frequencyHz >= kTunerMinPitchHz && frequencyHz <= 4000.0;
+}
+
+void TunerStage::ApplyDetection(double frequencyHz, double confidence)
+{
+    if (!std::isfinite(frequencyHz) || frequencyHz <= 0.0 ||
+        !std::isfinite(confidence) || confidence <= 0.0) {
+        m_monitor = {};
+        m_hasLastMidi = false;
+        return;
+    }
+
+    const double midi =
+        apo::pitch::FrequencyToMidi(frequencyHz, m_settings.referenceHz);
+    // An octave is a plausible correction, not a new note: smooth it with the
+    // rest of the movement instead of snapping. Only a much larger jump, such
+    // as switching instruments, bypasses the filter.
+    if (m_hasLastMidi &&
+        std::fabs(midi - m_lastMidi) < 24.0) {
+        const double amount =
+            std::clamp(m_settings.smoothing / 100.0, 0.0, 1.0);
+        const double alpha = std::pow(0.05, amount);
+        m_lastMidi += (midi - m_lastMidi) * alpha;
+    } else {
+        m_lastMidi = midi;
+    }
+    m_hasLastMidi = true;
+
+    const double smoothedHz =
+        apo::pitch::MidiToFrequency(m_lastMidi, m_settings.referenceHz);
+    m_monitor.frequencyHz = static_cast<float>(smoothedHz);
+    m_monitor.confidence = static_cast<float>(std::clamp(confidence, 0.0, 1.0));
+    m_monitor.valid =
+        std::isfinite(smoothedHz) && smoothedHz > 0.0;
+}
+
 void StagePool::Configure(const AudioFormat& format,
                           const NoiseProfile& profile)
 {
@@ -1466,6 +1871,9 @@ void StagePool::Configure(const AudioFormat& format,
                 break;
             case EffectType::Reverb:
                 stage = std::make_unique<ReverbStage>();
+                break;
+            case EffectType::Tuner:
+                stage = std::make_unique<TunerStage>();
                 break;
             default:
                 break;

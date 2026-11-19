@@ -48,9 +48,9 @@ functions; changing behavior is local to its subclass.
 
 `gui/ui/graph.cpp` registers its own class and creates the graph with
 `ui::Graph`. `SetGraphEffect` stores the current effect and invalidates the
-control. `GraphSupported` reports six graph types: Input, Gain,
-Saturation/Overdrive/Distortion, Gate/Expander, Compressor/Limiter, and
-Equalizer. `PaintGraph` draws a grid and one of:
+control. `GraphSupported` reports seven graph types: Input, Gain,
+Saturation/Overdrive/Distortion, Gate/Expander, Compressor/Limiter, Equalizer,
+and Tuner. `PaintGraph` draws a grid and one of:
 
 - Input live spectrum,
 - Gain input/output curve with a live operating-point dot,
@@ -60,6 +60,8 @@ Equalizer. `PaintGraph` draws a grid and one of:
 - equalizer Level bell with a dot at the selected frequency, a yellow live
   dynamic curve, and a dashed directional Range limit, with the live spectrum
   behind them.
+- tuner pitch display with note ticks sliding past a centered current pitch and
+  a C0–C8 map below.
 
 The saturation and dynamics curves call the same inline functions in
 `src/dsp/transfer.h` as the DSP stages, so the displayed curve cannot drift from
@@ -75,6 +77,17 @@ keeps the left-hand **−96…+24 dBFS** scale and its labels; the plot rectangl
 unchanged. Input, Gain, Gate/Expander, and Compressor/Limiter also use
 **−96…+24 dBFS**, so boosts above
 +24 dB can extend off-screen. Saturation uses normalized −1…1 transfer axes.
+
+The tuner graph has no output meter. Its upper strip is 2.5 semitones wide:
+the detected pitch stays centered while bold, enlarged note labels slide past;
+only labels that fit fully are drawn, so names do not stack at the edges. Grid
+lines are blended toward the text colour so they stay visible over the blue
+plot. The readout uses fixed columns for status (**LIVE**, **LAST**, or
+**NONE**), note, cents, frequency, and clarity, so values do not shift each
+other when their length changes. The lower strip spans C0–C8 with octave labels
+and a transparent rectangle with a thicker outline marking the local window.
+When the APO has no clear pitch, the last reading remains on screen with the
+**LAST** status.
 
 `SetGraphMonitor` receives a snapshot from the APO's `.monitor` file; only the
 slowly changing engagement value is smoothed here. The Gain dot, Saturation

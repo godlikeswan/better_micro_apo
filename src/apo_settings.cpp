@@ -217,6 +217,7 @@ const wchar_t* EffectTypeName(EffectType type)
     case EffectType::Mono:       return L"Mono";
     case EffectType::Saturation: return L"Saturation/Overdrive/Distortion";
     case EffectType::Reverb:     return L"Reverb";
+    case EffectType::Tuner:      return L"Tuner";
     default:                     return L"";
     }
 }
@@ -240,6 +241,16 @@ const wchar_t* ReverbAlgorithmName(ReverbAlgorithm algorithm)
     case ReverbAlgorithm::FeedbackDelayNetwork:
         return L"Feedback delay network (FDN)";
     default:                                  return L"";
+    }
+}
+
+const wchar_t* TunerAlgorithmName(TunerAlgorithm algorithm)
+{
+    switch (algorithm)
+    {
+    case TunerAlgorithm::Autocorrelation: return L"Autocorrelation";
+    case TunerAlgorithm::FftPeak:         return L"FFT peak";
+    default:                              return L"";
     }
 }
 
@@ -270,6 +281,7 @@ const char* EffectTypeKey(EffectType type)
     case EffectType::Mono:       return "mono";
     case EffectType::Saturation: return "saturation";
     case EffectType::Reverb:     return "reverb";
+    case EffectType::Tuner:      return "tuner";
     default:                     return "gain";
     }
 }
@@ -298,6 +310,7 @@ int EffectTypeCapacity(EffectType type)
     case EffectType::Gate:
     case EffectType::Compressor:
     case EffectType::Reverb:
+    case EffectType::Tuner:
         return kMaxHeavyEffects;
     default:
         return kMaxEffects;
@@ -317,6 +330,7 @@ bool EffectEnabled(const EffectInstance& effect)
     case EffectType::Mono:       return effect.mono.enabled;
     case EffectType::Saturation: return effect.distortion.enabled;
     case EffectType::Reverb:     return effect.reverb.enabled;
+    case EffectType::Tuner:      return effect.tuner.enabled;
     default:                     return false;
     }
 }
@@ -334,6 +348,7 @@ void SetEffectEnabled(EffectInstance& effect, bool enabled)
     case EffectType::Mono:       effect.mono.enabled = enabled; break;
     case EffectType::Saturation: effect.distortion.enabled = enabled; break;
     case EffectType::Reverb:     effect.reverb.enabled = enabled; break;
+    case EffectType::Tuner:      effect.tuner.enabled = enabled; break;
     default:                     break;
     }
 }
@@ -509,6 +524,18 @@ void ClampEffect(EffectInstance& effect)
         ClampFinite(effect.reverb.predelayMs, 20.0, 0.0, 200.0);
         break;
 
+    case EffectType::Tuner:
+        if (effect.tuner.algorithm < TunerAlgorithm::Autocorrelation ||
+            effect.tuner.algorithm >= TunerAlgorithm::Count) {
+            effect.tuner.algorithm = TunerAlgorithm::Autocorrelation;
+        }
+        effect.tuner.sampleSize = ValidTunerSampleSize(effect.tuner.sampleSize);
+        ClampFinite(effect.tuner.smoothing, kTunerDefaultSmoothing,
+                    kTunerMinSmoothing, kTunerMaxSmoothing);
+        ClampFinite(effect.tuner.referenceHz, kTunerDefaultReferenceHz,
+                    kTunerMinReferenceHz, kTunerMaxReferenceHz);
+        break;
+
     default:
         effect.type = EffectType::Gain;
         break;
@@ -660,6 +687,7 @@ void LoadEffectFields(const std::vector<KeyValue>& entries,
     getBool(L"enabled", effect.mono.enabled);
     getBool(L"enabled", effect.distortion.enabled);
     getBool(L"enabled", effect.reverb.enabled);
+    getBool(L"enabled", effect.tuner.enabled);
 
     switch (effect.type)
     {
@@ -719,6 +747,16 @@ void LoadEffectFields(const std::vector<KeyValue>& entries,
         getDouble(L"reverb_width", effect.reverb.width);
         getDouble(L"reverb_density", effect.reverb.density);
         getDouble(L"reverb_predelay_ms", effect.reverb.predelayMs);
+        break;
+    }
+
+    case EffectType::Tuner: {
+        int algorithm = static_cast<int>(effect.tuner.algorithm);
+        getInt(L"tuner_algorithm", algorithm);
+        effect.tuner.algorithm = static_cast<TunerAlgorithm>(algorithm);
+        getInt(L"tuner_sample_size", effect.tuner.sampleSize);
+        getDouble(L"tuner_smoothing", effect.tuner.smoothing);
+        getDouble(L"tuner_reference_hz", effect.tuner.referenceHz);
         break;
     }
 
@@ -974,6 +1012,19 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
                         FormatDouble(effect.reverb.density) + "\n";
                 text += prefix + "reverb_predelay_ms=" +
                         FormatDouble(effect.reverb.predelayMs) + "\n";
+                break;
+
+            case EffectType::Tuner:
+                text += prefix + "tuner_algorithm=" +
+                        std::to_string(
+                            static_cast<int>(effect.tuner.algorithm)) +
+                        "\n";
+                text += prefix + "tuner_sample_size=" +
+                        std::to_string(effect.tuner.sampleSize) + "\n";
+                text += prefix + "tuner_smoothing=" +
+                        FormatDouble(effect.tuner.smoothing) + "\n";
+                text += prefix + "tuner_reference_hz=" +
+                        FormatDouble(effect.tuner.referenceHz) + "\n";
                 break;
 
             default:

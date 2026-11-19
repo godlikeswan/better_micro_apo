@@ -424,6 +424,10 @@ void Chain::Process(const BYTE* source, BYTE* destination, UINT32 frames,
         Measure(scratch, frames, m_format.channels, inputPeak, inputRms);
         stage->Process(scratch, frames, m_format.channels);
         Measure(scratch, frames, m_format.channels, outputPeak, outputRms);
+        TunerMonitorData tuner{};
+        if (m_bindings[index].type == apo::EffectType::Tuner) {
+            stage->MonitorTuner(tuner);
+        }
         monitor->ObserveStage(index, m_bindings[index], scratch, frames,
                               m_format.channels,
                               static_cast<float>(inputPeak),
@@ -431,7 +435,7 @@ void Chain::Process(const BYTE* source, BYTE* destination, UINT32 frames,
                               static_cast<float>(outputPeak),
                               static_cast<float>(outputRms),
                               static_cast<float>(stage->MonitorValue()),
-                              static_cast<float>(stage->MonitorGainDb()));
+                              static_cast<float>(stage->MonitorGainDb()), tuner);
     }
 
     for (size_t i = 0; i < count; ++i)
@@ -480,6 +484,10 @@ void Chain::ProcessSilence(BYTE* destination, UINT32 frames, double* scratch,
         Measure(scratch, frames, m_format.channels, inputPeak, inputRms);
         stage->Process(scratch, frames, m_format.channels);
         Measure(scratch, frames, m_format.channels, outputPeak, outputRms);
+        TunerMonitorData tuner{};
+        if (m_bindings[index].type == apo::EffectType::Tuner) {
+            stage->MonitorTuner(tuner);
+        }
         monitor->ObserveStage(index, m_bindings[index], scratch, frames,
                               m_format.channels,
                               static_cast<float>(inputPeak),
@@ -487,7 +495,7 @@ void Chain::ProcessSilence(BYTE* destination, UINT32 frames, double* scratch,
                               static_cast<float>(outputPeak),
                               static_cast<float>(outputRms),
                               static_cast<float>(stage->MonitorValue()),
-                              static_cast<float>(stage->MonitorGainDb()));
+                              static_cast<float>(stage->MonitorGainDb()), tuner);
     }
 
     for (size_t i = 0; i < count; ++i)

@@ -18,7 +18,9 @@ at [docs/index.md](docs/index.md):
 
 Every preset starts with a fixed `Input` row, followed by `Gain`, `Noise
 reduction`, `Gate/Expander`, `Compressor/Limiter`, `Equalizer`, `Mono`,
-`Saturation/Overdrive/Distortion`, and `Reverb` in the order added by the user.
+`Saturation/Overdrive/Distortion`, `Reverb`, and `Tuner` in the order added by
+the user. Tuner is monitoring-only: it publishes detected pitch for its graph
+without changing samples, adding gain, or buffering audio.
 Input is always first, enabled, and not addable or deletable; its gain defaults
 to **0 dB** with a **−24 to +24 dB** range. Standalone Gain remains optional and
 starts at **+12 dB** with a **−24 to +50 dB** range. Gate/Expander and
@@ -32,7 +34,8 @@ selector of **No**, **Compressor**, or **Expander**, with a ratio that also ends
 at ∞, a 0…96 dB **Range**, and the same hold and lookahead ranges as the
 standalone dynamics effects.
 
-Durable settings use schema version 10 and the runtime snapshot uses version 12.
+Durable settings use schema version 11, the runtime snapshot uses version 13,
+and the stage-monitor channel uses version 8.
 Loading a settings file with any other `[dsp] version` deletes the file and
 starts from defaults; there is no migration path. See
 [DLL ↔ GUI settings sharing](docs/runtime-sharing.md) for the file formats, the

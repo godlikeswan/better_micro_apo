@@ -15,6 +15,7 @@ effect menu. The other rows are addable in the order shown.
 | [Mono](mono.md) | Channels | Copies the left channel to all channels for a mono mic plugged into a stereo input. |
 | [Saturation/Overdrive/Distortion](saturation.md) | Tone | Adds soft saturation or a harder overdriven edge. |
 | [Reverb](reverb.md) | Space | Adds a room or hall tail so the voice sounds less dry. |
+| [Tuner](tuner.md) | Analysis | Shows detected pitch, cents, and note range without changing audio. |
 
 Add the remaining effects in any order, use the checkboxes to switch individual
 effects on or off, and click a row to adjust its settings. The list is processed
@@ -42,6 +43,7 @@ All effects implement `apo::dsp::Stage` (`src/dsp/dsp.h`):
 | `NeedsSilence()` | Query from the chain | True when the stage buffers audio across calls and needs silent buffers to flush its tail. |
 | `MonitorValue()` | Every monitored buffer | Optional 0..1 stage-specific engagement value; Gate/Expander and Compressor/Limiter report gain change, others return zero. |
 | `MonitorGainDb()` | Every monitored buffer | Optional signed gain change in dB; Equalizer reports its current dynamic cut/boost, others return zero. |
+| `MonitorTuner(data)` | Every monitored buffer | Optional pitch measurement (frequency, confidence, validity); Tuner reports it, others leave it empty. |
 | `Process(samples, frames, channels)` | Every `APOProcess` | Process `frames * channels` interleaved `double` values in `[-1, 1]`, in place. Real-time safe. |
 
 `Chain` holds non-owning `Stage*` pointers in list order. `Chain::Process`
@@ -52,8 +54,8 @@ lookahead delay or reverb tail is flushed instead of being replayed later.
 
 When a monitor sink is present, the chain measures peak and RMS immediately
 before and after each stage, calls `ObserveStage` with that stage's binding, and
-clears slots that were not observed in the buffer. The sink only observes; it
-never changes samples.
+clears slots that were not observed in the buffer. Tuner publishes its pitch
+through `MonitorTuner()`. The sink only observes; it never changes samples.
 
 `StagePool` owns one stage per possible instance of each type. `Update` walks
 the active preset, skips disabled effects (Input is always enabled), assigns the
@@ -69,9 +71,8 @@ runtime polling path.
 - The list holds at most `kMaxEffects` (16) effects in total, including the
   fixed Input row.
 - Input allows one instance; Noise reduction, Gate/Expander,
-  Compressor/Limiter, and reverb are heavy and allow at most 4 instances each
-  (`kMaxHeavyEffects`).
-  Other addable types can fill the remaining slots.
+  Compressor/Limiter, Reverb, and Tuner are heavy and allow at most 4 instances
+  each (`kMaxHeavyEffects`). Other addable types can fill the remaining slots.
 - `apo::MakeEffect(type, id)` builds an instance from the type's struct defaults
   and **enables it**. The struct's own `enabled = false` is the "not set yet"
   value; a newly added effect in the GUI is always on. Input is forced on even
@@ -81,7 +82,7 @@ runtime polling path.
   Compressor/Limiter, and Equalizer ratios also accept positive infinity),
   inserts or repairs Input at row 0, normalizes ids, and forces
   `isolateEffects = true`.
-- Settings schema version 10 is the only accepted version. A file with a missing
+- Settings schema version 11 is the only accepted version. A file with a missing
   or mismatched `[dsp] version` is deleted on load instead of migrated.
 
 ### Graph and transfer math
@@ -91,8 +92,11 @@ Gate/Expander and Compressor/Limiter transfer curves with an engagement bar, an
 Equalizer spectrum behind a static Level curve with a center-frequency dot, a
 yellow live dynamic curve, and a dashed mode-dependent Range limit, and a
 Saturation transfer curve with a mirrored operating point driven by the input
-peak after Drive. The selected effect also
-gets a thin output meter with green, yellow, and red zones, dB labels, a
+peak after Drive. The Tuner graph replaces the transfer curve with a
+2.5-semitone local strip where the detected pitch stays centered and note ticks
+slide past it, plus a thin C0–C8 map with a rectangle showing the local window.
+The level graphs also
+get a thin output meter with green, yellow, and red zones, dB labels, a
 short-held fill driven by a 0.06 s peak hold, and a slightly thicker 0.6 s
 peak-hold line whose colour matches the bar zone it sits in; both dynamics
 effects get a separate engagement bar on the left. The Gain dot and Saturation
@@ -120,5 +124,6 @@ the bottom Peak/RMS display is separate. See
 Write a `Stage` subclass, add its `EffectType`, name, settings block and clamps
 in `src/apo_settings.*`, create it in `StagePool::Configure`, add GUI controls,
 and add a page here. If the effect needs live graphics, give it a monitor
-binding and extend `ui::GraphSupported`/`PaintGraph`. `APOProcess` itself does
-not change.
+binding and extend `ui::GraphSupported`/`PaintGraph`. Non-audio telemetry can
+extend `Stage::MonitorTuner()` and `StageMonitorSlot` instead. `APOProcess`
+itself does not change.

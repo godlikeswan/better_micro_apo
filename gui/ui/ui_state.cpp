@@ -97,6 +97,14 @@ HWND g_noiseFftSizeLabel = nullptr;
 HWND g_noiseFftSizeCombo = nullptr;
 HWND g_noiseCapture = nullptr;
 HWND g_noiseNote = nullptr;
+HWND g_tunerAlgorithmLabel = nullptr;
+HWND g_tunerAlgorithmCombo = nullptr;
+HWND g_tunerSampleSizeLabel = nullptr;
+HWND g_tunerSampleSizeCombo = nullptr;
+HWND g_tunerSmoothingLabel = nullptr;
+HWND g_tunerSmoothingSlider = nullptr;
+HWND g_tunerReferenceLabel = nullptr;
+HWND g_tunerReferenceSlider = nullptr;
 HWND g_listen = nullptr;
 HWND g_meter = nullptr;
 

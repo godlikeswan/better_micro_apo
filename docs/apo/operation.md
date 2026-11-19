@@ -57,11 +57,12 @@ All of these happen once per stream bind; none happen in `APOProcess`.
 | --- | --- | --- |
 | `BetterMicroApo` | `m_scratch` | `maxFrames * channels` `double`s. The interleaved input is decoded here, stages run in place, and the result is encoded to the output. |
 | `Chain` | `m_stages` | Reserves `kMaxEffects + 2` (18) `Stage*` slots and monitor bindings at construction so the temporary capture tap never allocates; `Clear`/refill never allocates. |
-| `StagePool` | stage objects | One stage per possible slot per type, `Configure`d once. Input allows 1, heavy types (noise, gate/expander, compressor/limiter, reverb) allow 4, and other addable types allow 16. Noise stages are always created and pass audio through until a profile is available. |
+| `StagePool` | stage objects | One stage per possible slot per type, `Configure`d once. Input allows 1, heavy types (noise, gate/expander, compressor/limiter, reverb, tuner) allow 4, and other addable types allow 16. Noise stages are always created and pass audio through until a profile is available. |
 | `DynamicsStage` | `m_delay` | `ceil(300 ms * sampleRate) * channels` `double`s, sized for the maximum clamp so a live lookahead change never allocates. |
 | `EqualizerStage` | `m_ic1`, `m_ic2`, `m_band` | Per-channel filter and band state. |
 | `NoiseStage` | FFT plans + analysis buffers | Radix-2 tables and windows for every supported size (256–4096), profile bins, gain arrays, input/output/history/overlap-add and real/imag arrays sized for the largest size. `Update` switches the active size without allocating. |
 | `ReverbStage` | tank buffers + predelay | Per channel: 8 damped combs and 4 allpasses (tunings scaled to the sample rate, odd channels get the classic stereo spread) plus `ceil(200 ms * sampleRate) + 1` predelay frames. |
+| `TunerStage` | analysis buffers + FFT plans | Mono, decimated, lag, and FFT arrays for the largest sample size plus a plan for every supported size. `Process` writes only telemetry, never samples. |
 | `BetterMicroApo` | runtime file mapping | A read-only `MapViewOfFile` of `runtime\{endpoint-guid}.dat`, closed in `UnlockForProcess`. |
 | `BetterMicroApo` | capture mapping and tap | A read/write mapping of `runtime\{endpoint-guid}.capture` plus one configured `StageCaptureTap`, both closed in `UnlockForProcess`. |
 | `BetterMicroApo` | stage-monitor mapping | A read/write mapping of `runtime\{endpoint-guid}.monitor`, one shared 256-point FFT plan, and per-slot spectrum history. Opened in `LockForProcess`; `Close` publishes empty slots before unmapping in `UnlockForProcess`/`FinalRelease`. |
@@ -93,8 +94,9 @@ chain and pool, drops the profile and format, and releases the scratch buffer.
 5. Otherwise `ProcessBuffer` calls `Chain::Process` with the monitor sink:
    decode interleaved bytes into the `double` scratch buffer, measure peak/RMS
    before and after each stage, call `Stage::Process`, publish the stage's
-   `ObserveStage` metrics and optional spectrum, then encode and clip back into
-   the output buffer. `EndBuffer()` clears unobserved slots.
+   `ObserveStage` metrics, optional spectrum, and optional Tuner pitch from
+   `MonitorTuner()`, then encode and clip back into the output buffer.
+   `EndBuffer()` clears unobserved slots.
 6. Copies the input's valid frame count to the output.
 
 Format conversion uses `DecodeSample`/`EncodeSample` in `src/dsp/dsp.cpp` and
@@ -112,9 +114,9 @@ retuned from the new instance. Each enabled effect then gets
 `Stage::Update(effect, format)`, is added to the non-owning `Chain` with a
 monitor binding (stable id, type, and spectrum flag), and is included in the
 returned active count. Input and Equalizer request spectra; Gate/Expander and
-Compressor/Limiter supply engagement through `Stage::MonitorValue()`, and
-Equalizer supplies its signed
-dynamic gain through `Stage::MonitorGainDb()`. The chain is cleared and refilled
+Compressor/Limiter supply engagement through `Stage::MonitorValue()`, Equalizer
+supplies its signed dynamic gain through `Stage::MonitorGainDb()`, and Tuner
+supplies pitch through `Stage::MonitorTuner()`. The chain is cleared and refilled
 without allocation, which is what makes live settings changes safe from the
 real-time path. `RebuildChain` is the single place that fills the chain, so a
 capture tap survives a settings change made while a profile is being recorded;

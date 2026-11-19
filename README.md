@@ -40,8 +40,9 @@ To uninstall, uncheck **Enable** on every device, or use **File → Uninstall**.
 - The selected effect's panel has its own live graph from the APO: Input
   spectrum, Gain input/output peak dot, Gate/Expander or Compressor/Limiter
   engagement and output, Equalizer spectrum with static/live/limit band curves,
-  or Saturation operating point and output. Each includes a thin output meter with green/yellow/red zones. Gain,
-  Saturation, and the meter use short holds so brief sounds are not skipped
+  Saturation operating point and output, or Tuner note, cents, and a C0–C8 pitch
+  map. The level graphs include a thin output meter with green/yellow/red zones.
+  Gain, Saturation, and the meter use short holds so brief sounds are not skipped
   between polls. Polling these graphs never changes settings or stops Listen.
 - Effects apply as you change them — there is no Apply button. Each slider has
   a small ↺ button that resets only that setting.
@@ -54,6 +55,8 @@ To uninstall, uncheck **Enable** on every device, or use **File → Uninstall**.
   Switch Dynamic to **Compressor** to tame loud lows or **Expander** to lift
   quiet lows; its detector controls are greyed out when Dynamic is No. Level
   spans −96…+96 dB, Ratio reaches ∞, and Range goes up to 96 dB.
+- **Tuner** is monitoring-only: it shows the nearest note, cents, and a C0–C8
+  pitch map without changing or delaying the audio.
 - If your device is missing from the list, turn on **View → Show all devices**
   to see inactive inputs too.
 - Windows briefly stops audio when effects are installed or attached to a

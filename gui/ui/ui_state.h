@@ -103,6 +103,14 @@ enum : int {
     IDC_NOISE_FFT_SIZE_COMBO,
     IDC_NOISE_CAPTURE,
     IDC_NOISE_NOTE,
+    IDC_TUNER_ALGORITHM_LABEL,
+    IDC_TUNER_ALGORITHM_COMBO,
+    IDC_TUNER_SAMPLE_SIZE_LABEL,
+    IDC_TUNER_SAMPLE_SIZE_COMBO,
+    IDC_TUNER_SMOOTHING_LABEL,
+    IDC_TUNER_SMOOTHING_SLIDER,
+    IDC_TUNER_REFERENCE_LABEL,
+    IDC_TUNER_REFERENCE_SLIDER,
     IDC_LISTEN,
     IDC_METER,
     IDC_PARAM_RESET,
@@ -148,6 +156,10 @@ enum ParamReset : int {
     ParamResetDistDrive,
     ParamResetDistCurvature,
     ParamResetDistOutput,
+    ParamResetTunerAlgorithm,
+    ParamResetTunerSampleSize,
+    ParamResetTunerSmoothing,
+    ParamResetTunerReference,
     ParamResetCount,
 };
 
@@ -262,6 +274,14 @@ extern HWND g_noiseFftSizeLabel;
 extern HWND g_noiseFftSizeCombo;
 extern HWND g_noiseCapture;
 extern HWND g_noiseNote;
+extern HWND g_tunerAlgorithmLabel;
+extern HWND g_tunerAlgorithmCombo;
+extern HWND g_tunerSampleSizeLabel;
+extern HWND g_tunerSampleSizeCombo;
+extern HWND g_tunerSmoothingLabel;
+extern HWND g_tunerSmoothingSlider;
+extern HWND g_tunerReferenceLabel;
+extern HWND g_tunerReferenceSlider;
 extern HWND g_listen;
 extern HWND g_meter;
 

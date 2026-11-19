@@ -312,6 +312,49 @@ private:
     double m_fdnRight = 0.0;
 };
 
+// Monitoring-only pitch detector. It copies the mono sum of the incoming audio
+// into a preallocated analysis window, detects a pitch with the selected engine,
+// and publishes frequency/clarity through the stage monitor. Samples are never
+// modified, so the Tuner adds no gain, filtering, or latency.
+class TunerStage final : public Stage
+{
+public:
+    TunerStage() = default;
+
+    void Configure(const AudioFormat& format) override;
+    void Update(const EffectInstance& effect, const AudioFormat& format) override;
+    void Reset() override;
+    void MonitorTuner(TunerMonitorData& data) const override
+    {
+        data = m_monitor;
+    }
+    void Process(double* samples, UINT32 frames, UINT32 channels) override;
+
+private:
+    void ResetAnalysis();
+    bool DetectAutocorrelation(double& frequencyHz, double& confidence);
+    bool DetectFftPeak(double& frequencyHz, double& confidence);
+    void ApplyDetection(double frequencyHz, double confidence);
+
+    TunerSettings m_settings;
+    double m_sampleRate = 48000.0;
+    double m_highPassCoeff = 0.99;
+    double m_highPassInput = 0.0;
+    double m_highPassOutput = 0.0;
+    std::size_t m_sampleSize = static_cast<std::size_t>(kTunerDefaultSampleSize);
+    std::size_t m_filled = 0;
+    std::vector<double> m_window;
+    std::vector<double> m_mono;
+    std::vector<double> m_decimated;
+    std::vector<double> m_lagValues;
+    std::vector<double> m_real;
+    std::vector<double> m_imag;
+    std::vector<FftPlan> m_fftPlans;
+    double m_lastMidi = 0.0;
+    bool m_hasLastMidi = false;
+    TunerMonitorData m_monitor;
+};
+
 // Owns every stage instance the effect list can reference. Configure() runs
 // from LockForProcess and allocates a fixed number of stages per type; Update()
 // runs from the real-time path, binds instances by id, retunes them in place and

@@ -11,7 +11,7 @@ namespace apo {
 
 // Settings files with any other version are discarded on load. There is no
 // migration path: a new schema starts from defaults.
-inline constexpr int kSettingsVersion = 10;
+inline constexpr int kSettingsVersion = 11;
 
 // The fixed first stage has its own gain range; it is stored in GainSettings
 // but is separate from the standalone makeup Gain effect.
@@ -252,6 +252,75 @@ struct ReverbSettings
     double predelayMs = 20.0;
 };
 
+// Pitch detection engines offered by the monitoring-only Tuner. Autocorrelation
+// is the default because it tracks the fundamental of monophonic sources well;
+// FFT peak is a faster alternative that can follow harmonics more readily.
+enum class TunerAlgorithm : int
+{
+    Autocorrelation = 0,
+    FftPeak = 1,
+    Count,
+};
+
+const wchar_t* TunerAlgorithmName(TunerAlgorithm algorithm);
+
+// Analysis sizes in samples. Buffers and FFT plans for every size are created
+// when the stream binds, so a live Sample size change never allocates.
+inline constexpr int kTunerDefaultSampleSize = 8192;
+inline constexpr std::array<int, 5> kTunerSampleSizes{{
+    2048, 4096, 8192, 16384, 32768,
+}};
+inline constexpr double kTunerMinSmoothing = 0.0;
+inline constexpr double kTunerMaxSmoothing = 100.0;
+inline constexpr double kTunerMinReferenceHz = 430.0;
+inline constexpr double kTunerMaxReferenceHz = 450.0;
+inline constexpr double kTunerDefaultSmoothing = 50.0;
+inline constexpr double kTunerDefaultReferenceHz = 440.0;
+
+inline int ValidTunerSampleSize(int value)
+{
+    for (int candidate : kTunerSampleSizes) {
+        if (candidate == value) {
+            return value;
+        }
+    }
+    return kTunerDefaultSampleSize;
+}
+
+inline int TunerSampleSizeAt(int index)
+{
+    if (index < 0 || index >= static_cast<int>(kTunerSampleSizes.size())) {
+        return kTunerDefaultSampleSize;
+    }
+    return kTunerSampleSizes[static_cast<std::size_t>(index)];
+}
+
+inline int TunerSampleSizeIndex(int value)
+{
+    for (std::size_t index = 0; index < kTunerSampleSizes.size(); ++index) {
+        if (kTunerSampleSizes[index] == value) {
+            return static_cast<int>(index);
+        }
+    }
+    for (std::size_t index = 0; index < kTunerSampleSizes.size(); ++index) {
+        if (kTunerSampleSizes[index] == kTunerDefaultSampleSize) {
+            return static_cast<int>(index);
+        }
+    }
+    return 0;
+}
+
+// Tuner is a pass-through: it publishes detected pitch for the graph but never
+// changes audio. `referenceHz` sets the A4 calibration used by note/cents math.
+struct TunerSettings
+{
+    bool enabled = false;
+    TunerAlgorithm algorithm = TunerAlgorithm::Autocorrelation;
+    int sampleSize = kTunerDefaultSampleSize;
+    double smoothing = kTunerDefaultSmoothing;
+    double referenceHz = kTunerDefaultReferenceHz;
+};
+
 // Effect types the list can hold. The list order is the DSP order, and a type
 // may appear more than once. Input is generated automatically as row 0 and is
 // never addable or deletable; Gain is the first optional effect after it.
@@ -266,6 +335,7 @@ enum class EffectType : int
     Mono,
     Saturation,
     Reverb,
+    Tuner,
     Count,
 };
 
@@ -309,6 +379,7 @@ struct EffectInstance
     MonoSettings mono;
     DistortionSettings distortion;
     ReverbSettings reverb;
+    TunerSettings tuner;
 };
 
 bool EffectEnabled(const EffectInstance& effect);

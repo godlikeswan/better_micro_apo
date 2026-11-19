@@ -5,9 +5,12 @@
 #include "widgets.h"
 
 #include "dsp/transfer.h"
+#include "pitch.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cwchar>
 #include <limits>
 
 namespace ui {
@@ -22,6 +25,7 @@ constexpr double kMaxDb = 24.0;
 constexpr double kEqCurveMaxDb = 96.0;
 constexpr double kMinHz = 20.0;
 constexpr double kMaxHz = 20000.0;
+constexpr double kTunerLocalSpanSemitones = 2.5;
 
 bool IsDynamicsEffect(apo::EffectType type)
 {
@@ -50,6 +54,12 @@ struct GraphState
     float engagement = 0.0f;
     float meterCurrent = 0.0f;
     float meterPeak = 0.0f;
+
+    // Keep the last clear tuner reading for silence or unclear input, so the
+    // note ticks and readout do not jump back to a reference placeholder.
+    float tunerLastFrequencyHz = 0.0f;
+    float tunerLastConfidence = 0.0f;
+    bool tunerHasLast = false;
 };
 
 struct GraphColors
@@ -748,6 +758,192 @@ void PaintEqualizer(HDC dc, const RECT& client, const RECT& plot,
                MapY(plot, curvePosition(-kEqCurveMaxDb)), L"-96", colors.text);
 }
 
+void PaintTuner(HDC dc, const RECT& client, const RECT& plot,
+                const apo::EffectInstance& effect, const GraphState& state,
+                const GraphColors& colors)
+{
+    const int height = plot.bottom - plot.top;
+    const int mapHeight = std::clamp(height / 4, Scale(28), Scale(52));
+    const int gap = Scale(8);
+    RECT local{plot.left, plot.top, plot.right,
+               plot.bottom - mapHeight - gap};
+    RECT map{plot.left, plot.bottom - mapHeight, plot.right, plot.bottom};
+    if (local.bottom <= local.top || map.bottom <= map.top) {
+        return;
+    }
+
+    // The default grid grey is too close to the blue plot fill. Blend toward
+    // the text colour so ticks stay visible in both themes.
+    const COLORREF tunerGrid = Mix(colors.text, colors.spectrumFill, 0.45);
+    const COLORREF tunerFrame = Mix(colors.text, colors.spectrumFill, 0.58);
+    FillColor(dc, local, colors.spectrumFill);
+    FrameColor(dc, local, tunerFrame);
+    FillColor(dc, map, colors.spectrumFill);
+    FrameColor(dc, map, tunerFrame);
+
+    const bool hasLivePitch =
+        state.hasMonitor && state.monitor.valid &&
+        (state.monitor.flags & apo::kStageMonitorFlagTunerValid) != 0 &&
+        state.monitor.tunerFrequencyHz > 0.0f;
+    const float frequencyHz =
+        hasLivePitch ? state.monitor.tunerFrequencyHz
+                     : state.tunerLastFrequencyHz;
+    const float confidence =
+        hasLivePitch ? state.monitor.tunerConfidence
+                     : state.tunerLastConfidence;
+    const bool showPitch =
+        (hasLivePitch || state.tunerHasLast) && frequencyHz > 0.0f;
+    const double referenceHz = effect.tuner.referenceHz;
+    const double midi =
+        showPitch
+            ? apo::pitch::FrequencyToMidi(static_cast<double>(frequencyHz),
+                                          referenceHz)
+            : apo::pitch::kMidiA4;
+    const double leftMidi = midi - kTunerLocalSpanSemitones * 0.5;
+    const auto localX = [&](double noteMidi) {
+        return MapX(local, (noteMidi - leftMidi) / kTunerLocalSpanSemitones);
+    };
+
+    // Fixed-width fields keep each value in the same place as it changes.
+    int fieldX = plot.left;
+    const int captionTop = client.top + Scale(2);
+    const int captionBottom = client.top + Scale(16);
+    const auto drawField = [&](int width, const wchar_t* text, COLORREF color,
+                               bool rightAligned) {
+        RECT rect{fieldX, captionTop, fieldX + width, captionBottom};
+        SetTextColor(dc, color);
+        DrawTextW(dc, text, -1, &rect,
+                  DT_TOP | DT_SINGLELINE | DT_NOPREFIX |
+                      (rightAligned ? DT_RIGHT : DT_LEFT));
+        fieldX += width;
+    };
+
+    wchar_t statusText[16];
+    wchar_t noteText[16];
+    wchar_t centsText[32];
+    wchar_t hzText[32];
+    wchar_t clarityText[32];
+    if (showPitch) {
+        const int nearest = apo::pitch::NearestMidiNote(midi);
+        const double cents = apo::pitch::CentsFromNearest(midi);
+        const int clarity = static_cast<int>(std::lround(
+            std::clamp(static_cast<double>(confidence), 0.0, 1.0) * 100.0));
+        wcscpy_s(statusText, hasLivePitch ? L"LIVE" : L"LAST");
+        swprintf_s(noteText, L"%s%d", apo::pitch::NoteName(nearest),
+                   apo::pitch::OctaveOf(nearest));
+        swprintf_s(centsText, L"%+5.0f cents", cents);
+        swprintf_s(hzText, L"%7.1f Hz", static_cast<double>(frequencyHz));
+        swprintf_s(clarityText, L"clarity %3d%%", clarity);
+    } else {
+        wcscpy_s(statusText, L"NONE");
+        wcscpy_s(noteText, L"--");
+        wcscpy_s(centsText, L"-- cents");
+        wcscpy_s(hzText, L"-- Hz");
+        wcscpy_s(clarityText, L"--");
+    }
+    const COLORREF readoutColor =
+        hasLivePitch ? colors.text
+                     : Mix(colors.text, colors.spectrumFill, 0.35);
+    drawField(Scale(34), statusText, readoutColor, false);
+    drawField(Scale(42), noteText, readoutColor, false);
+    drawField(Scale(84), centsText, readoutColor, true);
+    drawField(Scale(84), hzText, readoutColor, true);
+    drawField(Scale(96), clarityText, readoutColor, true);
+
+    const int labelTop = local.bottom - Scale(22);
+    const int labelBottom = local.bottom - Scale(2);
+    const int tickTop = local.top + Scale(20);
+    const int labelHalfWidth = Scale(32);
+    const int firstNote = static_cast<int>(std::floor(leftMidi)) - 1;
+    const int lastNote =
+        static_cast<int>(std::ceil(leftMidi + kTunerLocalSpanSemitones)) + 1;
+    const int savedLocal = SaveDC(dc);
+    IntersectClipRect(dc, local.left, local.top, local.right, local.bottom);
+
+    const int noteFontHeight = -MulDiv(12, GetDeviceCaps(dc, LOGPIXELSY), 72);
+    HFONT noteFont = CreateFontW(
+        noteFontHeight, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    HGDIOBJ oldFont = noteFont != nullptr ? SelectObject(dc, noteFont) : nullptr;
+    for (int note = firstNote; note <= lastNote; ++note) {
+        const int x = localX(static_cast<double>(note));
+        if (x >= local.left && x <= local.right) {
+            DrawLine(dc, x, tickTop, x, local.bottom - 1, tunerGrid);
+        }
+        // Skip labels that would be clipped at the edges; otherwise their
+        // remnants stack against the sides of the local display.
+        if (x - labelHalfWidth < local.left ||
+            x + labelHalfWidth > local.right) {
+            continue;
+        }
+        const std::wstring label =
+            std::wstring(apo::pitch::NoteName(note)) +
+            std::to_wstring(apo::pitch::OctaveOf(note));
+        RECT rect{x - labelHalfWidth, labelTop, x + labelHalfWidth,
+                  labelBottom};
+        SetTextColor(dc, colors.text);
+        DrawTextW(dc, label.c_str(), -1, &rect,
+                  DT_CENTER | DT_BOTTOM | DT_SINGLELINE | DT_NOPREFIX);
+    }
+    if (oldFont != nullptr) {
+        SelectObject(dc, oldFont);
+        DeleteObject(noteFont);
+    }
+    // The current pitch is always at the centre; note ticks slide past it.
+    const int centerX = MapX(local, 0.5);
+    DrawLine(dc, centerX, tickTop, centerX, local.bottom - 1, colors.curve,
+             PS_SOLID, std::max(2, Scale(2)));
+    DrawLine(dc, local.left + 1, local.top + Scale(20), local.right - 1,
+             local.top + Scale(20), tunerGrid, PS_DOT);
+    RestoreDC(dc, savedLocal);
+
+    const double mapSpan = apo::pitch::kMidiC8 - apo::pitch::kMidiC0;
+    for (int note = static_cast<int>(apo::pitch::kMidiC0);
+         note <= static_cast<int>(apo::pitch::kMidiC8); ++note) {
+        const int x = MapX(map,
+                           (static_cast<double>(note) - apo::pitch::kMidiC0) /
+                               mapSpan);
+        const bool octave = note % 12 == 0;
+        DrawLine(dc, x, map.bottom - (octave ? Scale(9) : Scale(4)), x,
+                 map.bottom - 1, octave ? tunerFrame : tunerGrid);
+        if (octave) {
+            const std::wstring label =
+                L"C" + std::to_wstring(apo::pitch::OctaveOf(note));
+            RECT rect{x - Scale(16), map.top + Scale(2), x + Scale(16),
+                      map.top + Scale(15)};
+            SetTextColor(dc, colors.text);
+            DrawTextW(dc, label.c_str(), -1, &rect,
+                      DT_CENTER | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
+        }
+    }
+
+    if (showPitch) {
+        const int center = MapX(map, (midi - apo::pitch::kMidiC0) / mapSpan);
+        const int halfWidth = std::max(
+            Scale(4),
+            static_cast<int>(std::lround(
+                kTunerLocalSpanSemitones * 0.5 / mapSpan *
+                static_cast<double>(map.right - map.left))));
+        const int left =
+            std::clamp<int>(center - halfWidth, map.left + 1, map.right - 2);
+        const int right =
+            std::clamp<int>(center + halfWidth, left + 1, map.right - 1);
+        const int top = map.top + 2;
+        const int bottom = map.bottom - 2;
+        const int borderWidth = std::max(2, Scale(2));
+        // Transparent window: only the brighter, thicker outline is drawn.
+        DrawLine(dc, left, top, right, top, colors.stripe, PS_SOLID,
+                 borderWidth);
+        DrawLine(dc, right, top, right, bottom, colors.stripe, PS_SOLID,
+                 borderWidth);
+        DrawLine(dc, right, bottom, left, bottom, colors.stripe, PS_SOLID,
+                 borderWidth);
+        DrawLine(dc, left, bottom, left, top, colors.stripe, PS_SOLID,
+                 borderWidth);
+    }
+}
+
 void PaintGraph(HWND window, const GraphState& state, HDC dc)
 {
     const Theme& theme = GetTheme();
@@ -823,6 +1019,9 @@ void PaintGraph(HWND window, const GraphState& state, HDC dc)
     case apo::EffectType::Equalizer:
         PaintSpectrum(dc, plot, state.monitor, colors);
         PaintEqualizer(dc, client, plot, state.effect.equalizer, state, colors);
+        break;
+    case apo::EffectType::Tuner:
+        PaintTuner(dc, client, plot, state.effect, state, colors);
         break;
     default:
         break;
@@ -916,6 +1115,9 @@ void ClearGraphState(GraphState& state)
     state.engagement = 0.0f;
     state.meterCurrent = 0.0f;
     state.meterPeak = 0.0f;
+    state.tunerLastFrequencyHz = 0.0f;
+    state.tunerLastConfidence = 0.0f;
+    state.tunerHasLast = false;
 }
 
 } // namespace
@@ -929,6 +1131,7 @@ bool GraphSupported(apo::EffectType type)
     case apo::EffectType::Gate:
     case apo::EffectType::Compressor:
     case apo::EffectType::Equalizer:
+    case apo::EffectType::Tuner:
         return true;
     default:
         return false;
@@ -992,6 +1195,13 @@ void SetGraphMonitor(HWND graph, const apo::StageMonitorSnapshot& monitor)
     // bright line as the longer max marker.
     state->meterCurrent = monitor.outputPeakShortHold;
     state->meterPeak = monitor.outputPeakHold;
+    if (state->effect.type == apo::EffectType::Tuner &&
+        (monitor.flags & apo::kStageMonitorFlagTunerValid) != 0 &&
+        monitor.tunerFrequencyHz > 0.0f) {
+        state->tunerLastFrequencyHz = monitor.tunerFrequencyHz;
+        state->tunerLastConfidence = monitor.tunerConfidence;
+        state->tunerHasLast = true;
+    }
     InvalidateRect(graph, nullptr, FALSE);
 }
 

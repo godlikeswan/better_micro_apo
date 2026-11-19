@@ -19,13 +19,24 @@ namespace apo {
 // sampling the meters never changes settings, rebuilds the chain, or stops
 // audio.
 inline constexpr std::uint32_t kStageMonitorMagic = 0x544F4D42u; // "BMOT"
-inline constexpr std::uint32_t kStageMonitorVersion = 7u;
+inline constexpr std::uint32_t kStageMonitorVersion = 8u;
 inline constexpr int kStageMonitorFftSize = 256;
 inline constexpr int kStageMonitorBins = kStageMonitorFftSize / 2;
 // One spare slot covers the temporary capture tap, another covers future chain
 // padding without changing the shared layout.
 inline constexpr int kStageMonitorSlots = apo::kMaxEffects + 2;
 inline constexpr ULONG kStageMonitorFlagObserved = 1u;
+inline constexpr ULONG kStageMonitorFlagTunerValid = 2u;
+
+// Pitch reported by a Tuner stage. The GUI derives note name and cents from
+// `frequencyHz` using the effect's Reference setting, so only the measurement
+// itself crosses the shared-memory boundary.
+struct TunerMonitorData
+{
+    float frequencyHz = 0.0f;
+    float confidence = 0.0f;
+    bool valid = false;
+};
 
 // Identifies the effect currently occupying one chain slot. `slot` is the
 // position in Chain, not a persistent id: a rebuild can move effects. The GUI
@@ -50,7 +61,8 @@ public:
                               const double* samples, UINT32 frames,
                               UINT32 channels, float inputPeak, float inputRms,
                               float outputPeak, float outputRms,
-                              float engagement, float dynamicGainDb) = 0;
+                              float engagement, float dynamicGainDb,
+                              const TunerMonitorData& tuner) = 0;
     // Any slot not observed during a buffer is cleared here, so silence and
     // disabled effects never leave stale meter values on screen.
     virtual void EndBuffer() = 0;
@@ -76,6 +88,9 @@ struct StageMonitorSlot
     float engagement = 0.0f;
     // Signed dynamic gain in dB for the Equalizer's live response overlay.
     float dynamicGainDb = 0.0f;
+    // Tuner measurement; validity is also flagged in `flags`.
+    float tunerFrequencyHz = 0.0f;
+    float tunerConfidence = 0.0f;
     float spectrum[kStageMonitorBins]{};
 };
 
@@ -93,6 +108,7 @@ struct StageMonitorFile
 struct StageMonitorSnapshot
 {
     bool valid = false;
+    ULONG flags = 0;
     int effectId = 0;
     apo::EffectType type = apo::EffectType::Count;
     ULONG sampleRate = 0;
@@ -108,6 +124,9 @@ struct StageMonitorSnapshot
     float engagement = 0.0f;
     // Signed dynamic gain in dB for the Equalizer's live response overlay.
     float dynamicGainDb = 0.0f;
+    // Tuner measurement; validity is also flagged in `flags`.
+    float tunerFrequencyHz = 0.0f;
+    float tunerConfidence = 0.0f;
     float spectrum[kStageMonitorBins]{};
 };
 
@@ -160,8 +179,8 @@ public:
     void ObserveStage(size_t slot, const StageMonitorBinding& binding,
                       const double* samples, UINT32 frames, UINT32 channels,
                       float inputPeak, float inputRms, float outputPeak,
-                      float outputRms, float engagement,
-                      float dynamicGainDb) override;
+                      float outputRms, float engagement, float dynamicGainDb,
+                      const TunerMonitorData& tuner) override;
     void EndBuffer() override;
 
 private:
@@ -170,7 +189,8 @@ private:
     void WriteSlot(size_t slot, const StageMonitorBinding& binding,
                    float inputPeak, float inputRms, float outputPeak,
                    float outputRms, float engagement, float dynamicGainDb,
-                   float shortDecay, float peakDecay);
+                   const TunerMonitorData& tuner, float shortDecay,
+                   float peakDecay);
     void ClearSlot(size_t slot);
 
     HANDLE m_file = nullptr;

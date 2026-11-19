@@ -314,6 +314,12 @@ void ShowEffectControls(apo::EffectType type, bool show)
                  g_reverbDensityLabel, g_reverbDensitySlider,
                  g_reverbPredelayLabel, g_reverbPredelaySlider});
         break;
+    case apo::EffectType::Tuner:
+        showAll({g_tunerAlgorithmLabel, g_tunerAlgorithmCombo,
+                 g_tunerSampleSizeLabel, g_tunerSampleSizeCombo,
+                 g_tunerSmoothingLabel, g_tunerSmoothingSlider,
+                 g_tunerReferenceLabel, g_tunerReferenceSlider});
+        break;
     default:
         break;
     }
@@ -357,6 +363,10 @@ void EnableEffectControls(bool enabled)
         g_reverbPredelayLabel, g_reverbPredelaySlider,
         g_noiseReductionLabel, g_noiseReductionSlider,
         g_noiseFftSizeLabel, g_noiseFftSizeCombo, g_noiseCapture,
+        g_tunerAlgorithmLabel, g_tunerAlgorithmCombo,
+        g_tunerSampleSizeLabel, g_tunerSampleSizeCombo,
+        g_tunerSmoothingLabel, g_tunerSmoothingSlider,
+        g_tunerReferenceLabel, g_tunerReferenceSlider,
         g_effectGraph,
     };
     for (HWND control : controls) {
@@ -405,6 +415,10 @@ void ClearEffectEditor()
     SendMessageW(g_distFunctionCombo, CB_SETCURSEL, apo::kDistortionTanh, 0);
     SendMessageW(g_noiseFftSizeCombo, CB_SETCURSEL,
                  apo::NoiseFftSizeIndex(apo::kNoiseDefaultFftSize), 0);
+    SendMessageW(g_tunerAlgorithmCombo, CB_SETCURSEL,
+                 static_cast<int>(apo::TunerAlgorithm::Autocorrelation), 0);
+    SendMessageW(g_tunerSampleSizeCombo, CB_SETCURSEL,
+                 apo::TunerSampleSizeIndex(apo::kTunerDefaultSampleSize), 0);
     SetWindowTextW(g_effectHeading, L"Select an effect");
     SetWindowTextW(g_noiseNote, L"");
     ShowWindow(g_effectGraph, SW_HIDE);
@@ -561,6 +575,24 @@ void ReadEffectControls(apo::EffectInstance& effect)
         GetSliderValue(g_reverbPredelaySlider, effect.reverb.predelayMs);
         break;
     }
+    case apo::EffectType::Tuner: {
+        const int algorithm = static_cast<int>(
+            SendMessageW(g_tunerAlgorithmCombo, CB_GETCURSEL, 0, 0));
+        if (algorithm >= 0 &&
+            algorithm < static_cast<int>(apo::TunerAlgorithm::Count)) {
+            effect.tuner.algorithm =
+                static_cast<apo::TunerAlgorithm>(algorithm);
+        }
+        const int sizeIndex = static_cast<int>(
+            SendMessageW(g_tunerSampleSizeCombo, CB_GETCURSEL, 0, 0));
+        if (sizeIndex >= 0 &&
+            sizeIndex < static_cast<int>(apo::kTunerSampleSizes.size())) {
+            effect.tuner.sampleSize = apo::TunerSampleSizeAt(sizeIndex);
+        }
+        GetSliderValue(g_tunerSmoothingSlider, effect.tuner.smoothing);
+        GetSliderValue(g_tunerReferenceSlider, effect.tuner.referenceHz);
+        break;
+    }
     default:
         break;
     }
@@ -643,6 +675,12 @@ void ShowEffectForSelected()
     SetSliderValue(g_distDriveSlider, effect.distortion.driveDb);
     SetSliderValue(g_distCurvatureSlider, effect.distortion.curvature);
     SetSliderValue(g_distOutputSlider, effect.distortion.outputDb);
+    SendMessageW(g_tunerAlgorithmCombo, CB_SETCURSEL,
+                 static_cast<int>(effect.tuner.algorithm), 0);
+    SendMessageW(g_tunerSampleSizeCombo, CB_SETCURSEL,
+                 apo::TunerSampleSizeIndex(effect.tuner.sampleSize), 0);
+    SetSliderValue(g_tunerSmoothingSlider, effect.tuner.smoothing);
+    SetSliderValue(g_tunerReferenceSlider, effect.tuner.referenceHz);
 
     SetWindowTextW(g_effectHeading, apo::EffectTypeName(effect.type));
     // The parameter panel is shared: hide every type first so switching to an
@@ -753,6 +791,14 @@ bool CommitEffectEditor(bool showValues = true)
             SetSliderValue(g_reverbDensitySlider, shown.reverb.density);
             SetSliderValue(g_reverbPredelaySlider, shown.reverb.predelayMs);
             break;
+        case apo::EffectType::Tuner:
+            SendMessageW(g_tunerAlgorithmCombo, CB_SETCURSEL,
+                         static_cast<int>(shown.tuner.algorithm), 0);
+            SendMessageW(g_tunerSampleSizeCombo, CB_SETCURSEL,
+                         apo::TunerSampleSizeIndex(shown.tuner.sampleSize), 0);
+            SetSliderValue(g_tunerSmoothingSlider, shown.tuner.smoothing);
+            SetSliderValue(g_tunerReferenceSlider, shown.tuner.referenceHz);
+            break;
         default:
             break;
         }
@@ -855,6 +901,14 @@ bool ParameterAtDefault(const apo::EffectInstance& effect,
                          defaults.distortion.curvature);
     case ParamResetDistOutput:
         return SameValue(effect.distortion.outputDb, defaults.distortion.outputDb);
+    case ParamResetTunerAlgorithm:
+        return effect.tuner.algorithm == defaults.tuner.algorithm;
+    case ParamResetTunerSampleSize:
+        return effect.tuner.sampleSize == defaults.tuner.sampleSize;
+    case ParamResetTunerSmoothing:
+        return SameValue(effect.tuner.smoothing, defaults.tuner.smoothing);
+    case ParamResetTunerReference:
+        return SameValue(effect.tuner.referenceHz, defaults.tuner.referenceHz);
     default:
         return true;
     }
@@ -1010,6 +1064,18 @@ void ResetParameter(int param)
         break;
     case ParamResetDistOutput:
         effect.distortion.outputDb = defaults.distortion.outputDb;
+        break;
+    case ParamResetTunerAlgorithm:
+        effect.tuner.algorithm = defaults.tuner.algorithm;
+        break;
+    case ParamResetTunerSampleSize:
+        effect.tuner.sampleSize = defaults.tuner.sampleSize;
+        break;
+    case ParamResetTunerSmoothing:
+        effect.tuner.smoothing = defaults.tuner.smoothing;
+        break;
+    case ParamResetTunerReference:
+        effect.tuner.referenceHz = defaults.tuner.referenceHz;
         break;
     default:
         return;
@@ -2312,6 +2378,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_EQ_DYNAMIC_COMBO:
         case IDC_REVERB_ALGORITHM_COMBO:
         case IDC_NOISE_FFT_SIZE_COMBO:
+        case IDC_TUNER_ALGORITHM_COMBO:
+        case IDC_TUNER_SAMPLE_SIZE_COMBO:
             if (HIWORD(wParam) == CBN_SELCHANGE) {
                 MarkSettingsDirty();
             } else if (HIWORD(wParam) == CBN_CLOSEUP) {
@@ -2349,6 +2417,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_DIST_DRIVE_SLIDER:
         case IDC_DIST_CURVATURE_SLIDER:
         case IDC_DIST_OUTPUT_SLIDER:
+        case IDC_TUNER_SMOOTHING_SLIDER:
+        case IDC_TUNER_REFERENCE_SLIDER:
             if (ui::IsSliderChange(HIWORD(wParam))) {
                 MarkSettingsDirty();
             }

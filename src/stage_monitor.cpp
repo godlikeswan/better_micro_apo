@@ -171,6 +171,9 @@ bool StageMonitorView::Read(int slot, StageMonitorSnapshot& snapshot) const
         snapshot.outputPeakHold = source.outputPeakHold;
         snapshot.engagement = source.engagement;
         snapshot.dynamicGainDb = source.dynamicGainDb;
+        snapshot.tunerFrequencyHz = source.tunerFrequencyHz;
+        snapshot.tunerConfidence = source.tunerConfidence;
+        snapshot.flags = source.flags;
         snapshot.valid = (source.flags & kStageMonitorFlagObserved) != 0;
         std::memcpy(snapshot.spectrum, source.spectrum,
                     sizeof(snapshot.spectrum));
@@ -301,7 +304,7 @@ void StageMonitor::ObserveStage(size_t slot, const StageMonitorBinding& binding,
                                 UINT32 channels, float inputPeak,
                                 float inputRms, float outputPeak,
                                 float outputRms, float engagement,
-                                float dynamicGainDb)
+                                float dynamicGainDb, const TunerMonitorData& tuner)
 {
     if (m_view == nullptr || slot >= static_cast<size_t>(kStageMonitorSlots)) {
         return;
@@ -317,7 +320,7 @@ void StageMonitor::ObserveStage(size_t slot, const StageMonitorBinding& binding,
             ? static_cast<float>(frames) / static_cast<float>(m_view->sampleRate)
             : 0.0f;
     WriteSlot(slot, binding, inputPeak, inputRms, outputPeak, outputRms,
-              engagement, dynamicGainDb,
+              engagement, dynamicGainDb, tuner,
               std::pow(0.5f, seconds / kShortPeakHalfLifeSeconds),
               std::pow(0.5f, seconds / kPeakHalfLifeSeconds));
 }
@@ -386,7 +389,7 @@ void StageMonitor::AnalyzeSpectrum(size_t slot, const double* samples,
 void StageMonitor::WriteSlot(size_t slot, const StageMonitorBinding& binding,
                              float inputPeak, float inputRms, float outputPeak,
                              float outputRms, float engagement,
-                             float dynamicGainDb, float shortDecay,
+                             float dynamicGainDb, const TunerMonitorData& tuner, float shortDecay,
                              float peakDecay)
 {
     StageMonitorSlot& target = m_view->slots[slot];
@@ -395,7 +398,8 @@ void StageMonitor::WriteSlot(size_t slot, const StageMonitorBinding& binding,
 
     target.effectId = binding.effectId;
     target.type = static_cast<LONG>(binding.type);
-    target.flags = kStageMonitorFlagObserved;
+    target.flags = kStageMonitorFlagObserved |
+                   (tuner.valid ? kStageMonitorFlagTunerValid : 0u);
     target.inputPeak = inputPeak;
     target.inputRms = inputRms;
     target.outputPeak = outputPeak;
@@ -421,6 +425,8 @@ void StageMonitor::WriteSlot(size_t slot, const StageMonitorBinding& binding,
 
     target.engagement = engagement;
     target.dynamicGainDb = dynamicGainDb;
+    target.tunerFrequencyHz = tuner.frequencyHz;
+    target.tunerConfidence = tuner.confidence;
 
     if (binding.spectrum) {
         const auto& bins = m_impl->spectrum[slot];
@@ -454,6 +460,8 @@ void StageMonitor::ClearSlot(size_t slot)
     target.outputPeakHold = 0.0f;
     target.engagement = 0.0f;
     target.dynamicGainDb = 0.0f;
+    target.tunerFrequencyHz = 0.0f;
+    target.tunerConfidence = 0.0f;
     std::memset(target.spectrum, 0, sizeof(target.spectrum));
 
     auto& bins = m_impl->spectrum[slot];

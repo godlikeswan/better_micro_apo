@@ -388,6 +388,23 @@ void LayoutEffectParams(int x, int y, int width)
                   y - rowStep);
         break;
     }
+    case apo::EffectType::Tuner: {
+        const int rightX = x + columnWidth + columnGap;
+        MoveWindow(g_tunerAlgorithmLabel, x, y, labelWidth, Scale(20), TRUE);
+        MoveWindow(g_tunerAlgorithmCombo, x + labelWidth, y, sliderWidth,
+                   Scale(200), TRUE);
+        placeReset(ParamResetTunerAlgorithm, x, y);
+        MoveWindow(g_tunerSampleSizeLabel, rightX, y, labelWidth, Scale(20),
+                   TRUE);
+        MoveWindow(g_tunerSampleSizeCombo, rightX + labelWidth, y, sliderWidth,
+                   Scale(200), TRUE);
+        placeReset(ParamResetTunerSampleSize, rightX, y);
+        y += rowStep;
+        placePair(g_tunerSmoothingLabel, g_tunerSmoothingSlider,
+                  ParamResetTunerSmoothing, g_tunerReferenceLabel,
+                  g_tunerReferenceSlider, ParamResetTunerReference);
+        break;
+    }
     default:
         break;
     }
@@ -730,6 +747,43 @@ void CreateControls(HWND root)
     g_noiseCapture =
         ui::Button(window, IDC_NOISE_CAPTURE, L"Capture noise profile");
     g_noiseNote = ui::Label(window, IDC_NOISE_NOTE, L"");
+
+    g_tunerAlgorithmLabel =
+        ui::Label(window, IDC_TUNER_ALGORITHM_LABEL, L"Algorithm");
+    g_tunerAlgorithmCombo =
+        ui::ComboBox(window, IDC_TUNER_ALGORITHM_COMBO, CBS_DROPDOWNLIST);
+    for (int algorithm = 0;
+         algorithm < static_cast<int>(apo::TunerAlgorithm::Count); ++algorithm) {
+        SendMessageW(g_tunerAlgorithmCombo, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(apo::TunerAlgorithmName(
+                         static_cast<apo::TunerAlgorithm>(algorithm))));
+    }
+    SendMessageW(g_tunerAlgorithmCombo, CB_SETCURSEL,
+                 static_cast<int>(apo::TunerAlgorithm::Autocorrelation), 0);
+
+    g_tunerSampleSizeLabel =
+        ui::Label(window, IDC_TUNER_SAMPLE_SIZE_LABEL, L"Sample size");
+    g_tunerSampleSizeCombo =
+        ui::ComboBox(window, IDC_TUNER_SAMPLE_SIZE_COMBO, CBS_DROPDOWNLIST);
+    for (int size : apo::kTunerSampleSizes) {
+        const std::wstring text =
+            std::to_wstring(size) + L" samples";
+        SendMessageW(g_tunerSampleSizeCombo, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(text.c_str()));
+    }
+    SendMessageW(g_tunerSampleSizeCombo, CB_SETCURSEL,
+                 apo::TunerSampleSizeIndex(apo::kTunerDefaultSampleSize), 0);
+
+    g_tunerSmoothingLabel =
+        ui::Label(window, IDC_TUNER_SMOOTHING_LABEL, L"Smoothing (%)");
+    g_tunerSmoothingSlider = ui::Slider(
+        window, IDC_TUNER_SMOOTHING_SLIDER,
+        {apo::kTunerMinSmoothing, apo::kTunerMaxSmoothing, 1.0, false, 0});
+    g_tunerReferenceLabel =
+        ui::Label(window, IDC_TUNER_REFERENCE_LABEL, L"Reference A4 (Hz)");
+    g_tunerReferenceSlider = ui::Slider(
+        window, IDC_TUNER_REFERENCE_SLIDER,
+        {apo::kTunerMinReferenceHz, apo::kTunerMaxReferenceHz, 0.1, false, 1});
 
     g_listen = ui::CheckBox(window, IDC_LISTEN, L"Listen to this device");
 
