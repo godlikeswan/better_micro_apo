@@ -685,10 +685,10 @@ bool ClearOtherCompositeValues(const std::wstring& fx,
     return ok;
 }
 
-// Removes this APO from the stream and PreMix slots that older versions bound
-// it to. Leaving it there would process non-raw streams twice.
+// Removes this APO from every single-effect slot except the one we are about
+// to use. Leaving a second binding in place would process a stream twice.
 bool ClearLegacyBinding(const std::wstring& fx, const std::wstring& device,
-                        std::wstring& log)
+                        bool keepPremix, std::wstring& log)
 {
     bool ok = true;
 
@@ -711,7 +711,8 @@ bool ClearLegacyBinding(const std::wstring& fx, const std::wstring& device,
     }
 
     std::wstring value;
-    if (detail::RegReadString(HKEY_LOCAL_MACHINE, fx, kPreMixProp, value) &&
+    if (!keepPremix &&
+        detail::RegReadString(HKEY_LOCAL_MACHINE, fx, kPreMixProp, value) &&
         _wcsicmp(value.c_str(), kClsid) == 0 &&
         !detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx, kPreMixProp)) {
         log += L"Could not clear the PreMix slot on " + device + L".\r\n";
@@ -721,6 +722,14 @@ bool ClearLegacyBinding(const std::wstring& fx, const std::wstring& device,
         _wcsicmp(value.c_str(), kClsid) == 0 &&
         !detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx, kStreamProp)) {
         log += L"Could not clear the Stream slot on " + device + L".\r\n";
+        ok = false;
+    }
+    // No device uses the single endpoint slot any more. Clear our stale
+    // binding there when migrating from a build that still wrote it.
+    if (detail::RegReadString(HKEY_LOCAL_MACHINE, fx, kEndpointProp, value) &&
+        _wcsicmp(value.c_str(), kClsid) == 0 &&
+        !detail::RegDeleteValue(HKEY_LOCAL_MACHINE, fx, kEndpointProp)) {
+        log += L"Could not clear the endpoint effect on " + device + L".\r\n";
         ok = false;
     }
     return ok;
@@ -1104,10 +1113,11 @@ std::vector<ApplyPlan> BuildPlans(const std::vector<Change>& changes,
         plan.isolateRebind = change.enable && plan.wasEnabled &&
                              HasOtherCompositeValues(plan.fx);
 
-        // A device bound by an older version still sits in a stream slot,
-        // which raw streams bypass. Move it to the endpoint slot.
+        // A device bound by an older version may sit in a stream slot or in
+        // the single endpoint slot, which raw streams bypass on legacy
+        // devices. Move it to the slot this endpoint actually processes.
         plan.bindingUpgrade =
-            change.enable && plan.wasEnabled && !it->BoundAtEndpoint();
+            change.enable && plan.wasEnabled && !it->BoundAtPreferredSlot();
 
         plan.needsRestart =
             plan.bindingTransition || plan.bindingUpgrade ||
@@ -1124,18 +1134,28 @@ std::vector<ApplyPlan> BuildPlans(const std::vector<Change>& changes,
     return plans;
 }
 
-// Moves bindings written by older versions from the stream and PreMix slots to
-// the endpoint-effect slot. Raw streams skip stream effects, so a binding left
-// in a stream slot would not process apps like Discord.
+// Moves bindings written by older versions to the slot the endpoint actually
+// processes. Effect-pack devices use the composite endpoint chain; legacy
+// devices use PreMix because the single endpoint slot never locks there.
 bool MigrateEffectBindings(std::wstring& log)
 {
     bool ok = true;
     for (const Endpoint& endpoint : EnumEndpoints()) {
-        if (!endpoint.Enabled() || endpoint.BoundAtEndpoint()) {
+        if (!endpoint.Enabled() || endpoint.BoundAtPreferredSlot()) {
             continue;
         }
 
         const std::wstring fx = detail::FxSub(endpoint.id);
+        std::wstring backup;
+        if (!CreateBackup(endpoint, backup, log)) {
+            ok = false;
+        }
+
+        if (!ClearLegacyBinding(fx, endpoint.name,
+                                !endpoint.compositePresent, log)) {
+            ok = false;
+        }
+
         bool bound = false;
         if (endpoint.compositePresent) {
             std::vector<std::wstring> chain;
@@ -1147,20 +1167,17 @@ bool MigrateEffectBindings(std::wstring& log)
                                                 kCompositeEndpointProp, chain);
         } else {
             bound = detail::RegWriteString(HKEY_LOCAL_MACHINE, fx,
-                                           kEndpointProp, kClsid);
+                                           kPreMixProp, kClsid);
         }
 
         if (!bound) {
             log += L"Could not move " + endpoint.name +
-                   L" to the endpoint effect slot.\r\n";
+                   L" to the preferred effect slot.\r\n";
             ok = false;
             continue;
         }
-        if (!ClearLegacyBinding(fx, endpoint.name, log)) {
-            ok = false;
-        }
         log += L"Moved " + endpoint.name +
-               L" to the endpoint effect slot.\r\n";
+               L" to the preferred effect slot.\r\n";
     }
     return ok;
 }
@@ -1243,12 +1260,12 @@ Result InstallFiles()
         return result;
     }
 
-    // A previous version bound devices in stream slots, which raw streams
-    // bypass. Move them to the endpoint slot while the audio service is still
-    // stopped so the change takes effect when it starts again.
+    // A previous version bound devices in stream or single endpoint slots.
+    // Move them to the slot the endpoint actually processes while the audio
+    // service is still stopped so the change takes effect when it starts.
     if (!MigrateEffectBindings(log)) {
-        log += L"Some devices still need Apply to use the endpoint "
-               L"effect.\r\n";
+        log += L"Some devices still need Apply to use the preferred "
+               L"effect slot.\r\n";
     }
 
     result.ok = true;
@@ -1425,10 +1442,17 @@ Result ApplyChanges(const std::vector<Change>& changes)
                 }
             }
 
-            // Bind as an endpoint effect: Windows applies endpoint effects
-            // even to raw streams, while stream effects are skipped for them.
-            // Discord and WhatsApp open the microphone raw, so this is what
-            // makes their audio processed.
+            // Clear other single-effect bindings before writing the new one,
+            // so a device never ends up with two active slots.
+            if (!ClearLegacyBinding(fx, endpoint.name,
+                                    !endpoint.compositePresent, log)) {
+                result.ok = false;
+            }
+
+            // Effect-pack devices use the composite endpoint chain, which
+            // Windows applies even to raw streams. Legacy devices use PreMix:
+            // the single endpoint slot is instantiated but never locked there,
+            // even when its EFX mode list contains only DEFAULT.
             if (endpoint.compositePresent) {
                 // Isolation is always on: clear the driver's other effect-pack
                 // chains so only this APO processes the device. Re-clear them
@@ -1450,17 +1474,11 @@ Result ApplyChanges(const std::vector<Change>& changes)
                     continue;
                 }
             } else if (!detail::RegWriteString(HKEY_LOCAL_MACHINE, fx,
-                                               kEndpointProp, kClsid)) {
-                log += L"Could not write the endpoint effect for " +
+                                               kPreMixProp, kClsid)) {
+                log += L"Could not write the PreMix effect for " +
                        endpoint.name + L".\r\n";
                 result.ok = false;
                 continue;
-            }
-
-            // Ours must not stay in a stream slot: raw streams bypass it and
-            // every other stream would process twice.
-            if (!ClearLegacyBinding(fx, endpoint.name, log)) {
-                result.ok = false;
             }
 
             if (endpoint.disableSysFx) {

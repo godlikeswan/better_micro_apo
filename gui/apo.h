@@ -51,20 +51,22 @@ struct Endpoint {
     bool compositeOurs = false;
     bool compositeEndpointOurs = false;
 
-    // The APO is bound as an endpoint effect (EFX), because Windows applies
-    // endpoint effects even to raw streams while stream effects are skipped.
-    // Effect-pack devices keep the endpoint chain in a composite slot; older
-    // devices use the single legacy slot.
-    bool BoundAtEndpoint() const
+    // Effect-pack devices use the composite endpoint chain because Windows
+    // applies it even to raw streams. Legacy devices without an effect pack
+    // use PreMix: Windows instantiates an APO in the single endpoint slot on
+    // those endpoints but never locks it for streaming, even when the EFX
+    // mode list contains only DEFAULT.
+    bool BoundAtPreferredSlot() const
     {
-        return compositePresent ? compositeEndpointOurs : endpointOurs;
+        return compositePresent ? compositeEndpointOurs : premixOurs;
     }
 
-    // Bindings written by older versions (stream and PreMix slots) still count
-    // as enabled so Apply can move them to the endpoint slot.
+    // Bindings written by older versions, including the single endpoint slot,
+    // still count as enabled so Apply can move them to the preferred slot.
     bool Enabled() const
     {
-        return BoundAtEndpoint() || compositeOurs || premixOurs || streamOurs;
+        return BoundAtPreferredSlot() || compositeOurs || premixOurs ||
+               streamOurs || endpointOurs;
     }
 
     // Per-device settings, loaded from ProgramData and edited by the GUI.

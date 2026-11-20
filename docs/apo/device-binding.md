@@ -20,31 +20,36 @@ which key holds our CLSID:
 
 | Device | Property | Index | Type | Value |
 | --- | --- | --- | --- | --- |
-| No effect pack | `PKEY_FX_EndpointEffectClsid` | `...,7` | `REG_SZ` | The APO CLSID. |
+| No effect pack | `PKEY_FX_PreMixEffectClsid` | `...,1` | `REG_SZ` | The APO CLSID. |
 | Effect pack | `PKEY_CompositeFX_EndpointEffectClsid` | `...,15` | `REG_MULTI_SZ` | The CLSID appended to the driver's endpoint chain. |
 
 On effect-pack devices the driver's endpoint entries are preserved while the
-APO is enabled and restored from the backup on disable. Legacy slots are no
-longer used for new binds.
+APO is enabled and restored from the backup on disable. Other legacy slots are
+no longer used for new binds.
 
-## Why endpoint effects
+## Why two slots
 
-Windows applies endpoint effects even to raw streams, but skips stream effects
-on them. Chromium/Electron apps such as Discord and WhatsApp open the
-microphone raw when the endpoint reports raw-processing support, so a
-stream-slot binding silently stopped processing there.
+Windows applies composite endpoint chains even to raw streams, but skips stream
+effects on them. Chromium/Electron apps such as Discord and WhatsApp open the
+microphone raw when the endpoint reports raw-processing support, so effect-pack
+devices keep using the composite endpoint chain from commit `f027c3a`.
 
-This change came from commit `f027c3a` ("Bind as an endpoint effect and add a
-dynamic effects list"): every device is now bound as an endpoint effect. Older
-builds used the PreMix slot (`...,1`) and later the composite stream chain
-(`...,13`). The bind path removes this APO from those old slots:
+Legacy devices without a driver effect pack are different. On Line 1/2,
+binding the single endpoint effect (`...,7`) and narrowing
+`PKEY_EFX_ProcessingModes_Supported_For_Streaming` to DEFAULT-only still made
+Windows instantiate the APO without ever calling `LockForProcess`. The last
+working configuration used PreMix, so those devices now bind there. Raw-stream
+processing is therefore only guaranteed for effect-pack endpoints; legacy
+endpoints are processed on normal streams.
 
-- `PKEY_FX_DefaultEffect` / PreMix — `...,1` (`REG_SZ`)
+The bind path removes this APO from the slots it no longer uses:
+
+- single endpoint effect — `...,7` (`REG_SZ`)
 - stream — `...,5` (`REG_SZ`)
 - composite stream — `...,13` (`REG_MULTI_SZ`)
 
 An endpoint found only through an old slot still counts as *enabled* in the UI,
-but is marked pending migration: **Enable** moves it to the endpoint slot, and
+but is marked pending migration: **Enable** moves it to the preferred slot, and
 **Install / Update** runs the same migration while audio is stopped. Without
 this, a migrated device would have the APO in two chains and be processed
 twice.
@@ -57,7 +62,8 @@ setting: `ApoSettings::isolateEffects` is always forced on by `ClampSettings`.
 
 Isolation is a desired state, not just a transition. On every apply the GUI:
 
-- keeps this APO's entry in the composite endpoint chain (`...,15`);
+- keeps this APO in PreMix (`...,1`) on legacy devices or in the composite
+  endpoint chain (`...,15`) on effect-pack devices;
 - drops the driver's other entries from that chain;
 - clears the other composite chains: mode (`...,14`), keyword detector
   (`...,16`–`...,18`), and offload (`...,19`–`...,20`).
