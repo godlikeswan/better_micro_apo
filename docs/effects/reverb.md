@@ -7,8 +7,9 @@ effects; use it sparingly on speech or the words get muddy.
 ## Try this
 
 - Put Reverb last in the chain, after cleanup and level effects, so you are not
-  also reverberating noise. It works well after [Mono](mono.md), because a mono
-  source copied to both channels still gets a wide tail.
+  also reverberating noise. It works well when **Treat as mono** is checked on
+  the [Input](input.md) row, because a mono source copied to both channels still
+  gets a wide tail.
 - Start with **Level** around **10 to 20%** and talk normally. Level changes only
   the wet return; the dry voice is never attenuated. Raise it if you want an
   obvious room.

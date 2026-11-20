@@ -6,9 +6,10 @@ settings add warmth and bite; higher Drive and Curvature get buzzy.
 
 ## Try this
 
-- Put Saturation near the end of the list, usually after
-  [Mono](mono.md) and before [Reverb](reverb.md), so the reverb tail stays
-  clean.
+- Put Saturation near the end of the list, usually after cleanup effects and
+  before [Reverb](reverb.md), [Echo](echo.md), [Chorus](chorus.md), or
+  [Pitch Shifter](pitch-shifter.md), so their tails stay clean. Use
+  **Treat as mono** on the [Input](input.md) row if the source is mono.
 - Start with **Drive** at 0 dB and raise it until the signal is pushed into the
   curve. A little adds warmth and bite; a lot gets buzzy.
 - **Curvature** controls how hard the curve bends. Around 0% it is almost

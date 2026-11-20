@@ -214,9 +214,13 @@ const wchar_t* EffectTypeName(EffectType type)
     case EffectType::Gate:       return L"Gate/Expander";
     case EffectType::Compressor: return L"Compressor/Limiter";
     case EffectType::Equalizer:  return L"Equalizer";
-    case EffectType::Mono:       return L"Mono";
     case EffectType::Saturation: return L"Saturation/Overdrive/Distortion";
     case EffectType::Reverb:     return L"Reverb";
+    case EffectType::Echo:       return L"Echo";
+    case EffectType::Chorus:     return L"Chorus";
+    case EffectType::Tremolo:    return L"Tremolo";
+    case EffectType::Vibrato:    return L"Vibrato";
+    case EffectType::PitchShifter: return L"Pitch Shifter";
     case EffectType::Tuner:      return L"Tuner";
     default:                     return L"";
     }
@@ -241,6 +245,38 @@ const wchar_t* ReverbAlgorithmName(ReverbAlgorithm algorithm)
     case ReverbAlgorithm::FeedbackDelayNetwork:
         return L"Feedback delay network (FDN)";
     default:                                  return L"";
+    }
+}
+
+const wchar_t* EchoModeName(EchoMode mode)
+{
+    switch (mode)
+    {
+    case EchoMode::Stereo:    return L"Stereo";
+    case EchoMode::PingPong:  return L"Ping-pong";
+    default:                  return L"";
+    }
+}
+
+const wchar_t* ModulationWaveformName(ModulationWaveform waveform)
+{
+    switch (waveform)
+    {
+    case ModulationWaveform::Sine:     return L"Sine";
+    case ModulationWaveform::Triangle: return L"Triangle";
+    case ModulationWaveform::Square:   return L"Square";
+    default:                           return L"";
+    }
+}
+
+const wchar_t* PitchAlgorithmName(PitchAlgorithm algorithm)
+{
+    switch (algorithm)
+    {
+    case PitchAlgorithm::Granular:      return L"Granular";
+    case PitchAlgorithm::Wsola:         return L"WSOLA";
+    case PitchAlgorithm::PhaseVocoder:  return L"Phase vocoder";
+    default:                            return L"";
     }
 }
 
@@ -278,9 +314,13 @@ const char* EffectTypeKey(EffectType type)
     case EffectType::Gate:       return "gate";
     case EffectType::Compressor: return "compressor";
     case EffectType::Equalizer:  return "equalizer";
-    case EffectType::Mono:       return "mono";
     case EffectType::Saturation: return "saturation";
     case EffectType::Reverb:     return "reverb";
+    case EffectType::Echo:       return "echo";
+    case EffectType::Chorus:     return "chorus";
+    case EffectType::Tremolo:    return "tremolo";
+    case EffectType::Vibrato:    return "vibrato";
+    case EffectType::PitchShifter: return "pitch_shifter";
     case EffectType::Tuner:      return "tuner";
     default:                     return "gain";
     }
@@ -310,6 +350,9 @@ int EffectTypeCapacity(EffectType type)
     case EffectType::Gate:
     case EffectType::Compressor:
     case EffectType::Reverb:
+    case EffectType::Echo:
+    case EffectType::Chorus:
+    case EffectType::PitchShifter:
     case EffectType::Tuner:
         return kMaxHeavyEffects;
     default:
@@ -327,9 +370,13 @@ bool EffectEnabled(const EffectInstance& effect)
     case EffectType::Gate:       return effect.gate.enabled;
     case EffectType::Compressor: return effect.compressor.enabled;
     case EffectType::Equalizer:  return effect.equalizer.enabled;
-    case EffectType::Mono:       return effect.mono.enabled;
     case EffectType::Saturation: return effect.distortion.enabled;
     case EffectType::Reverb:     return effect.reverb.enabled;
+    case EffectType::Echo:       return effect.echo.enabled;
+    case EffectType::Chorus:     return effect.chorus.enabled;
+    case EffectType::Tremolo:    return effect.tremolo.enabled;
+    case EffectType::Vibrato:    return effect.vibrato.enabled;
+    case EffectType::PitchShifter: return effect.pitchShifter.enabled;
     case EffectType::Tuner:      return effect.tuner.enabled;
     default:                     return false;
     }
@@ -345,9 +392,13 @@ void SetEffectEnabled(EffectInstance& effect, bool enabled)
     case EffectType::Gate:       effect.gate.enabled = enabled; break;
     case EffectType::Compressor: effect.compressor.enabled = enabled; break;
     case EffectType::Equalizer:  effect.equalizer.enabled = enabled; break;
-    case EffectType::Mono:       effect.mono.enabled = enabled; break;
     case EffectType::Saturation: effect.distortion.enabled = enabled; break;
     case EffectType::Reverb:     effect.reverb.enabled = enabled; break;
+    case EffectType::Echo:       effect.echo.enabled = enabled; break;
+    case EffectType::Chorus:     effect.chorus.enabled = enabled; break;
+    case EffectType::Tremolo:    effect.tremolo.enabled = enabled; break;
+    case EffectType::Vibrato:    effect.vibrato.enabled = enabled; break;
+    case EffectType::PitchShifter: effect.pitchShifter.enabled = enabled; break;
     case EffectType::Tuner:      effect.tuner.enabled = enabled; break;
     default:                     break;
     }
@@ -450,6 +501,7 @@ void ClampEffect(EffectInstance& effect)
 
     case EffectType::Gain:
         ClampFinite(effect.gain.gainDb, 12.0, -24.0, 50.0);
+        effect.gain.treatAsMono = false;
         break;
 
     case EffectType::Noise:
@@ -496,9 +548,6 @@ void ClampEffect(EffectInstance& effect)
         break;
     }
 
-    case EffectType::Mono:
-        break;
-
     case EffectType::Saturation:
         if (effect.distortion.function < 0 ||
             effect.distortion.function >= kDistortionFunctionCount) {
@@ -522,6 +571,72 @@ void ClampEffect(EffectInstance& effect)
         ClampFinite(effect.reverb.width, 50.0, 0.0, 100.0);
         ClampFinite(effect.reverb.density, 50.0, 0.0, 100.0);
         ClampFinite(effect.reverb.predelayMs, 20.0, 0.0, 200.0);
+        break;
+
+    case EffectType::Echo:
+        if (effect.echo.mode < EchoMode::Stereo ||
+            effect.echo.mode >= EchoMode::Count) {
+            effect.echo.mode = EchoMode::Stereo;
+        }
+        ClampFinite(effect.echo.timeMs, kEchoDefaultTimeMs,
+                    kEchoMinTimeMs, kEchoMaxTimeMs);
+        ClampFinite(effect.echo.feedback, kEchoDefaultFeedback, 0.0,
+                    kEchoMaxFeedback);
+        ClampFinite(effect.echo.damping, kEchoDefaultDamping, 0.0, 100.0);
+        ClampFinite(effect.echo.level, kEchoDefaultLevel, 0.0, 100.0);
+        break;
+
+    case EffectType::Chorus:
+        if (effect.chorus.voices < kChorusMinVoices ||
+            effect.chorus.voices > kChorusMaxVoices) {
+            effect.chorus.voices = kChorusDefaultVoices;
+        }
+        ClampFinite(effect.chorus.rateHz, kChorusDefaultRateHz,
+                    kChorusMinRateHz, kChorusMaxRateHz);
+        ClampFinite(effect.chorus.depthMs, kChorusDefaultDepthMs, 0.0,
+                    kChorusMaxDepthMs);
+        ClampFinite(effect.chorus.width, kChorusDefaultWidth, 0.0, 100.0);
+        ClampFinite(effect.chorus.level, kChorusDefaultLevel, 0.0, 100.0);
+        break;
+
+    case EffectType::Tremolo:
+        ClampFinite(effect.tremolo.rateHz, kModulationDefaultRateHz,
+                    kModulationMinRateHz, kModulationMaxRateHz);
+        ClampFinite(effect.tremolo.depth, kTremoloDefaultDepth, 0.0, 100.0);
+        if (effect.tremolo.waveform < ModulationWaveform::Sine ||
+            effect.tremolo.waveform >= ModulationWaveform::Count) {
+            effect.tremolo.waveform = ModulationWaveform::Sine;
+        }
+        ClampFinite(effect.tremolo.stereoSpread, kModulationDefaultSpread, 0.0,
+                    kModulationMaxSpread);
+        break;
+
+    case EffectType::Vibrato:
+        ClampFinite(effect.vibrato.rateHz, kModulationDefaultRateHz,
+                    kModulationMinRateHz, kModulationMaxRateHz);
+        ClampFinite(effect.vibrato.depthCents, kVibratoDefaultDepthCents, 0.0,
+                    kVibratoMaxDepthCents);
+        if (effect.vibrato.waveform < ModulationWaveform::Sine ||
+            effect.vibrato.waveform >= ModulationWaveform::Count) {
+            effect.vibrato.waveform = ModulationWaveform::Sine;
+        }
+        ClampFinite(effect.vibrato.stereoSpread, kModulationDefaultSpread, 0.0,
+                    kModulationMaxSpread);
+        break;
+
+    case EffectType::PitchShifter:
+        if (effect.pitchShifter.algorithm < PitchAlgorithm::Granular ||
+            effect.pitchShifter.algorithm >= PitchAlgorithm::Count) {
+            effect.pitchShifter.algorithm = PitchAlgorithm::Granular;
+        }
+        ClampFinite(effect.pitchShifter.shiftSemitones,
+                    kPitchDefaultSemitones, kPitchMinSemitones,
+                    kPitchMaxSemitones);
+        effect.pitchShifter.windowSamples =
+            ValidPitchWindow(effect.pitchShifter.windowSamples);
+        ClampFinite(effect.pitchShifter.level, kPitchDefaultLevel, 0.0, 100.0);
+        ClampFinite(effect.pitchShifter.dryLevel, kPitchDefaultDryLevel, 0.0,
+                    100.0);
         break;
 
     case EffectType::Tuner:
@@ -684,14 +799,22 @@ void LoadEffectFields(const std::vector<KeyValue>& entries,
     getBool(L"enabled", effect.gate.enabled);
     getBool(L"enabled", effect.compressor.enabled);
     getBool(L"enabled", effect.equalizer.enabled);
-    getBool(L"enabled", effect.mono.enabled);
     getBool(L"enabled", effect.distortion.enabled);
     getBool(L"enabled", effect.reverb.enabled);
+    getBool(L"enabled", effect.echo.enabled);
+    getBool(L"enabled", effect.chorus.enabled);
+    getBool(L"enabled", effect.tremolo.enabled);
+    getBool(L"enabled", effect.vibrato.enabled);
+    getBool(L"enabled", effect.pitchShifter.enabled);
     getBool(L"enabled", effect.tuner.enabled);
 
     switch (effect.type)
     {
     case EffectType::Input:
+        getDouble(L"gain_db", effect.gain.gainDb);
+        getBool(L"input_treat_as_mono", effect.gain.treatAsMono);
+        break;
+
     case EffectType::Gain:
         getDouble(L"gain_db", effect.gain.gainDb);
         break;
@@ -726,9 +849,6 @@ void LoadEffectFields(const std::vector<KeyValue>& entries,
         break;
     }
 
-    case EffectType::Mono:
-        break;
-
     case EffectType::Saturation:
         getInt(L"saturation_function", effect.distortion.function);
         getDouble(L"saturation_drive_db", effect.distortion.driveDb);
@@ -747,6 +867,57 @@ void LoadEffectFields(const std::vector<KeyValue>& entries,
         getDouble(L"reverb_width", effect.reverb.width);
         getDouble(L"reverb_density", effect.reverb.density);
         getDouble(L"reverb_predelay_ms", effect.reverb.predelayMs);
+        break;
+    }
+
+    case EffectType::Echo: {
+        int mode = static_cast<int>(effect.echo.mode);
+        getInt(L"echo_mode", mode);
+        effect.echo.mode = static_cast<EchoMode>(mode);
+        getDouble(L"echo_time_ms", effect.echo.timeMs);
+        getDouble(L"echo_feedback", effect.echo.feedback);
+        getDouble(L"echo_damping", effect.echo.damping);
+        getDouble(L"echo_level", effect.echo.level);
+        break;
+    }
+
+    case EffectType::Chorus:
+        getInt(L"chorus_voices", effect.chorus.voices);
+        getDouble(L"chorus_rate_hz", effect.chorus.rateHz);
+        getDouble(L"chorus_depth_ms", effect.chorus.depthMs);
+        getDouble(L"chorus_width", effect.chorus.width);
+        getDouble(L"chorus_level", effect.chorus.level);
+        break;
+
+    case EffectType::Tremolo: {
+        int waveform = static_cast<int>(effect.tremolo.waveform);
+        getDouble(L"tremolo_rate_hz", effect.tremolo.rateHz);
+        getDouble(L"tremolo_depth", effect.tremolo.depth);
+        getInt(L"tremolo_waveform", waveform);
+        effect.tremolo.waveform = static_cast<ModulationWaveform>(waveform);
+        getDouble(L"tremolo_stereo_spread", effect.tremolo.stereoSpread);
+        break;
+    }
+
+    case EffectType::Vibrato: {
+        int waveform = static_cast<int>(effect.vibrato.waveform);
+        getDouble(L"vibrato_rate_hz", effect.vibrato.rateHz);
+        getDouble(L"vibrato_depth_cents", effect.vibrato.depthCents);
+        getInt(L"vibrato_waveform", waveform);
+        effect.vibrato.waveform = static_cast<ModulationWaveform>(waveform);
+        getDouble(L"vibrato_stereo_spread", effect.vibrato.stereoSpread);
+        break;
+    }
+
+    case EffectType::PitchShifter: {
+        int algorithm = static_cast<int>(effect.pitchShifter.algorithm);
+        getInt(L"pitch_algorithm", algorithm);
+        effect.pitchShifter.algorithm = static_cast<PitchAlgorithm>(algorithm);
+        getDouble(L"pitch_shift_semitones",
+                  effect.pitchShifter.shiftSemitones);
+        getInt(L"pitch_window_samples", effect.pitchShifter.windowSamples);
+        getDouble(L"pitch_level", effect.pitchShifter.level);
+        getDouble(L"pitch_dry_level", effect.pitchShifter.dryLevel);
         break;
     }
 
@@ -933,6 +1104,12 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
             switch (effect.type)
             {
             case EffectType::Input:
+                text += prefix + "gain_db=" +
+                        FormatDouble(effect.gain.gainDb) + "\n";
+                text += prefix + "input_treat_as_mono=" +
+                        (effect.gain.treatAsMono ? "1" : "0") + "\n";
+                break;
+
             case EffectType::Gain:
                 text += prefix + "gain_db=" +
                         FormatDouble(effect.gain.gainDb) + "\n";
@@ -979,9 +1156,6 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
                         FormatDouble(effect.equalizer.lookaheadMs) + "\n";
                 break;
 
-            case EffectType::Mono:
-                break;
-
             case EffectType::Saturation:
                 text += prefix + "saturation_function=" +
                         std::to_string(effect.distortion.function) + "\n";
@@ -1012,6 +1186,76 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
                         FormatDouble(effect.reverb.density) + "\n";
                 text += prefix + "reverb_predelay_ms=" +
                         FormatDouble(effect.reverb.predelayMs) + "\n";
+                break;
+
+            case EffectType::Echo:
+                text += prefix + "echo_mode=" +
+                        std::to_string(static_cast<int>(effect.echo.mode)) +
+                        "\n";
+                text += prefix + "echo_time_ms=" +
+                        FormatDouble(effect.echo.timeMs) + "\n";
+                text += prefix + "echo_feedback=" +
+                        FormatDouble(effect.echo.feedback) + "\n";
+                text += prefix + "echo_damping=" +
+                        FormatDouble(effect.echo.damping) + "\n";
+                text += prefix + "echo_level=" +
+                        FormatDouble(effect.echo.level) + "\n";
+                break;
+
+            case EffectType::Chorus:
+                text += prefix + "chorus_voices=" +
+                        std::to_string(effect.chorus.voices) + "\n";
+                text += prefix + "chorus_rate_hz=" +
+                        FormatDouble(effect.chorus.rateHz) + "\n";
+                text += prefix + "chorus_depth_ms=" +
+                        FormatDouble(effect.chorus.depthMs) + "\n";
+                text += prefix + "chorus_width=" +
+                        FormatDouble(effect.chorus.width) + "\n";
+                text += prefix + "chorus_level=" +
+                        FormatDouble(effect.chorus.level) + "\n";
+                break;
+
+            case EffectType::Tremolo:
+                text += prefix + "tremolo_rate_hz=" +
+                        FormatDouble(effect.tremolo.rateHz) + "\n";
+                text += prefix + "tremolo_depth=" +
+                        FormatDouble(effect.tremolo.depth) + "\n";
+                text += prefix + "tremolo_waveform=" +
+                        std::to_string(
+                            static_cast<int>(effect.tremolo.waveform)) +
+                        "\n";
+                text += prefix + "tremolo_stereo_spread=" +
+                        FormatDouble(effect.tremolo.stereoSpread) + "\n";
+                break;
+
+            case EffectType::Vibrato:
+                text += prefix + "vibrato_rate_hz=" +
+                        FormatDouble(effect.vibrato.rateHz) + "\n";
+                text += prefix + "vibrato_depth_cents=" +
+                        FormatDouble(effect.vibrato.depthCents) + "\n";
+                text += prefix + "vibrato_waveform=" +
+                        std::to_string(
+                            static_cast<int>(effect.vibrato.waveform)) +
+                        "\n";
+                text += prefix + "vibrato_stereo_spread=" +
+                        FormatDouble(effect.vibrato.stereoSpread) + "\n";
+                break;
+
+            case EffectType::PitchShifter:
+                text += prefix + "pitch_algorithm=" +
+                        std::to_string(
+                            static_cast<int>(effect.pitchShifter.algorithm)) +
+                        "\n";
+                text += prefix + "pitch_shift_semitones=" +
+                        FormatDouble(effect.pitchShifter.shiftSemitones) +
+                        "\n";
+                text += prefix + "pitch_window_samples=" +
+                        std::to_string(effect.pitchShifter.windowSamples) +
+                        "\n";
+                text += prefix + "pitch_level=" +
+                        FormatDouble(effect.pitchShifter.level) + "\n";
+                text += prefix + "pitch_dry_level=" +
+                        FormatDouble(effect.pitchShifter.dryLevel) + "\n";
                 break;
 
             case EffectType::Tuner:

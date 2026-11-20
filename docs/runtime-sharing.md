@@ -30,7 +30,7 @@ filename-safe with `apo::SafeEndpointId`.
 | --- | --- | --- |
 | `sequence` | `volatile uint32_t` | Seqlock: odd while writing, even when complete. |
 | `magic` | `uint32_t` | `0x50414D42` (`"BMAP"`). |
-| `version` | `uint32_t` | `13`; bump whenever `ApoSettings` changes layout. |
+| `version` | `uint32_t` | `17`; bump whenever `ApoSettings` changes layout. |
 | `structSize` | `uint32_t` | Size of the full structure. |
 | `generation` | `volatile uint64_t` | Incremented on each published snapshot; this is what the APO polls. |
 | `settings` | `ApoSettings` | The complete settings blob, copied by value. |
@@ -101,7 +101,7 @@ new snapshot is applied exactly once.
 `devices\{id}.ini` has a single `[dsp]` section:
 
 ```
-version=11
+version=15
 preset_count=4
 preset_index=0
 isolate_effects=1
@@ -117,26 +117,39 @@ preset_0_effect_0_noise_fft_size=512
 
 Each preset stores `effect_count`, `next_effect_id`, and one block per entry
 with `id`, `type`, `enabled`, and the type's parameter keys. Effect types are
-`input`, `gain`, `noise`, `gate`, `compressor`, `equalizer`, `mono`,
-`saturation`, `reverb`, and `tuner`; parameter keys include `gain_db` (also used
-by Input), `gate_threshold_db`, `gate_ratio`, `gate_hold_ms`,
-`compressor_threshold_db`, `compressor_ratio`, `compressor_hold_ms`,
-`equalizer_mode`, `equalizer_frequency_hz`, `equalizer_level_db`,
-`equalizer_ratio`, `equalizer_range_db`, `equalizer_hold_ms`,
-`equalizer_lookahead_ms`, `saturation_function`,
+`input`, `gain`, `noise`, `gate`, `compressor`, `equalizer`, `saturation`,
+`reverb`, `echo`, `chorus`, `tremolo`, `vibrato`, `pitch_shifter`, and `tuner`;
+parameter
+keys include `gain_db` (also used by Input), `input_treat_as_mono` (Input only),
+`gate_threshold_db`, `gate_ratio`,
+`gate_hold_ms`, `compressor_threshold_db`, `compressor_ratio`,
+`compressor_hold_ms`, `equalizer_mode`, `equalizer_frequency_hz`,
+`equalizer_level_db`, `equalizer_ratio`, `equalizer_range_db`,
+`equalizer_hold_ms`, `equalizer_lookahead_ms`, `saturation_function`,
 `reverb_algorithm`, `reverb_level`, `reverb_max_length_ms`,
-`reverb_predelay_ms`, `tuner_algorithm`, `tuner_sample_size`,
-`tuner_smoothing`, and `tuner_reference_hz`. Both dynamics blocks also store
-`input_db`, `output_db`, `attack_ms`, `release_ms`, and `lookahead_ms` under
-their own prefix; there is no mode key. Every preset has an Input row at index
-0; it is forced on and clamped to −24…+24 dB.
+`reverb_predelay_ms`, `echo_mode`, `echo_time_ms`, `echo_feedback`,
+`echo_damping`, `echo_level`, `chorus_voices`, `chorus_rate_hz`,
+`chorus_depth_ms`, `chorus_width`, `chorus_level`, `tremolo_rate_hz`,
+`tremolo_depth`, `tremolo_waveform`, `tremolo_stereo_spread`,
+`vibrato_rate_hz`, `vibrato_depth_cents`, `vibrato_waveform`,
+`vibrato_stereo_spread`, `pitch_algorithm`, `pitch_shift_semitones`,
+`pitch_window_samples`, `pitch_level`, `pitch_dry_level`,
+`tuner_algorithm`, `tuner_sample_size`, `tuner_smoothing`, and
+`tuner_reference_hz`. Waveform keys store 0 for Sine, 1 for Triangle, and 2 for
+Square. Both dynamics blocks also store `input_db`, `output_db`,
+`attack_ms`, `release_ms`, and `lookahead_ms` under their own prefix; there is
+no mode key. Every preset has an Input row at index 0; it is forced on and
+clamped to −24…+24 dB, and its `input_treat_as_mono` flag copies channel 0 to
+all other channels at the Input stage.
 The `id` is the stable instance id the stage pool uses to tell whether a slot
 now holds a different effect. Four presets are always written; only
 `preset_index` is processed.
 
 `LoadSettings` starts with defaults. If `[dsp] version` is missing or is not
-**11**, it deletes the INI file and returns the defaults; there is no migration
-path for old settings. For a current file, `ClampSettings` repairs invalid
+**15**, it deletes the INI file and returns the defaults; there is no migration
+path for old settings. Version 13 added Pitch Shifter's Dry level; version 14
+added Tremolo and Vibrato; version 15 added Input's `input_treat_as_mono` and
+removed the standalone Mono effect. For a current file, `ClampSettings` repairs invalid
 values: non-finite numbers fall back to defaults (except `gate_ratio`,
 `compressor_ratio`, and `equalizer_ratio`, where positive infinity is valid and
 is written as `inf`),

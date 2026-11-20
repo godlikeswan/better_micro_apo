@@ -57,19 +57,26 @@ All of these happen once per stream bind; none happen in `APOProcess`.
 | --- | --- | --- |
 | `BetterMicroApo` | `m_scratch` | `maxFrames * channels` `double`s. The interleaved input is decoded here, stages run in place, and the result is encoded to the output. |
 | `Chain` | `m_stages` | Reserves `kMaxEffects + 2` (18) `Stage*` slots and monitor bindings at construction so the temporary capture tap never allocates; `Clear`/refill never allocates. |
-| `StagePool` | stage objects | One stage per possible slot per type, `Configure`d once. Input allows 1, heavy types (noise, gate/expander, compressor/limiter, reverb, tuner) allow 4, and other addable types allow 16. Noise stages are always created and pass audio through until a profile is available. |
+| `StagePool` | stage objects | One stage per possible slot per type, `Configure`d once. Input allows 1, heavy types (noise, gate/expander, compressor/limiter, reverb, echo, chorus, pitch shifter, tuner) allow 4, and other addable types — including Tremolo and Vibrato — allow 16. Noise stages are always created and pass audio through until a profile is available. |
 | `DynamicsStage` | `m_delay` | `ceil(300 ms * sampleRate) * channels` `double`s, sized for the maximum clamp so a live lookahead change never allocates. |
 | `EqualizerStage` | `m_ic1`, `m_ic2`, `m_band` | Per-channel filter and band state. |
 | `NoiseStage` | FFT plans + analysis buffers | Radix-2 tables and windows for every supported size (256–4096), profile bins, gain arrays, input/output/history/overlap-add and real/imag arrays sized for the largest size. `Update` switches the active size without allocating. |
 | `ReverbStage` | tank buffers + predelay | Per channel: 8 damped combs and 4 allpasses (tunings scaled to the sample rate, odd channels get the classic stereo spread) plus `ceil(200 ms * sampleRate) + 1` predelay frames. |
-| `TunerStage` | analysis buffers + FFT plans | Mono, decimated, lag, and FFT arrays for the largest sample size plus a plan for every supported size. `Process` writes only telemetry, never samples. |
+| `EchoStage` | delay + feedback state | `ceil(1200 ms * sampleRate) + 2` frames per channel plus one feedback low-pass state per channel. A live Time change only moves the read offset. |
+| `ChorusStage` | voice buffers | Ten voice buffers of `ceil(65 ms * sampleRate) + 8` frames per channel, plus per-channel wet and input scratch. |
+| `TremoloStage` | LFO state | Small per-channel phase and smoothed-gain state; no delay buffers. |
+| `VibratoStage` | delay buffers | One circular buffer per channel sized for the deepest Depth at the slowest Rate, about 83,000 frames at 48 kHz, plus per-channel LFO and integrated-pitch state. |
+| `PitchShifterStage` | histories + FFT plans | Per channel: `6 * 16384 + 8` grain-history samples and `2 * 16384 + 8` vocoder input/overlap samples with separate analysis/synthesis phase, magnitude, weighted target-bin, and phase-lock accumulators; shared radix-2 plans and Hann windows for FFT sizes 512–16384. |
+| `TunerStage` | analysis + smoothing buffers + FFT plans | Mono, decimated, lag, and FFT arrays for the largest sample size, a plan for every supported size, and a time-stamped cents ring sized for the 2-second maximum smoothing window. `Process` writes only telemetry, never samples. |
 | `BetterMicroApo` | runtime file mapping | A read-only `MapViewOfFile` of `runtime\{endpoint-guid}.dat`, closed in `UnlockForProcess`. |
 | `BetterMicroApo` | capture mapping and tap | A read/write mapping of `runtime\{endpoint-guid}.capture` plus one configured `StageCaptureTap`, both closed in `UnlockForProcess`. |
 | `BetterMicroApo` | stage-monitor mapping | A read/write mapping of `runtime\{endpoint-guid}.monitor`, one shared 256-point FFT plan, and per-slot spectrum history. Opened in `LockForProcess`; `Close` publishes empty slots before unmapping in `UnlockForProcess`/`FinalRelease`. |
 
-Input reuses `GainStage`; it needs no buffers beyond the general scratch buffer.
-Gain, mono, and saturation stages also allocate no buffers at bind time; their
-coefficients are derived in `Update`.
+Input reuses `GainStage`, adding only an in-place channel copy when **Treat as
+mono** is checked; it needs no buffers beyond the general scratch buffer. Gain
+and saturation stages also allocate no buffers at bind time; their coefficients
+are derived in `Update`. Tremolo allocates only per-channel LFO state, and its
+coefficients are likewise retuned without allocation.
 
 `UnlockForProcess` closes the runtime, capture, and monitor mappings, clears the
 chain and pool, drops the profile and format, and releases the scratch buffer.
@@ -88,9 +95,9 @@ chain and pool, drops the profile and format, and releases the scratch buffer.
 3. Calls `StageMonitor::BeginBuffer()` so slots not observed in this buffer can
    be cleared at the end.
 4. For `BUFFER_SILENT`, runs `Chain::ProcessSilence` with the monitor sink only
-   when a stage needs silence (to flush a lookahead or reverb tail); otherwise
-   the output is marked silent and zeroed if the engine did not supply an
-   in-place buffer.
+   when a stage needs silence (to flush a lookahead, reverb tail, echo repeat,
+   chorus history, vibrato delay, or pitch-shift grain); otherwise the output is
+   marked silent and zeroed if the engine did not supply an in-place buffer.
 5. Otherwise `ProcessBuffer` calls `Chain::Process` with the monitor sink:
    decode interleaved bytes into the `double` scratch buffer, measure peak/RMS
    before and after each stage, call `Stage::Process`, publish the stage's
@@ -116,7 +123,9 @@ monitor binding (stable id, type, and spectrum flag), and is included in the
 returned active count. Input and Equalizer request spectra; Gate/Expander and
 Compressor/Limiter supply engagement through `Stage::MonitorValue()`, Equalizer
 supplies its signed dynamic gain through `Stage::MonitorGainDb()`, and Tuner
-supplies pitch through `Stage::MonitorTuner()`. The chain is cleared and refilled
+supplies pitch through `Stage::MonitorTuner()`. Echo, Chorus, Tremolo, Vibrato,
+and Pitch Shifter request no spectra and publish no live graph telemetry. The
+chain is cleared and refilled
 without allocation, which is what makes live settings changes safe from the
 real-time path. `RebuildChain` is the single place that fills the chain, so a
 capture tap survives a settings change made while a profile is being recorded;

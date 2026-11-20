@@ -1,20 +1,25 @@
 # Effects
 
-Every preset starts with a fixed [Input](input.md) row. The table shows the full
-chain order; Input is generated automatically and is not offered in the Add
-effect menu. The other rows are addable in the order shown.
+Every preset starts with a fixed [Input](input.md) row. The table lists the
+addable types in Add effect menu order; Input is generated automatically and is
+not offered in that menu. The other rows can be added in any order and are
+processed top to bottom in the list.
 
 | Effect | Type | What it does |
 | --- | --- | --- |
-| [Input](input.md) | Fixed | First in every chain, always enabled; trims the incoming level and shows a live input spectrum. |
+| [Input](input.md) | Fixed | First in every chain, always enabled; trims the incoming level, can treat the stream as mono, and shows a live input spectrum. |
 | [Gain](gain.md) | Level | Turns the whole signal up or down, starting at +12 dB. |
 | [Noise reduction](noise-reduction.md) | Cleanup | Hushes steady room noise such as hiss, fans, and air conditioning. |
 | [Gate/Expander](gate-expander.md) | Dynamics | Quiets signal below a threshold; finite Ratio expands, ∞ is a hard gate. |
 | [Compressor/Limiter](compressor-limiter.md) | Dynamics | Reduces signal above a threshold; finite Ratio compresses, ∞ is a hard limiter. |
 | [Equalizer](equalizer.md) | Dynamics | Tames boomy close-mic lows or fills out thin, distant ones in a chosen band. |
-| [Mono](mono.md) | Channels | Copies the left channel to all channels for a mono mic plugged into a stereo input. |
 | [Saturation/Overdrive/Distortion](saturation.md) | Tone | Adds soft saturation or a harder overdriven edge. |
 | [Reverb](reverb.md) | Space | Adds a room or hall tail so the voice sounds less dry. |
+| [Echo](echo.md) | Space | Repeats the signal with a damped Stereo or Ping-pong delay. |
+| [Chorus](chorus.md) | Modulation | Thickens the sound with several detuned, LFO-modulated delays. |
+| [Tremolo](tremolo.md) | Modulation | Cycles the level with a Sine, Triangle, or Square LFO. |
+| [Vibrato](vibrato.md) | Modulation | Cycles the pitch with the same LFO shapes and a stereo spread. |
+| [Pitch Shifter](pitch-shifter.md) | Pitch | Shifts pitch with Granular, WSOLA, or Phase vocoder engines. |
 | [Tuner](tuner.md) | Analysis | Shows detected pitch, cents, and note range without changing audio. |
 
 Add the remaining effects in any order, use the checkboxes to switch individual
@@ -50,7 +55,8 @@ All effects implement `apo::dsp::Stage` (`src/dsp/dsp.h`):
 decodes the interleaved input into a preallocated scratch buffer, runs each
 stage in place, then encodes and clips the result. `Chain::ProcessSilence`
 feeds zeros through the chain when any stage reported `NeedsSilence()`, so a
-lookahead delay or reverb tail is flushed instead of being replayed later.
+lookahead delay, reverb tail, echo repeat, chorus history, or pitch-shift grain
+is flushed instead of being replayed later.
 
 When a monitor sink is present, the chain measures peak and RMS immediately
 before and after each stage, calls `ObserveStage` with that stage's binding, and
@@ -71,8 +77,11 @@ runtime polling path.
 - The list holds at most `kMaxEffects` (16) effects in total, including the
   fixed Input row.
 - Input allows one instance; Noise reduction, Gate/Expander,
-  Compressor/Limiter, Reverb, and Tuner are heavy and allow at most 4 instances
-  each (`kMaxHeavyEffects`). Other addable types can fill the remaining slots.
+  Compressor/Limiter, Reverb, Echo, Chorus, Pitch Shifter, and Tuner are heavy
+  and allow at most 4 instances each (`kMaxHeavyEffects`). Tremolo and Vibrato
+  are lightweight and allow up to 16 instances each (`kMaxEffects`), still
+  within the 16-row list limit that includes Input. Other addable types can
+  fill the remaining slots.
 - `apo::MakeEffect(type, id)` builds an instance from the type's struct defaults
   and **enables it**. The struct's own `enabled = false` is the "not set yet"
   value; a newly added effect in the GUI is always on. Input is forced on even
@@ -82,7 +91,7 @@ runtime polling path.
   Compressor/Limiter, and Equalizer ratios also accept positive infinity),
   inserts or repairs Input at row 0, normalizes ids, and forces
   `isolateEffects = true`.
-- Settings schema version 11 is the only accepted version. A file with a missing
+- Settings schema version 15 is the only accepted version. A file with a missing
   or mismatched `[dsp] version` is deleted on load instead of migrated.
 
 ### Graph and transfer math
@@ -106,7 +115,9 @@ Compressor/Limiter keep a vertical range of **−96 to +24 dBFS**. The Equalizer
 spectrum keeps that left-hand dBFS scale and
 its labels, while its response curves use a centered **−96…+96 dB** scale with
 +96/0/−96 marks just inside the right edge; the plot rectangle does not move.
-Saturation uses normalized −1…1 transfer axes.
+Saturation uses normalized −1…1 transfer axes. Echo, Chorus, Tremolo, Vibrato,
+and Pitch Shifter have no live graph; the graph control is hidden when one of
+them is selected.
 
 The saturation stage, both dynamics effects, and their graphs call the same inline
 functions in `src/dsp/transfer.h`, so the displayed curve cannot drift from the

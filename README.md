@@ -4,7 +4,8 @@
 
 Better Micro APO is a Windows program that adjusts the sound of input devices
 like microphones or guitars. It can turn the volume up, quiet down loud sounds,
-reduce background noise, and add effects like saturation or echo.
+reduce background noise, and add effects like saturation, echo, chorus, tremolo,
+vibrato, and pitch shifting.
 
 ## Getting started
 
@@ -18,8 +19,9 @@ setting up the APO needs administrator rights.
 3. Check **Listen to this device** and use headphones to hear the input with
    the effects applied.
 4. Select the fixed **Input** row. It is always first and enabled; set
-   **Input gain** (0 dB by default) and watch its live spectrum and output
-   meter.
+   **Input gain** (0 dB by default), check **Treat as mono** if a mono mic is
+   plugged into input 1 of a stereo interface, and watch its live spectrum and
+   output meter.
 5. Click **Add effect**. **Gain** is first in the Add effect menu and starts at
    **+12 dB**; move its slider until the meters look comfortable.
 6. Add more effects and experiment. The [effect documentation](docs/effects/index.md)
@@ -31,7 +33,10 @@ To uninstall, uncheck **Enable** on every device, or use **File → Uninstall**.
 
 - Each device has four presets. Change **Preset** (1–4) to keep up to four
   different effect sets for the same device. Each preset starts with an
-  always-on **Input** row that cannot be added, deleted, or disabled.
+  always-on **Input** row that cannot be added, deleted, or disabled. Its
+  **Treat as mono** checkbox copies the first channel to all channels before
+  the other effects run, so a mono mic on a stereo input feeds both sides. The
+  old standalone Mono effect has been removed.
 - While listening, **Peak** and **RMS** at the bottom show the input level.
   Peak is the loudest moment; RMS is the average level
   ([what RMS means](https://en.wikipedia.org/wiki/Root_mean_square)). **CLIP**
@@ -44,6 +49,8 @@ To uninstall, uncheck **Enable** on every device, or use **File → Uninstall**.
   map. The level graphs include a thin output meter with green/yellow/red zones.
   Gain, Saturation, and the meter use short holds so brief sounds are not skipped
   between polls. Polling these graphs never changes settings or stops Listen.
+  Echo, Chorus, Tremolo, Vibrato, and Pitch Shifter have controls but no live
+  graph; the graph is hidden for those effects.
 - Effects apply as you change them — there is no Apply button. Each slider has
   a small ↺ button that resets only that setting.
 - **Gate/Expander** attenuates signal below the threshold: a finite **Ratio**
@@ -55,15 +62,38 @@ To uninstall, uncheck **Enable** on every device, or use **File → Uninstall**.
   Switch Dynamic to **Compressor** to tame loud lows or **Expander** to lift
   quiet lows; its detector controls are greyed out when Dynamic is No. Level
   spans −96…+96 dB, Ratio reaches ∞, and Range goes up to 96 dB.
+- **Echo** repeats the signal through a damped delay. **Stereo** keeps one loop
+  per channel; **Ping-pong** alternates repeats between channels. The dry voice
+  stays at unity and **Level** sets only the wet repeats.
+- **Chorus** thickens the sound with several detuned, slowly swept delays. More
+  **Voices** sound denser, **Rate** sets the sweep speed, **Depth** sets how far
+  each delay moves, and **Width** spreads the voices across the stereo field.
+- **Tremolo** cycles the level with a **Rate**, **Depth**, and **Waveform** of
+  Sine, Triangle, or Square. **Stereo spread** moves the pulse between speakers;
+  Depth 0 leaves the audio untouched.
+- **Vibrato** cycles the pitch with the same waveforms. Its **Depth** is in
+  cents, so small values sound like natural vocal or guitar vibrato. It buffers
+  audio while active, and Depth 0 passes the signal through.
+- **Pitch Shifter** covers octave shifts and other intervals with one effect.
+  **Shift** ranges from −24 to +24 semitones and defaults to −12. Choose
+  **Granular**, **WSOLA**, or **Phase vocoder**; **Window** is a sample count,
+  and Phase vocoder rounds it up to the next power of two. **Dry level** scales
+  the unshifted signal (100% by default) and **Level** sets the shifted return.
 - **Tuner** is monitoring-only: it shows the nearest note, cents, and a C0–C8
-  pitch map without changing or delaying the audio.
+  pitch map without changing or delaying the audio. **Smoothing** averages
+  recent readings in cents; 100% holds about two seconds with the default
+  window, while 50% stays much quicker.
 - If your device is missing from the list, turn on **View → Show all devices**
   to see inactive inputs too.
 - Windows briefly stops audio when effects are installed or attached to a
   device. That is Windows reloading the audio chain. Settings changes and noise
   profile captures apply to the running chain without stopping audio.
 - Noise reduction, gate/compressor/equalizer lookahead, and reverb predelay/tail buffer
-  a little audio, so they add a small delay. Those controls are marked with ⏱.
+  a little audio. Echo, Chorus, Vibrato, and Pitch Shifter buffer more: Echo adds
+  roughly its **Time** before the first repeat, Chorus adds a small variable
+  delay, Vibrato keeps a center delay while active, and Pitch Shifter uses its
+  **Window** for analysis. Tremolo changes level without buffering. The
+  lookahead and predelay controls are marked with ⏱.
 - A settings file from a different schema version is deleted when it is read;
   the device starts from defaults rather than having old values migrated.
 - Supported input formats are float32, PCM16, PCM24, and PCM32. 24-bit samples

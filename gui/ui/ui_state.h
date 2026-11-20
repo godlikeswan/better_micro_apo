@@ -24,7 +24,7 @@ enum : int {
     IDC_EFFECT_GRAPH,
     IDC_MAIN_ENABLE,
     IDC_MAIN_ENABLE_ICON,
-    IDC_MONO_NOTE,
+    IDC_INPUT_TREAT_MONO,
 
     // Effect parameters. The dynamics controls are shared by the standalone
     // Gate/Expander and Compressor/Limiter effects.
@@ -97,6 +97,52 @@ enum : int {
     IDC_REVERB_PREDELAY_LABEL,
     IDC_REVERB_PREDELAY_SLIDER,
     IDC_REVERB_PREDELAY_ICON,
+    IDC_ECHO_MODE_LABEL,
+    IDC_ECHO_MODE_COMBO,
+    IDC_ECHO_TIME_LABEL,
+    IDC_ECHO_TIME_SLIDER,
+    IDC_ECHO_FEEDBACK_LABEL,
+    IDC_ECHO_FEEDBACK_SLIDER,
+    IDC_ECHO_DAMPING_LABEL,
+    IDC_ECHO_DAMPING_SLIDER,
+    IDC_ECHO_LEVEL_LABEL,
+    IDC_ECHO_LEVEL_SLIDER,
+    IDC_CHORUS_VOICES_LABEL,
+    IDC_CHORUS_VOICES_SLIDER,
+    IDC_CHORUS_RATE_LABEL,
+    IDC_CHORUS_RATE_SLIDER,
+    IDC_CHORUS_DEPTH_LABEL,
+    IDC_CHORUS_DEPTH_SLIDER,
+    IDC_CHORUS_WIDTH_LABEL,
+    IDC_CHORUS_WIDTH_SLIDER,
+    IDC_CHORUS_LEVEL_LABEL,
+    IDC_CHORUS_LEVEL_SLIDER,
+    IDC_PITCH_ALGORITHM_LABEL,
+    IDC_PITCH_ALGORITHM_COMBO,
+    IDC_PITCH_SHIFT_LABEL,
+    IDC_PITCH_SHIFT_SLIDER,
+    IDC_PITCH_WINDOW_LABEL,
+    IDC_PITCH_WINDOW_SLIDER,
+    IDC_PITCH_LEVEL_LABEL,
+    IDC_PITCH_LEVEL_SLIDER,
+    IDC_PITCH_DRY_LEVEL_LABEL,
+    IDC_PITCH_DRY_LEVEL_SLIDER,
+    IDC_TREMOLO_RATE_LABEL,
+    IDC_TREMOLO_RATE_SLIDER,
+    IDC_TREMOLO_DEPTH_LABEL,
+    IDC_TREMOLO_DEPTH_SLIDER,
+    IDC_TREMOLO_WAVEFORM_LABEL,
+    IDC_TREMOLO_WAVEFORM_COMBO,
+    IDC_TREMOLO_SPREAD_LABEL,
+    IDC_TREMOLO_SPREAD_SLIDER,
+    IDC_VIBRATO_RATE_LABEL,
+    IDC_VIBRATO_RATE_SLIDER,
+    IDC_VIBRATO_DEPTH_LABEL,
+    IDC_VIBRATO_DEPTH_SLIDER,
+    IDC_VIBRATO_WAVEFORM_LABEL,
+    IDC_VIBRATO_WAVEFORM_COMBO,
+    IDC_VIBRATO_SPREAD_LABEL,
+    IDC_VIBRATO_SPREAD_SLIDER,
     IDC_NOISE_REDUCTION_LABEL,
     IDC_NOISE_REDUCTION_SLIDER,
     IDC_NOISE_FFT_SIZE_LABEL,
@@ -152,6 +198,29 @@ enum ParamReset : int {
     ParamResetReverbWidth,
     ParamResetReverbDensity,
     ParamResetReverbPredelay,
+    ParamResetEchoMode,
+    ParamResetEchoTime,
+    ParamResetEchoFeedback,
+    ParamResetEchoDamping,
+    ParamResetEchoLevel,
+    ParamResetChorusVoices,
+    ParamResetChorusRate,
+    ParamResetChorusDepth,
+    ParamResetChorusWidth,
+    ParamResetChorusLevel,
+    ParamResetPitchAlgorithm,
+    ParamResetPitchShift,
+    ParamResetPitchWindow,
+    ParamResetPitchLevel,
+    ParamResetPitchDryLevel,
+    ParamResetTremoloRate,
+    ParamResetTremoloDepth,
+    ParamResetTremoloWaveform,
+    ParamResetTremoloSpread,
+    ParamResetVibratoRate,
+    ParamResetVibratoDepth,
+    ParamResetVibratoWaveform,
+    ParamResetVibratoSpread,
     ParamResetDistFunction,
     ParamResetDistDrive,
     ParamResetDistCurvature,
@@ -196,7 +265,7 @@ extern HWND g_effectHeading;
 extern HWND g_effectGraph;
 extern HWND g_mainEnable;
 extern HWND g_mainEnableIcon;
-extern HWND g_monoNote;
+extern HWND g_inputTreatMono;
 extern HWND g_paramResetButtons[ParamResetCount];
 
 extern HWND g_dynamicsInputLabel;
@@ -268,6 +337,52 @@ extern HWND g_reverbDensitySlider;
 extern HWND g_reverbPredelayLabel;
 extern HWND g_reverbPredelaySlider;
 extern HWND g_reverbPredelayIcon;
+extern HWND g_echoModeLabel;
+extern HWND g_echoModeCombo;
+extern HWND g_echoTimeLabel;
+extern HWND g_echoTimeSlider;
+extern HWND g_echoFeedbackLabel;
+extern HWND g_echoFeedbackSlider;
+extern HWND g_echoDampingLabel;
+extern HWND g_echoDampingSlider;
+extern HWND g_echoLevelLabel;
+extern HWND g_echoLevelSlider;
+extern HWND g_chorusVoicesLabel;
+extern HWND g_chorusVoicesSlider;
+extern HWND g_chorusRateLabel;
+extern HWND g_chorusRateSlider;
+extern HWND g_chorusDepthLabel;
+extern HWND g_chorusDepthSlider;
+extern HWND g_chorusWidthLabel;
+extern HWND g_chorusWidthSlider;
+extern HWND g_chorusLevelLabel;
+extern HWND g_chorusLevelSlider;
+extern HWND g_pitchAlgorithmLabel;
+extern HWND g_pitchAlgorithmCombo;
+extern HWND g_pitchShiftLabel;
+extern HWND g_pitchShiftSlider;
+extern HWND g_pitchWindowLabel;
+extern HWND g_pitchWindowSlider;
+extern HWND g_pitchLevelLabel;
+extern HWND g_pitchLevelSlider;
+extern HWND g_pitchDryLevelLabel;
+extern HWND g_pitchDryLevelSlider;
+extern HWND g_tremoloRateLabel;
+extern HWND g_tremoloRateSlider;
+extern HWND g_tremoloDepthLabel;
+extern HWND g_tremoloDepthSlider;
+extern HWND g_tremoloWaveformLabel;
+extern HWND g_tremoloWaveformCombo;
+extern HWND g_tremoloSpreadLabel;
+extern HWND g_tremoloSpreadSlider;
+extern HWND g_vibratoRateLabel;
+extern HWND g_vibratoRateSlider;
+extern HWND g_vibratoDepthLabel;
+extern HWND g_vibratoDepthSlider;
+extern HWND g_vibratoWaveformLabel;
+extern HWND g_vibratoWaveformCombo;
+extern HWND g_vibratoSpreadLabel;
+extern HWND g_vibratoSpreadSlider;
 extern HWND g_noiseReductionLabel;
 extern HWND g_noiseReductionSlider;
 extern HWND g_noiseFftSizeLabel;

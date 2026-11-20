@@ -19,11 +19,13 @@ what you hear after all other effects.
   48 kHz) is the default; smaller values react faster but wobble more, while
   larger values are steadier and slower. The detector uses overlapping windows,
   so the readout updates about four times per window length.
-- **Smoothing** is applied in cents, so small pitch changes behave the same in
-  every octave. **0%** is the raw estimate, **50%** is the default, and **100%**
-  is the steadiest. One-octave corrections are smoothed instead of snapping;
-  only jumps larger than two octaves bypass the filter. Pitch detection starts
-  at about 55 Hz (A1), so sub-audio rumble cannot capture the display.
+- **Smoothing** averages recent readings in cents, so small pitch changes
+  behave the same in every octave. **0%** is the raw estimate, **50%** is the
+  default and stays quick, and **100%** averages about **two seconds** with the
+  default 8192-sample window. One-octave corrections are smoothed instead of
+  snapping; only jumps larger than two octaves start a new average. Pitch
+  detection starts at about 55 Hz (A1), so sub-audio rumble cannot capture the
+  display.
 - **Reference A4 (Hz)** calibrates note names and cents. Leave it at **440 Hz**
   for standard tuning, or move it within **430–450 Hz** to match a differently
   tuned ensemble.
@@ -76,9 +78,12 @@ what you hear after all other effects.
   of neighboring bins. Confidence combines the peak's rise above the local
   average with the strength of any promoted subharmonic.
 - Detected frequency is converted to a MIDI-style note number using the
-  configured A4 reference. Smoothing runs on that note value in cents: the
-  amount is a 0.05–1.0 gain, and only jumps of 24 semitones or more reset the
-  filter, so an octave correction does not snap. The GUI derives note name and
+  configured A4 reference. Smoothing averages that note value in cents over a
+  time-stamped ring: `2 seconds * amount^3`, so 100% holds about two seconds and
+  50% about 0.25 seconds. The ring is sized once in `Configure` for the longest
+  window at the fastest detection rate, so live smoothing changes never
+  allocate. Only jumps of 24 semitones or more, or an invalid reading, flush the
+  average, so an octave correction does not snap. The GUI derives note name and
   cents from the published frequency, so the display and the Reference control
   cannot disagree.
 - Telemetry is explicit: `Stage::MonitorTuner()` publishes frequency,
@@ -87,5 +92,8 @@ what you hear after all other effects.
   `kStageMonitorFlagTunerValid`. The GUI only reads this channel; polling it
   never writes settings, rebuilds the chain, or stops Listen.
 - Settings use the `tuner_algorithm`, `tuner_sample_size`, `tuner_smoothing`, and
-  `tuner_reference_hz` keys. Settings schema version 11 introduced Tuner; a
-  file with any other version is deleted rather than migrated.
+  `tuner_reference_hz` keys. Tuner arrived in schema version 11; version 12
+  added Echo, Chorus, and Pitch Shifter, version 13 added Pitch Shifter's Dry
+  level, version 14 added Tremolo and Vibrato, and version 15 moved mono copying
+  to the [Input](input.md) row. A file with any other version is deleted rather
+  than migrated.

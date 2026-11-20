@@ -19,6 +19,7 @@ Top-level window ("BetterMicroApoInstaller", WindowProc in main.cpp)
 │   ├── Effects group frame + list view + Add effect button
 │   ├── Effect parameters group frame
 │   │   ├── Heading + effect graph
+│   │   ├── Input gain slider + Treat as mono checkbox
 │   │   ├── Per-effect labels, sliders, combo, buttons, notes
 │   │   └── Per-parameter reset icons (↺)
 │   └── Listen to this device checkbox
@@ -62,11 +63,14 @@ busy.
 ## Dialogs and popups
 
 - **Add effect** (`gui/ui/effect_dialog.cpp`) is a modal effect-type picker.
-  Input is omitted because it already exists at row 0; types that are already at
-  their per-type capacity are omitted too. The chosen effect is inserted after
-  the selected row (never above Input), or appended if nothing is selected. The
+  Input is omitted because it already exists at row 0; the fixed Input's
+  **Treat as mono** checkbox replaces the old standalone Mono type. Types that
+  are already at their per-type capacity are omitted too. The chosen effect is
+  inserted after the selected row (never above Input), or appended if nothing
+  is selected. The
   graph panel supports Input, Gain, Gate/Expander, Compressor/Limiter,
-  Equalizer, Saturation, and Tuner.
+  Equalizer, Saturation, and Tuner. Echo, Chorus, Tremolo, Vibrato, and Pitch
+  Shifter have no live graph; selecting one hides the graph control.
 - **About → Info** (`gui/ui/info_dialog.cpp`) is a manual modal loop. It shows
   hashes, install path, CLSID, registry status, and `Applied to N devices`, and
   follows theme changes while open. Its OK button is a regular button.

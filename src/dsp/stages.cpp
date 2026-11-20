@@ -1,4 +1,4 @@
-﻿#include "dsp/stages.h"
+#include "dsp/stages.h"
 #include "pitch.h"
 
 #include <algorithm>
@@ -53,6 +53,85 @@ double FeedbackForDecay(double maxLengthMs, double loopSeconds)
         std::max(maxLengthMs, apo::kReverbMinMaxLengthMs) / 1000.0;
     const double loop = std::max(loopSeconds, 0.001);
     return std::clamp(std::pow(10.0, -3.0 * loop / seconds), 0.05, 0.995);
+}
+
+constexpr double kPi = 3.14159265358979323846;
+
+// FftPlan::Inverse already divides by the FFT size. Hann analysis/synthesis
+// overlap at a quarter-window hop sums to about 2, so halving the panes gives
+// a unit-gain wet return before the user's Level is applied.
+constexpr double kVocoderOutputScale = 0.5;
+
+double WrapPosition(double value, size_t size)
+{
+    if (size == 0) {
+        return 0.0;
+    }
+    const double span = static_cast<double>(size);
+    value = std::fmod(value, span);
+    if (value < 0.0) {
+        value += span;
+    }
+    return value;
+}
+
+double WrapPi(double angle)
+{
+    angle = std::fmod(angle + kPi, 2.0 * kPi);
+    if (angle < 0.0) {
+        angle += 2.0 * kPi;
+    }
+    return angle - kPi;
+}
+
+// LFO phase in cycles, wrapped to [0, 1).
+double WrapPhase(double phase)
+{
+    phase = std::fmod(phase, 1.0);
+    return phase < 0.0 ? phase + 1.0 : phase;
+}
+
+double ModulationValue(double phase, ModulationWaveform waveform)
+{
+    switch (waveform)
+    {
+    case ModulationWaveform::Triangle:
+        if (phase < 0.25) {
+            return 4.0 * phase;
+        }
+        if (phase < 0.75) {
+            return 2.0 - 4.0 * phase;
+        }
+        return 4.0 * phase - 4.0;
+    case ModulationWaveform::Square:
+        return phase < 0.5 ? 1.0 : -1.0;
+    case ModulationWaveform::Sine:
+    default:
+        return std::sin(2.0 * kPi * phase);
+    }
+}
+
+size_t NextPowerOfTwo(size_t value)
+{
+    size_t result = 1;
+    while (result < value) {
+        result <<= 1;
+    }
+    return result;
+}
+
+int FftSizeIndex(size_t size)
+{
+    // The plan array starts at 512 (index 0), not at 1 (index 0). Returning
+    // log2(size) made a 4096-point frame look for plan 12 and silently skipped
+    // every phase-vocoder analysis.
+    int index = 0;
+    size_t value = 512;
+    while (value < size) {
+        value <<= 1;
+        ++index;
+    }
+    return index;
 }
 
 } // namespace
@@ -327,7 +406,7 @@ void EqualizerStage::Update(const EffectInstance& effect,
 
 void EqualizerStage::ApplyCoefficients(const AudioFormat& format)
 {
-    constexpr double kPi = 3.14159265358979323846;
+    constexpr double kLocalPi = 3.14159265358979323846;
     const double sampleRate = EffectiveSampleRate(format);
 
     // Topology-preserving state-variable filter (Simper). `k` is the damping
@@ -337,7 +416,7 @@ void EqualizerStage::ApplyCoefficients(const AudioFormat& format)
     const double maxFrequency = sampleRate * 0.49;
     frequency = std::max(20.0, std::min(frequency, maxFrequency));
     const double q = std::max(0.1, m_settings.q);
-    const double g = std::tan(kPi * frequency / sampleRate);
+    const double g = std::tan(kLocalPi * frequency / sampleRate);
     m_k = 1.0 / q;
     m_a1 = 1.0 / (1.0 + g * (g + m_k));
     m_a2 = g * m_a1;
@@ -592,6 +671,8 @@ void GainStage::Update(const EffectInstance& effect,
 {
     (void)format;
     m_settings = effect.gain;
+    m_treatAsMono =
+        effect.type == EffectType::Input && m_settings.treatAsMono;
     ApplyGain();
 }
 
@@ -604,6 +685,19 @@ void GainStage::ApplyGain()
 
 void GainStage::Process(double* samples, UINT32 frames, UINT32 channels)
 {
+    if (m_treatAsMono && channels > 1)
+    {
+        for (UINT32 frame = 0; frame < frames; ++frame)
+        {
+            double* values = samples + static_cast<size_t>(frame) * channels;
+            const double first = values[0];
+            for (UINT32 channel = 1; channel < channels; ++channel)
+            {
+                values[channel] = first;
+            }
+        }
+    }
+
     if (m_gain == 1.0)
     {
         return;
@@ -672,7 +766,7 @@ void NoiseStage::SetProfileBins(const std::vector<double>& magnitudes,
 
 void NoiseStage::Configure(const AudioFormat& format)
 {
-    constexpr double kPi = 3.14159265358979323846;
+    constexpr double kLocalPi = 3.14159265358979323846;
 
     m_channels = format.channels;
     m_maxFrames = (format.maxFrames > 0) ? format.maxFrames : 1;
@@ -690,7 +784,7 @@ void NoiseStage::Configure(const AudioFormat& format)
         for (size_t sample = 0; sample < size; ++sample)
         {
             const double hann =
-                0.5 - 0.5 * std::cos(2.0 * kPi *
+                0.5 - 0.5 * std::cos(2.0 * kLocalPi *
                                      static_cast<double>(sample) /
                                      static_cast<double>(size));
             m_windows[index][sample] = std::sqrt(std::max(0.0, hann));
@@ -957,31 +1051,6 @@ void NoiseStage::Process(double* samples, UINT32 frames, UINT32 channels)
                      remaining * channels * sizeof(double));
     }
     m_outputFrames = static_cast<UINT32>(remaining);
-}
-
-void MonoStage::Update(const EffectInstance& effect,
-                       const AudioFormat& format)
-{
-    (void)format;
-    m_enabled = effect.mono.enabled;
-}
-
-void MonoStage::Process(double* samples, UINT32 frames, UINT32 channels)
-{
-    if (!m_enabled || channels < 2)
-    {
-        return;
-    }
-
-    for (UINT32 frame = 0; frame < frames; ++frame)
-    {
-        double* values = samples + static_cast<size_t>(frame) * channels;
-        const double left = values[0];
-        for (UINT32 channel = 1; channel < channels; ++channel)
-        {
-            values[channel] = left;
-        }
-    }
 }
 
 void DistortionStage::Update(const EffectInstance& effect,
@@ -1430,6 +1499,1001 @@ void ReverbStage::Process(double* samples, UINT32 frames, UINT32 channels)
     }
 }
 
+void EchoStage::Configure(const AudioFormat& format)
+{
+    m_channels = std::max<UINT32>(1, format.channels);
+    m_sampleRate = EffectiveSampleRate(format);
+
+    // Allocate the full Time range so a live retune only moves the read offset.
+    const size_t frames = static_cast<size_t>(
+        std::ceil(m_sampleRate * apo::kEchoMaxTimeMs / 1000.0));
+    m_capacityFrames = std::max<size_t>(frames + 2, 2);
+    m_delay.assign(m_capacityFrames * m_channels, 0.0);
+    m_feedbackLow.assign(m_channels, 0.0);
+
+    ApplyCoefficients();
+    Reset();
+}
+
+void EchoStage::Update(const EffectInstance& effect,
+                       const AudioFormat& format)
+{
+    (void)format;
+    const bool wasEnabled = m_settings.enabled;
+    const EchoMode wasMode = m_settings.mode;
+    m_settings = effect.echo;
+    ApplyCoefficients();
+    if (wasEnabled != m_settings.enabled || wasMode != m_settings.mode)
+    {
+        Reset();
+    }
+}
+
+void EchoStage::ApplyCoefficients()
+{
+    const double damping = std::clamp(m_settings.damping / 100.0, 0.0, 1.0);
+    const double frames =
+        std::ceil(m_settings.timeMs * 0.001 * m_sampleRate);
+    m_delayFrames = static_cast<size_t>(std::clamp(
+        frames, 1.0, static_cast<double>(m_capacityFrames - 1)));
+    m_feedback = std::clamp(m_settings.feedback / 100.0, 0.0, 0.98);
+    m_level = std::clamp(m_settings.level / 100.0, 0.0, 1.0);
+
+    if (damping <= 0.0)
+    {
+        m_dampPole = 0.0;
+    }
+    else
+    {
+        // Damping 100 leaves a 200 Hz loop; 0 is a transparent feedback path.
+        const double cutoff =
+            200.0 + 19800.0 * std::pow(1.0 - damping, 2.0);
+        m_dampPole = std::clamp(
+            std::exp(-2.0 * kPi * cutoff / m_sampleRate), 0.0, 0.99);
+    }
+}
+
+void EchoStage::Reset()
+{
+    std::fill(m_delay.begin(), m_delay.end(), 0.0);
+    std::fill(m_feedbackLow.begin(), m_feedbackLow.end(), 0.0);
+    m_write = 0;
+}
+
+void EchoStage::Process(double* samples, UINT32 frames, UINT32 channels)
+{
+    if (!m_settings.enabled || samples == nullptr || frames == 0 ||
+        channels == 0 || channels != m_channels ||
+        m_capacityFrames < 2 || m_delay.size() < m_capacityFrames * channels ||
+        m_feedbackLow.size() < channels)
+    {
+        return;
+    }
+
+    for (UINT32 frame = 0; frame < frames; ++frame)
+    {
+        double* values = samples + static_cast<size_t>(frame) * channels;
+        const size_t readIndex =
+            (m_write + m_capacityFrames - m_delayFrames) % m_capacityFrames;
+
+        // Snapshot the damped taps before writing any feedback into the delay.
+        for (UINT32 channel = 0; channel < channels; ++channel)
+        {
+            const double delayed =
+                m_delay[readIndex * channels + channel];
+            m_feedbackLow[channel] +=
+                (delayed - m_feedbackLow[channel]) * (1.0 - m_dampPole);
+        }
+
+        for (UINT32 channel = 0; channel < channels; ++channel)
+        {
+            const UINT32 source =
+                (m_settings.mode == EchoMode::PingPong)
+                    ? ((channel + 1) % channels)
+                    : channel;
+            m_delay[m_write * channels + channel] =
+                values[channel] + m_feedbackLow[source] * m_feedback;
+        }
+
+        for (UINT32 channel = 0; channel < channels; ++channel)
+        {
+            const double delayed =
+                m_delay[readIndex * channels + channel];
+            values[channel] += delayed * m_level;
+        }
+
+        if (++m_write >= m_capacityFrames)
+        {
+            m_write = 0;
+        }
+    }
+}
+
+namespace {
+
+constexpr double kChorusBaseDelayMs = 15.0;
+
+} // namespace
+
+void ChorusStage::Configure(const AudioFormat& format)
+{
+    m_channels = std::max<UINT32>(1, format.channels);
+    m_sampleRate = EffectiveSampleRate(format);
+    const double maxDelayMs = kChorusBaseDelayMs + apo::kChorusMaxDepthMs;
+    const size_t frames = static_cast<size_t>(
+        std::ceil(m_sampleRate * maxDelayMs / 1000.0));
+    m_capacityFrames = std::max<size_t>(frames + 8, 16);
+
+    m_voices.resize(apo::kChorusMaxVoices);
+    for (Voice& voice : m_voices)
+    {
+        voice.buffer.assign(m_capacityFrames * m_channels, 0.0);
+        voice.phase = 0.0;
+    }
+    m_wet.assign(m_channels, 0.0);
+    m_input.assign(m_channels, 0.0);
+
+    ApplyCoefficients();
+    Reset();
+}
+
+void ChorusStage::Update(const EffectInstance& effect,
+                         const AudioFormat& format)
+{
+    (void)format;
+    const bool wasEnabled = m_settings.enabled;
+    const int wasVoices = m_settings.voices;
+    m_settings = effect.chorus;
+    ApplyCoefficients();
+    if (wasEnabled != m_settings.enabled || wasVoices != m_settings.voices)
+    {
+        Reset();
+    }
+}
+
+void ChorusStage::ApplyCoefficients()
+{
+    const double depthFrames = m_settings.depthMs * 0.001 * m_sampleRate;
+    m_activeVoices = std::clamp(m_settings.voices, apo::kChorusMinVoices,
+                                apo::kChorusMaxVoices);
+    m_baseDelayFrames =
+        kChorusBaseDelayMs * 0.001 * m_sampleRate + depthFrames * 0.5;
+    m_modDepthFrames = depthFrames * 0.5;
+    m_phaseStep = 2.0 * kPi * m_settings.rateHz / m_sampleRate;
+
+    const double width = std::clamp(m_settings.width / 100.0, 0.0, 1.0);
+    m_voiceSpread = 2.0 * kPi * width;
+    m_channelSpread = 0.25 * m_voiceSpread;
+    m_level = std::clamp(m_settings.level / 100.0, 0.0, 1.0);
+}
+
+void ChorusStage::Reset()
+{
+    std::fill(m_wet.begin(), m_wet.end(), 0.0);
+    std::fill(m_input.begin(), m_input.end(), 0.0);
+    m_write = 0;
+    for (size_t index = 0; index < m_voices.size(); ++index)
+    {
+        Voice& voice = m_voices[index];
+        std::fill(voice.buffer.begin(), voice.buffer.end(), 0.0);
+        // Voice spread is applied in Process so Width can change live without
+        // replaying the buffered tail.
+        voice.phase = 0.0;
+    }
+}
+
+double ChorusStage::Read(const Voice& voice, UINT32 channel,
+                         double position) const
+{
+    const size_t capacity = m_capacityFrames;
+    if (capacity == 0 || voice.buffer.size() < capacity * m_channels)
+    {
+        return 0.0;
+    }
+    const double wrapped = WrapPosition(position, capacity);
+    const size_t first = static_cast<size_t>(std::floor(wrapped));
+    const size_t second = (first + 1) % capacity;
+    const double fraction = wrapped - static_cast<double>(first);
+    const double a = voice.buffer[first * m_channels + channel];
+    const double b = voice.buffer[second * m_channels + channel];
+    return a + (b - a) * fraction;
+}
+
+void ChorusStage::Process(double* samples, UINT32 frames, UINT32 channels)
+{
+    if (!m_settings.enabled || samples == nullptr || frames == 0 ||
+        channels == 0 || channels != m_channels || m_capacityFrames < 16 ||
+        m_voices.size() < static_cast<size_t>(m_activeVoices) ||
+        m_wet.size() < channels || m_input.size() < channels)
+    {
+        return;
+    }
+
+    const double wetScale = m_level / static_cast<double>(m_activeVoices);
+    for (UINT32 frame = 0; frame < frames; ++frame)
+    {
+        double* values = samples + static_cast<size_t>(frame) * channels;
+        for (UINT32 channel = 0; channel < channels; ++channel)
+        {
+            m_input[channel] = values[channel];
+            m_wet[channel] = 0.0;
+        }
+
+        const double divisor = static_cast<double>(m_activeVoices);
+        for (int voiceIndex = 0; voiceIndex < m_activeVoices; ++voiceIndex)
+        {
+            Voice& voice = m_voices[static_cast<size_t>(voiceIndex)];
+            const double voiceOffset =
+                m_voiceSpread * (static_cast<double>(voiceIndex) / divisor);
+            for (UINT32 channel = 0; channel < channels; ++channel)
+            {
+                const double phase = voice.phase + voiceOffset +
+                                     channel * m_channelSpread;
+                double delay =
+                    m_baseDelayFrames + std::sin(phase) * m_modDepthFrames;
+                delay = std::clamp(
+                    delay, 2.0, static_cast<double>(m_capacityFrames - 2));
+                m_wet[channel] += Read(voice, channel, delay);
+            }
+            voice.phase += m_phaseStep;
+            if (voice.phase >= 2.0 * kPi)
+            {
+                voice.phase -= 2.0 * kPi;
+            }
+        }
+
+        for (int voiceIndex = 0; voiceIndex < m_activeVoices; ++voiceIndex)
+        {
+            Voice& voice = m_voices[static_cast<size_t>(voiceIndex)];
+            const size_t offset = m_write * channels;
+            for (UINT32 channel = 0; channel < channels; ++channel)
+            {
+                voice.buffer[offset + channel] = m_input[channel];
+            }
+        }
+
+        for (UINT32 channel = 0; channel < channels; ++channel)
+        {
+            values[channel] += m_wet[channel] * wetScale;
+        }
+
+        if (++m_write >= m_capacityFrames)
+        {
+            m_write = 0;
+        }
+    }
+}
+
+void TremoloStage::Configure(const AudioFormat& format)
+{
+    m_channels = std::max<UINT32>(1, format.channels);
+    m_sampleRate = EffectiveSampleRate(format);
+    m_state.assign(m_channels, ChannelState{});
+    ApplyCoefficients();
+    Reset();
+}
+
+void TremoloStage::Update(const EffectInstance& effect,
+                          const AudioFormat& format)
+{
+    (void)format;
+    m_settings = effect.tremolo;
+    ApplyCoefficients();
+}
+
+void TremoloStage::ApplyCoefficients()
+{
+    m_phaseStep = m_settings.rateHz / m_sampleRate;
+    m_depth = std::clamp(m_settings.depth / 100.0, 0.0, 1.0);
+    m_spreadCycles =
+        0.5 * std::clamp(m_settings.stereoSpread / 100.0, 0.0, 1.0);
+    // Smooth the gain a little so a square LFO changes level over about 2 ms
+    // instead of stepping between samples.
+    m_smoothCoeff = 1.0 - std::exp(-2.0 * kPi * 80.0 / m_sampleRate);
+}
+
+void TremoloStage::Reset()
+{
+    for (ChannelState& state : m_state)
+    {
+        state.phase = 0.0;
+        state.gain = 1.0;
+    }
+}
+
+void TremoloStage::Process(double* samples, UINT32 frames, UINT32 channels)
+{
+    if (!m_settings.enabled || samples == nullptr || frames == 0 ||
+        channels == 0 || channels != m_channels ||
+        m_state.size() < channels)
+    {
+        return;
+    }
+
+    for (UINT32 frame = 0; frame < frames; ++frame)
+    {
+        double* values = samples + static_cast<std::size_t>(frame) * channels;
+        for (UINT32 channel = 0; channel < channels; ++channel)
+        {
+            ChannelState& state = m_state[channel];
+            state.phase = WrapPhase(state.phase + m_phaseStep);
+            const double channelPhase =
+                WrapPhase(state.phase + ((channel & 1U) ? m_spreadCycles : 0.0));
+            const double lfo =
+                ModulationValue(channelPhase, m_settings.waveform);
+            const double targetGain = 1.0 - m_depth * (0.5 - 0.5 * lfo);
+            state.gain += (targetGain - state.gain) * m_smoothCoeff;
+            values[channel] *= state.gain;
+        }
+    }
+}
+
+void VibratoStage::Configure(const AudioFormat& format)
+{
+    m_channels = std::max<UINT32>(1, format.channels);
+    m_sampleRate = EffectiveSampleRate(format);
+
+    // Size the buffer for the deepest, slowest setting so a live Depth or Rate
+    // change only retunes the LFO and never allocates. Square has the largest
+    // excursion because its pitch offset is held for a whole half-cycle.
+    const double maxRatio =
+        std::pow(2.0, apo::kVibratoMaxDepthCents / 1200.0);
+    const double minRatio = 1.0 / maxRatio;
+    const double squareDuty = (1.0 - minRatio) / (maxRatio - minRatio);
+    const double maxAmplitude = m_sampleRate * (maxRatio - 1.0) * squareDuty /
+                                apo::kModulationMinRateHz;
+    m_capacityFrames = std::max<std::size_t>(
+        16, static_cast<std::size_t>(std::ceil(2.0 * maxAmplitude + 32.0)));
+    m_baseDelay = static_cast<double>(m_capacityFrames) * 0.5;
+
+    m_channelsState.assign(m_channels, DelayChannel{});
+    for (DelayChannel& channel : m_channelsState)
+    {
+        channel.buffer.assign(m_capacityFrames, 0.0);
+    }
+    ApplyCoefficients();
+    Reset();
+}
+
+void VibratoStage::Update(const EffectInstance& effect,
+                          const AudioFormat& format)
+{
+    (void)format;
+    m_settings = effect.vibrato;
+    ApplyCoefficients();
+}
+
+void VibratoStage::ApplyCoefficients()
+{
+    const double rate =
+        std::clamp(m_settings.rateHz, apo::kModulationMinRateHz,
+                   apo::kModulationMaxRateHz);
+    m_phaseStep = rate / m_sampleRate;
+    const double cents =
+        std::clamp(m_settings.depthCents, 0.0, apo::kVibratoMaxDepthCents);
+    m_ratioHigh = std::pow(2.0, cents / 1200.0);
+    m_ratioLow = 1.0 / m_ratioHigh;
+
+    if (cents <= 0.0)
+    {
+        m_ratioMean = 1.0;
+        m_squareDuty = 0.5;
+    }
+    else if (m_settings.waveform == ModulationWaveform::Square)
+    {
+        // Hold the two exact pitch ratios long enough that their mean is 1.
+        // The read head then returns to the same place every cycle.
+        m_squareDuty = std::clamp(
+            (1.0 - m_ratioLow) / (m_ratioHigh - m_ratioLow), 0.0, 1.0);
+        m_ratioMean = 1.0;
+    }
+    else
+    {
+        // Sine and Triangle get a centred ratio so their average pitch is
+        // unchanged; their endpoints stay within a few cents of Depth.
+        const double meanAbs =
+            m_settings.waveform == ModulationWaveform::Sine ? 2.0 / kPi : 0.5;
+        m_ratioMean =
+            1.0 + 0.5 * ((m_ratioHigh - 1.0) - (1.0 - m_ratioLow)) * meanAbs;
+        m_squareDuty = 0.5;
+    }
+
+    m_spreadCycles =
+        0.5 * std::clamp(m_settings.stereoSpread / 100.0, 0.0, 1.0);
+}
+
+void VibratoStage::Reset()
+{
+    for (DelayChannel& channel : m_channelsState)
+    {
+        std::fill(channel.buffer.begin(), channel.buffer.end(), 0.0);
+        channel.write = 0;
+        channel.phase = 0.0;
+        channel.delay = m_baseDelay;
+    }
+}
+
+double VibratoStage::Read(const DelayChannel& channel, double position) const
+{
+    const std::size_t capacity = m_capacityFrames;
+    if (capacity == 0 || channel.buffer.size() < capacity)
+    {
+        return 0.0;
+    }
+    const double wrapped = WrapPosition(position, capacity);
+    const std::size_t first = static_cast<std::size_t>(std::floor(wrapped));
+    const std::size_t second = (first + 1) % capacity;
+    const double fraction = wrapped - static_cast<double>(first);
+    const double a = channel.buffer[first];
+    const double b = channel.buffer[second];
+    return a + (b - a) * fraction;
+}
+
+void VibratoStage::Process(double* samples, UINT32 frames, UINT32 channels)
+{
+    if (!m_settings.enabled || samples == nullptr || frames == 0 ||
+        channels == 0 || channels != m_channels ||
+        m_channelsState.size() < channels || m_capacityFrames < 16)
+    {
+        return;
+    }
+
+    const double maxDelay = static_cast<double>(m_capacityFrames - 2);
+    for (UINT32 frame = 0; frame < frames; ++frame)
+    {
+        double* values = samples + static_cast<std::size_t>(frame) * channels;
+        for (UINT32 channel = 0; channel < channels; ++channel)
+        {
+            DelayChannel& state = m_channelsState[channel];
+            state.phase = WrapPhase(state.phase + m_phaseStep);
+            const double channelPhase =
+                WrapPhase(state.phase + ((channel & 1U) ? m_spreadCycles : 0.0));
+            const double input = values[channel];
+
+            if (m_settings.depthCents <= 0.0)
+            {
+                // Keep the history fresh so raising Depth does not replay an
+                // old tail, but pass the current sample through untouched.
+                state.buffer[state.write] = input;
+                state.delay = m_baseDelay;
+                values[channel] = input;
+            }
+            else
+            {
+                double advance = 1.0;
+                if (m_settings.waveform == ModulationWaveform::Square)
+                {
+                    // The duty-compensated square holds +Depth cents for the
+                    // first part of each cycle and -Depth cents for the rest.
+                    advance = channelPhase < m_squareDuty ? m_ratioHigh
+                                                          : m_ratioLow;
+                }
+                else
+                {
+                    const double lfo =
+                        ModulationValue(channelPhase, m_settings.waveform);
+                    const double ratio =
+                        1.0 + (lfo >= 0.0 ? (m_ratioHigh - 1.0) * lfo
+                                          : (1.0 - m_ratioLow) * lfo);
+                    advance = 1.0 + ratio - m_ratioMean;
+                }
+
+                // Integrating the pitch ratio keeps the fractional delay
+                // continuous: the read head never jumps at a Square transition.
+                state.delay = std::clamp(state.delay + 1.0 - advance, 1.0,
+                                         maxDelay);
+                const double readPosition =
+                    WrapPosition(static_cast<double>(state.write) - state.delay,
+                                 m_capacityFrames);
+                values[channel] = Read(state, readPosition);
+                state.buffer[state.write] = input;
+            }
+
+            if (++state.write >= m_capacityFrames)
+            {
+                state.write = 0;
+            }
+        }
+    }
+}
+
+void PitchShifterStage::Configure(const AudioFormat& format)
+{
+    m_channels = std::max<UINT32>(1, format.channels);
+    m_sampleRate = EffectiveSampleRate(format);
+    m_maxWindow = apo::kPitchMaxWindowSamples;
+    m_maxFft = NextPowerOfTwo(m_maxWindow);
+
+    const size_t grainCapacity = 6 * m_maxWindow + 8;
+    m_grainChannels.resize(m_channels);
+    for (GrainChannel& channel : m_grainChannels)
+    {
+        channel.input.assign(grainCapacity, 0.0);
+        channel.write = 0;
+        channel.position[0] = 0.0;
+        channel.position[1] = 0.0;
+        channel.phase[0] = 0.0;
+        channel.phase[1] = 0.0;
+    }
+
+    const size_t vocoderCapacity = 2 * m_maxFft + 8;
+    m_vocoderChannels.resize(m_channels);
+    for (VocoderChannel& channel : m_vocoderChannels)
+    {
+        channel.input.assign(vocoderCapacity, 0.0);
+        channel.overlap.assign(vocoderCapacity, 0.0);
+        channel.lastPhase.assign(m_maxFft / 2 + 1, 0.0);
+        channel.synthPhase.assign(m_maxFft / 2 + 1, 0.0);
+        channel.magnitudes.assign(m_maxFft / 2 + 1, 0.0);
+        channel.frequencySum.assign(m_maxFft / 2 + 1, 0.0);
+        channel.phaseReal.assign(m_maxFft / 2 + 1, 0.0);
+        channel.phaseImag.assign(m_maxFft / 2 + 1, 0.0);
+        channel.targetCount.assign(m_maxFft / 2 + 1, 0);
+        channel.phaseValid.assign(m_maxFft / 2 + 1, 0);
+        channel.write = 0;
+        channel.overlapWrite = 0;
+        channel.frameCounter = 0;
+    }
+
+    m_fftPlans.clear();
+    m_windows.clear();
+    for (size_t size = 512; size <= m_maxFft; size <<= 1)
+    {
+        m_fftPlans.push_back(std::make_unique<FftPlan>(size));
+        std::vector<double> window(size);
+        for (size_t index = 0; index < size; ++index)
+        {
+            window[index] = 0.5 - 0.5 * std::cos(
+                2.0 * kPi * static_cast<double>(index) /
+                static_cast<double>(size - 1));
+        }
+        m_windows.push_back(std::move(window));
+    }
+    m_real.assign(m_maxFft, 0.0);
+    m_imag.assign(m_maxFft, 0.0);
+    m_wet.assign(m_channels, 0.0);
+    m_inputFrame.assign(m_channels, 0.0);
+
+    ApplyCoefficients();
+    Reset();
+}
+
+void PitchShifterStage::Update(const EffectInstance& effect,
+                               const AudioFormat& format)
+{
+    (void)format;
+    const bool wasEnabled = m_settings.enabled;
+    const PitchAlgorithm wasAlgorithm = m_settings.algorithm;
+    const size_t wasWindow = m_windowSamples;
+    m_settings = effect.pitchShifter;
+    ApplyCoefficients();
+    if (wasEnabled != m_settings.enabled ||
+        wasAlgorithm != m_settings.algorithm || wasWindow != m_windowSamples)
+    {
+        Reset();
+    }
+}
+
+void PitchShifterStage::ApplyCoefficients()
+{
+    m_ratio = std::pow(2.0, m_settings.shiftSemitones / 12.0);
+    m_level = std::clamp(m_settings.level / 100.0, 0.0, 1.0);
+    m_dryLevel = std::clamp(m_settings.dryLevel / 100.0, 0.0, 1.0);
+    m_windowSamples = static_cast<size_t>(
+        apo::ValidPitchWindow(m_settings.windowSamples));
+
+    if (m_settings.algorithm == PitchAlgorithm::PhaseVocoder)
+    {
+        m_fftSize = std::min(m_maxFft, NextPowerOfTwo(m_windowSamples));
+    }
+    else
+    {
+        m_fftSize = m_windowSamples;
+    }
+    m_fftSize = std::clamp<size_t>(m_fftSize, 512, m_maxFft);
+    m_fftIndex = FftSizeIndex(m_fftSize);
+
+    m_grainHopFrames = std::max<size_t>(1, m_windowSamples / 2);
+    m_vocoderHopFrames = std::max<size_t>(1, m_fftSize / 4);
+    // A grain lasts the full Window; the other grain starts half a Window
+    // later. Wrapping after a hop made both grains restart twice as often and
+    // produced a pitched-up splice instead of a shift.
+    m_grainPhaseStep = 1.0 / static_cast<double>(m_windowSamples);
+    // Synthesis phase advances by the analysis hop for each output bin. The
+    // pitch ratio is applied by moving magnitudes to new bins, not by adding
+    // an extra phase term to the same bins.
+    m_synthPhaseStep = 2.0 * kPi * static_cast<double>(m_vocoderHopFrames) /
+                       static_cast<double>(m_fftSize);
+}
+
+void PitchShifterStage::Reset()
+{
+    for (GrainChannel& channel : m_grainChannels)
+    {
+        ResetGrain(channel);
+    }
+    for (VocoderChannel& channel : m_vocoderChannels)
+    {
+        ResetVocoder(channel);
+    }
+}
+
+void PitchShifterStage::ResetGrain(GrainChannel& channel) const
+{
+    std::fill(channel.input.begin(), channel.input.end(), 0.0);
+    channel.write = 0;
+    // The read head that starts half a Window late must still stay behind the
+    // write pointer after an upward shift has advanced it by (ratio - 1) *
+    // Window. The 64-sample margin also covers the WSOLA search.
+    const double startLag =
+        static_cast<double>(m_windowSamples) * std::max(m_ratio, 1.0) + 64.0;
+    channel.position[0] = WrapPosition(-startLag, channel.input.size());
+    // The second grain began one hop earlier in output time, so at this
+    // instant it is (1 - ratio) hops older in the input history.
+    channel.position[1] = WrapPosition(
+        channel.position[0] -
+            static_cast<double>(m_grainHopFrames) * (1.0 - m_ratio),
+        channel.input.size());
+    channel.phase[0] = 0.0;
+    channel.phase[1] = 0.5;
+}
+
+void PitchShifterStage::ResetVocoder(VocoderChannel& channel) const
+{
+    std::fill(channel.input.begin(), channel.input.end(), 0.0);
+    std::fill(channel.overlap.begin(), channel.overlap.end(), 0.0);
+    std::fill(channel.lastPhase.begin(), channel.lastPhase.end(), 0.0);
+    std::fill(channel.synthPhase.begin(), channel.synthPhase.end(), 0.0);
+    std::fill(channel.magnitudes.begin(), channel.magnitudes.end(), 0.0);
+    std::fill(channel.frequencySum.begin(), channel.frequencySum.end(), 0.0);
+    std::fill(channel.phaseReal.begin(), channel.phaseReal.end(), 0.0);
+    std::fill(channel.phaseImag.begin(), channel.phaseImag.end(), 0.0);
+    std::fill(channel.targetCount.begin(), channel.targetCount.end(), 0);
+    std::fill(channel.phaseValid.begin(), channel.phaseValid.end(),
+              static_cast<unsigned char>(0));
+    channel.write = 0;
+    channel.overlapWrite = 0;
+    channel.frameCounter = 0;
+}
+
+double PitchShifterStage::ReadGrain(const GrainChannel& channel,
+                                    double position) const
+{
+    const size_t capacity = channel.input.size();
+    if (capacity == 0)
+    {
+        return 0.0;
+    }
+    const double wrapped = WrapPosition(position, capacity);
+    const size_t first = static_cast<size_t>(std::floor(wrapped));
+    const size_t second = (first + 1) % capacity;
+    const double fraction = wrapped - static_cast<double>(first);
+    const double a = channel.input[first];
+    const double b = channel.input[second];
+    return a + (b - a) * fraction;
+}
+
+double PitchShifterStage::GrainMaxLag() const
+{
+    // Grain restarts keep the lag between one and two Window lengths even at
+    // the ±24-semitone extremes. This ceiling prevents a stalled read head
+    // from turning into the multi-second delay the old full-capacity clamp
+    // allowed on downshifts.
+    const double window = static_cast<double>(m_windowSamples);
+    const double hop = static_cast<double>(m_grainHopFrames);
+    return window * std::max(m_ratio, 1.0) +
+           hop * std::max(1.0, std::abs(1.0 - m_ratio)) + 128.0;
+}
+
+double PitchShifterStage::LimitedPosition(const GrainChannel& channel,
+                                          double position,
+                                          double writePosition) const
+{
+    const size_t capacity = channel.input.size();
+    if (capacity == 0)
+    {
+        return 0.0;
+    }
+    const double write = WrapPosition(writePosition, capacity);
+    double lag = WrapPosition(write - position, capacity);
+    lag = std::clamp(lag, 2.0, GrainMaxLag());
+    return WrapPosition(write - lag, capacity);
+}
+
+double PitchShifterStage::SearchAlignment(const GrainChannel& channel,
+                                          double nominal, double reference,
+                                          double writePosition) const
+{
+    constexpr int kSearchSamples = 48;
+    const size_t length = std::min<size_t>(
+        std::max<size_t>(16, m_windowSamples / 4), 256);
+    const double referencePosition =
+        LimitedPosition(channel, reference, writePosition);
+    double bestPosition = nominal;
+    double bestError = 1e300;
+
+    for (int offset = -kSearchSamples; offset <= kSearchSamples; ++offset)
+    {
+        const double candidate = LimitedPosition(
+            channel, nominal + static_cast<double>(offset), writePosition);
+        double error = 0.0;
+        for (size_t index = 0; index < length; ++index)
+        {
+            const double delta =
+                ReadGrain(channel, candidate + static_cast<double>(index)) -
+                ReadGrain(channel, referencePosition +
+                                       static_cast<double>(index));
+            error += delta * delta;
+        }
+        if (error < bestError)
+        {
+            bestError = error;
+            bestPosition = candidate;
+        }
+    }
+    return bestPosition;
+}
+
+double PitchShifterStage::ProcessGrain(GrainChannel& channel, double input,
+                                       bool wsola)
+{
+    const size_t capacity = channel.input.size();
+    if (capacity == 0)
+    {
+        return 0.0;
+    }
+
+    const double oldPosition[kGrainCount] = {channel.position[0],
+                                             channel.position[1]};
+    const double oldPhase[kGrainCount] = {channel.phase[0],
+                                          channel.phase[1]};
+    double wet = 0.0;
+    for (size_t grain = 0; grain < kGrainCount; ++grain)
+    {
+        const double window =
+            0.5 - 0.5 * std::cos(2.0 * kPi * oldPhase[grain]);
+        wet += ReadGrain(channel, oldPosition[grain]) * window;
+    }
+
+    channel.input[channel.write] = input;
+    channel.write = (channel.write + 1) % capacity;
+    const double writePosition = static_cast<double>(channel.write);
+
+    for (size_t grain = 0; grain < kGrainCount; ++grain)
+    {
+        double position = oldPosition[grain] + m_ratio;
+        double phase = oldPhase[grain] + m_grainPhaseStep;
+        if (phase >= 1.0)
+        {
+            phase -= 1.0;
+            const size_t other = (grain + 1) % kGrainCount;
+            // Start the new grain one hop ahead of the still-active grain in
+            // input time. That jump supplies the missing (1 - ratio) samples
+            // each hop, so a downshift no longer walks the read pointer to the
+            // far end of the history and sticks there.
+            double restart =
+                oldPosition[other] +
+                static_cast<double>(m_grainHopFrames) * (1.0 - m_ratio);
+            if (wsola)
+            {
+                restart = SearchAlignment(channel, restart,
+                                          oldPosition[other], writePosition);
+            }
+            position = restart;
+        }
+        channel.position[grain] =
+            LimitedPosition(channel, position, writePosition);
+        channel.phase[grain] = phase;
+    }
+    return wet;
+}
+
+void PitchShifterStage::AnalyzeVocoder(VocoderChannel& channel,
+                                       size_t writeIndex)
+{
+    const size_t bins = m_fftSize / 2 + 1;
+    const size_t nyquist = m_fftSize / 2;
+    if (m_fftIndex < 0 || m_fftIndex >= static_cast<int>(m_fftPlans.size()) ||
+        m_windows.size() <= static_cast<size_t>(m_fftIndex) ||
+        m_real.size() < m_fftSize || m_imag.size() < m_fftSize ||
+        channel.lastPhase.size() < bins || channel.synthPhase.size() < bins ||
+        channel.magnitudes.size() < bins || channel.frequencySum.size() < bins ||
+        channel.phaseReal.size() < bins || channel.phaseImag.size() < bins ||
+        channel.targetCount.size() < bins || channel.phaseValid.size() < bins)
+    {
+        return;
+    }
+
+    const size_t capacity = channel.input.size();
+    const double start = static_cast<double>(writeIndex) + 1.0 -
+                         static_cast<double>(m_fftSize);
+    const std::vector<double>& window = m_windows[static_cast<size_t>(m_fftIndex)];
+    for (size_t index = 0; index < m_fftSize; ++index)
+    {
+        const size_t source = static_cast<size_t>(
+            WrapPosition(start + static_cast<double>(index), capacity));
+        m_real[index] = channel.input[source] * window[index];
+        m_imag[index] = 0.0;
+    }
+
+    const FftPlan& plan = *m_fftPlans[static_cast<size_t>(m_fftIndex)];
+    plan.Forward(m_real.data(), m_imag.data());
+
+    std::fill(channel.magnitudes.begin(), channel.magnitudes.begin() + bins,
+              0.0);
+    std::fill(channel.frequencySum.begin(),
+              channel.frequencySum.begin() + bins, 0.0);
+    std::fill(channel.phaseReal.begin(), channel.phaseReal.begin() + bins, 0.0);
+    std::fill(channel.phaseImag.begin(), channel.phaseImag.begin() + bins, 0.0);
+    std::fill(channel.targetCount.begin(), channel.targetCount.begin() + bins,
+              0);
+
+    // Analysis: estimate the true frequency of each bin from its phase
+    // advance, then spread its magnitude across the two nearest shifted bins.
+    // Rounding to one bin made the output jump whenever a partial moved across
+    // a bin boundary, which was audible as a window-size-dependent click.
+    for (size_t bin = 0; bin < bins; ++bin)
+    {
+        const double magnitude = std::hypot(m_real[bin], m_imag[bin]);
+        double trueBin = static_cast<double>(bin);
+        double phase = 0.0;
+        if (bin == 0 || bin == nyquist)
+        {
+            channel.lastPhase[bin] = 0.0;
+        }
+        else
+        {
+            phase = std::atan2(m_imag[bin], m_real[bin]);
+            const double expected = m_synthPhaseStep * static_cast<double>(bin);
+            const double residual =
+                WrapPi(phase - channel.lastPhase[bin] - expected);
+            trueBin = std::clamp(
+                static_cast<double>(bin) +
+                    residual * static_cast<double>(m_fftSize) /
+                        (2.0 * kPi *
+                         static_cast<double>(m_vocoderHopFrames)),
+                0.0, static_cast<double>(nyquist));
+            channel.lastPhase[bin] = phase;
+        }
+
+        const double target = trueBin * m_ratio;
+        const double low = std::floor(target);
+        const double fraction = target - low;
+        const double phaseReal = std::cos(phase) * magnitude;
+        const double phaseImag = std::sin(phase) * magnitude;
+        auto deposit = [&](size_t targetBin, double weight) {
+            if (weight <= 0.0 || targetBin > nyquist)
+            {
+                return;
+            }
+            const double weighted = magnitude * weight;
+            channel.magnitudes[targetBin] += weighted;
+            channel.frequencySum[targetBin] += weighted * target;
+            channel.phaseReal[targetBin] += phaseReal * weight;
+            channel.phaseImag[targetBin] += phaseImag * weight;
+            ++channel.targetCount[targetBin];
+        };
+        deposit(static_cast<size_t>(std::max(0.0, low)), 1.0 - fraction);
+        deposit(static_cast<size_t>(low) + 1, fraction);
+    }
+
+    // Synthesis uses the magnitude-weighted true bin for phase advance, and
+    // locks to the weighted analysis phase when a bin becomes active again.
+    // That keeps newly populated bins from starting with an arbitrary phase.
+    for (size_t bin = 0; bin < bins; ++bin)
+    {
+        const double magnitude = channel.magnitudes[bin];
+        if (magnitude <= 1e-12)
+        {
+            channel.synthPhase[bin] = WrapPi(
+                channel.synthPhase[bin] +
+                m_synthPhaseStep * static_cast<double>(bin));
+            channel.phaseValid[bin] = 0;
+            m_real[bin] = 0.0;
+            m_imag[bin] = 0.0;
+            continue;
+        }
+
+        if (channel.targetCount[bin] > 0 && channel.phaseValid[bin] == 0)
+        {
+            channel.synthPhase[bin] = std::atan2(channel.phaseImag[bin],
+                                                 channel.phaseReal[bin]);
+            channel.phaseValid[bin] = 1;
+        }
+        else
+        {
+            const double targetBin = channel.frequencySum[bin] / magnitude;
+            channel.synthPhase[bin] = WrapPi(
+                channel.synthPhase[bin] + m_synthPhaseStep * targetBin);
+        }
+        m_real[bin] = magnitude * std::cos(channel.synthPhase[bin]);
+        m_imag[bin] = magnitude * std::sin(channel.synthPhase[bin]);
+    }
+    for (size_t bin = 1; bin < nyquist; ++bin)
+    {
+        m_real[m_fftSize - bin] = m_real[bin];
+        m_imag[m_fftSize - bin] = -m_imag[bin];
+    }
+
+    plan.Inverse(m_real.data(), m_imag.data());
+    for (size_t index = 0; index < m_fftSize; ++index)
+    {
+        const double value =
+            m_real[index] * kVocoderOutputScale * window[index];
+        const size_t target = (channel.overlapWrite + index) % capacity;
+        channel.overlap[target] += value;
+    }
+}
+
+double PitchShifterStage::ProcessVocoder(VocoderChannel& channel,
+                                         double input)
+{
+    const size_t capacity = channel.input.size();
+    if (capacity == 0 || channel.overlap.size() < capacity)
+    {
+        return 0.0;
+    }
+
+    const size_t writeIndex = channel.write;
+    channel.input[writeIndex] = input;
+    channel.write = (writeIndex + 1) % capacity;
+    ++channel.frameCounter;
+    if (channel.frameCounter % m_vocoderHopFrames == 0)
+    {
+        AnalyzeVocoder(channel, writeIndex);
+    }
+
+    const double wet = channel.overlap[channel.overlapWrite];
+    channel.overlap[channel.overlapWrite] = 0.0;
+    channel.overlapWrite = (channel.overlapWrite + 1) % capacity;
+    return wet;
+}
+
+void PitchShifterStage::Process(double* samples, UINT32 frames,
+                                UINT32 channels)
+{
+    if (!m_settings.enabled || samples == nullptr || frames == 0 ||
+        channels == 0 || channels != m_channels ||
+        m_grainChannels.size() != channels ||
+        m_vocoderChannels.size() != channels ||
+        m_wet.size() < channels || m_inputFrame.size() < channels)
+    {
+        return;
+    }
+
+    const bool vocoder = m_settings.algorithm == PitchAlgorithm::PhaseVocoder;
+    const bool wsola = m_settings.algorithm == PitchAlgorithm::Wsola;
+    for (UINT32 frame = 0; frame < frames; ++frame)
+    {
+        double* values = samples + static_cast<size_t>(frame) * channels;
+        for (UINT32 channel = 0; channel < channels; ++channel)
+        {
+            m_inputFrame[channel] = values[channel];
+            m_wet[channel] = 0.0;
+        }
+
+        for (UINT32 channel = 0; channel < channels; ++channel)
+        {
+            if (vocoder)
+            {
+                m_wet[channel] = ProcessVocoder(
+                    m_vocoderChannels[channel], m_inputFrame[channel]);
+            }
+            else
+            {
+                m_wet[channel] = ProcessGrain(m_grainChannels[channel],
+                                              m_inputFrame[channel], wsola);
+            }
+        }
+
+        for (UINT32 channel = 0; channel < channels; ++channel)
+        {
+            values[channel] =
+                values[channel] * m_dryLevel + m_wet[channel] * m_level;
+        }
+    }
+}
+
 void TunerStage::Configure(const AudioFormat& format)
 {
     m_sampleRate = EffectiveSampleRate(format);
@@ -1444,10 +2508,10 @@ void TunerStage::Configure(const AudioFormat& format)
     m_real.assign(maxSize, 0.0);
     m_imag.assign(maxSize, 0.0);
 
-    constexpr double kPi = 3.14159265358979323846;
+    constexpr double kLocalPi = 3.14159265358979323846;
     for (std::size_t i = 0; i < maxSize; ++i) {
         m_window[i] =
-            0.5 - 0.5 * std::cos(2.0 * kPi * static_cast<double>(i) /
+            0.5 - 0.5 * std::cos(2.0 * kLocalPi * static_cast<double>(i) /
                                  static_cast<double>(maxSize - 1));
     }
 
@@ -1456,6 +2520,22 @@ void TunerStage::Configure(const AudioFormat& format)
     for (int size : kTunerSampleSizes) {
         m_fftPlans.emplace_back(static_cast<std::size_t>(size));
     }
+
+    // The fastest detection rate is the smallest sample size with a quarter
+    // window hop. Size the moving average once for the longest smoothing
+    // window at that rate so ApplyDetection never allocates.
+    const std::size_t minHop =
+        std::max<std::size_t>(1, static_cast<std::size_t>(
+                                     kTunerSampleSizes.front()) / 4);
+    const std::size_t averageCapacity =
+        static_cast<std::size_t>(std::ceil(apo::kTunerMaxAverageSeconds *
+                                           m_sampleRate /
+                                           static_cast<double>(minHop))) +
+        4;
+    m_averageMidi.assign(averageCapacity, 0.0);
+    m_averageTime.assign(averageCapacity, 0.0);
+    m_averageWrite = 0;
+    m_averageCount = 0;
 
     m_sampleSize =
         static_cast<std::size_t>(ValidTunerSampleSize(m_settings.sampleSize));
@@ -1491,6 +2571,9 @@ void TunerStage::ResetAnalysis()
     m_highPassOutput = 0.0;
     m_lastMidi = 0.0;
     m_hasLastMidi = false;
+    m_timeSeconds = 0.0;
+    m_averageWrite = 0;
+    m_averageCount = 0;
     m_monitor = {};
 }
 
@@ -1501,6 +2584,7 @@ void TunerStage::Process(double* samples, UINT32 frames, UINT32 channels)
         return;
     }
 
+    m_timeSeconds += static_cast<double>(frames) / m_sampleRate;
     for (UINT32 frame = 0; frame < frames; ++frame) {
         double value = 0.0;
         const double* frameSamples =
@@ -1796,6 +2880,8 @@ void TunerStage::ApplyDetection(double frequencyHz, double confidence)
         !std::isfinite(confidence) || confidence <= 0.0) {
         m_monitor = {};
         m_hasLastMidi = false;
+        m_averageWrite = 0;
+        m_averageCount = 0;
         return;
     }
 
@@ -1803,13 +2889,42 @@ void TunerStage::ApplyDetection(double frequencyHz, double confidence)
         apo::pitch::FrequencyToMidi(frequencyHz, m_settings.referenceHz);
     // An octave is a plausible correction, not a new note: smooth it with the
     // rest of the movement instead of snapping. Only a much larger jump, such
-    // as switching instruments, bypasses the filter.
-    if (m_hasLastMidi &&
-        std::fabs(midi - m_lastMidi) < 24.0) {
-        const double amount =
-            std::clamp(m_settings.smoothing / 100.0, 0.0, 1.0);
-        const double alpha = std::pow(0.05, amount);
-        m_lastMidi += (midi - m_lastMidi) * alpha;
+    // as switching instruments, starts a new average.
+    if (!m_hasLastMidi || std::fabs(midi - m_lastMidi) >= 24.0) {
+        m_lastMidi = midi;
+        m_averageWrite = 0;
+        m_averageCount = 0;
+    }
+
+    const double amount =
+        std::clamp(m_settings.smoothing / 100.0, 0.0, 1.0);
+    // A cubic curve keeps the 50% setting near the old quick response while
+    // 100% averages about two seconds of detections.
+    const double windowSeconds =
+        apo::kTunerMaxAverageSeconds * amount * amount * amount;
+    if (windowSeconds > 0.0 && !m_averageMidi.empty()) {
+        const std::size_t capacity = m_averageMidi.size();
+        m_averageMidi[m_averageWrite] = midi;
+        m_averageTime[m_averageWrite] = m_timeSeconds;
+        m_averageWrite = (m_averageWrite + 1) % capacity;
+        m_averageCount = std::min(capacity, m_averageCount + 1);
+
+        double sum = 0.0;
+        std::size_t used = 0;
+        for (std::size_t i = 0; i < m_averageCount; ++i) {
+            const std::size_t index =
+                (m_averageWrite + capacity - 1 - i) % capacity;
+            // Entries are chronological from newest to oldest, so the first
+            // stale one ends the scan.
+            if (m_timeSeconds - m_averageTime[index] > windowSeconds) {
+                break;
+            }
+            sum += m_averageMidi[index];
+            ++used;
+        }
+        if (used > 0) {
+            m_lastMidi = sum / static_cast<double>(used);
+        }
     } else {
         m_lastMidi = midi;
     }
@@ -1863,14 +2978,26 @@ void StagePool::Configure(const AudioFormat& format,
             case EffectType::Equalizer:
                 stage = std::make_unique<EqualizerStage>();
                 break;
-            case EffectType::Mono:
-                stage = std::make_unique<MonoStage>();
-                break;
             case EffectType::Saturation:
                 stage = std::make_unique<DistortionStage>();
                 break;
             case EffectType::Reverb:
                 stage = std::make_unique<ReverbStage>();
+                break;
+            case EffectType::Echo:
+                stage = std::make_unique<EchoStage>();
+                break;
+            case EffectType::Chorus:
+                stage = std::make_unique<ChorusStage>();
+                break;
+            case EffectType::Tremolo:
+                stage = std::make_unique<TremoloStage>();
+                break;
+            case EffectType::Vibrato:
+                stage = std::make_unique<VibratoStage>();
+                break;
+            case EffectType::PitchShifter:
+                stage = std::make_unique<PitchShifterStage>();
                 break;
             case EffectType::Tuner:
                 stage = std::make_unique<TunerStage>();

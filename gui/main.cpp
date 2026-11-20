@@ -264,7 +264,7 @@ void ShowEffectControls(apo::EffectType type, bool show)
 
     switch (type) {
     case apo::EffectType::Input:
-        showAll({g_inputGainLabel, g_inputGainSlider});
+        showAll({g_inputGainLabel, g_inputGainSlider, g_inputTreatMono});
         break;
     case apo::EffectType::Noise:
         showAll({g_noiseReductionLabel, g_noiseReductionSlider,
@@ -295,9 +295,6 @@ void ShowEffectControls(apo::EffectType type, bool show)
     case apo::EffectType::Gain:
         showAll({g_gainLabel, g_gainSlider});
         break;
-    case apo::EffectType::Mono:
-        showAll({g_monoNote});
-        break;
     case apo::EffectType::Saturation:
         showAll({g_distFunctionLabel, g_distFunctionCombo,
                  g_distDriveLabel, g_distDriveSlider,
@@ -313,6 +310,36 @@ void ShowEffectControls(apo::EffectType type, bool show)
                  g_reverbWidthLabel, g_reverbWidthSlider,
                  g_reverbDensityLabel, g_reverbDensitySlider,
                  g_reverbPredelayLabel, g_reverbPredelaySlider});
+        break;
+    case apo::EffectType::Echo:
+        showAll({g_echoModeLabel, g_echoModeCombo, g_echoTimeLabel,
+                 g_echoTimeSlider, g_echoFeedbackLabel, g_echoFeedbackSlider,
+                 g_echoDampingLabel, g_echoDampingSlider, g_echoLevelLabel,
+                 g_echoLevelSlider});
+        break;
+    case apo::EffectType::Chorus:
+        showAll({g_chorusVoicesLabel, g_chorusVoicesSlider,
+                 g_chorusRateLabel, g_chorusRateSlider, g_chorusDepthLabel,
+                 g_chorusDepthSlider, g_chorusWidthLabel, g_chorusWidthSlider,
+                 g_chorusLevelLabel, g_chorusLevelSlider});
+        break;
+    case apo::EffectType::Tremolo:
+        showAll({g_tremoloRateLabel, g_tremoloRateSlider,
+                 g_tremoloDepthLabel, g_tremoloDepthSlider,
+                 g_tremoloWaveformLabel, g_tremoloWaveformCombo,
+                 g_tremoloSpreadLabel, g_tremoloSpreadSlider});
+        break;
+    case apo::EffectType::Vibrato:
+        showAll({g_vibratoRateLabel, g_vibratoRateSlider,
+                 g_vibratoDepthLabel, g_vibratoDepthSlider,
+                 g_vibratoWaveformLabel, g_vibratoWaveformCombo,
+                 g_vibratoSpreadLabel, g_vibratoSpreadSlider});
+        break;
+    case apo::EffectType::PitchShifter:
+        showAll({g_pitchAlgorithmLabel, g_pitchAlgorithmCombo,
+                 g_pitchShiftLabel, g_pitchShiftSlider, g_pitchWindowLabel,
+                 g_pitchWindowSlider, g_pitchLevelLabel, g_pitchLevelSlider,
+                 g_pitchDryLevelLabel, g_pitchDryLevelSlider});
         break;
     case apo::EffectType::Tuner:
         showAll({g_tunerAlgorithmLabel, g_tunerAlgorithmCombo,
@@ -336,7 +363,7 @@ void EnableEffectControls(bool enabled)
         g_dynamicsHoldLabel, g_dynamicsHoldSlider,
         g_dynamicsOutputLabel, g_dynamicsOutputSlider,
         g_dynamicsLookaheadLabel, g_dynamicsLookaheadSlider,
-        g_inputGainLabel, g_inputGainSlider,
+        g_inputGainLabel, g_inputGainSlider, g_inputTreatMono,
         g_gainLabel, g_gainSlider,
         g_eqDynamicLabel, g_eqDynamicCombo,
         g_eqFrequencyLabel, g_eqFrequencySlider,
@@ -361,6 +388,23 @@ void EnableEffectControls(bool enabled)
         g_reverbWidthLabel, g_reverbWidthSlider,
         g_reverbDensityLabel, g_reverbDensitySlider,
         g_reverbPredelayLabel, g_reverbPredelaySlider,
+        g_echoModeLabel, g_echoModeCombo, g_echoTimeLabel, g_echoTimeSlider,
+        g_echoFeedbackLabel, g_echoFeedbackSlider, g_echoDampingLabel,
+        g_echoDampingSlider, g_echoLevelLabel, g_echoLevelSlider,
+        g_chorusVoicesLabel, g_chorusVoicesSlider, g_chorusRateLabel,
+        g_chorusRateSlider, g_chorusDepthLabel, g_chorusDepthSlider,
+        g_chorusWidthLabel, g_chorusWidthSlider, g_chorusLevelLabel,
+        g_chorusLevelSlider,
+        g_tremoloRateLabel, g_tremoloRateSlider, g_tremoloDepthLabel,
+        g_tremoloDepthSlider, g_tremoloWaveformLabel, g_tremoloWaveformCombo,
+        g_tremoloSpreadLabel, g_tremoloSpreadSlider,
+        g_vibratoRateLabel, g_vibratoRateSlider, g_vibratoDepthLabel,
+        g_vibratoDepthSlider, g_vibratoWaveformLabel, g_vibratoWaveformCombo,
+        g_vibratoSpreadLabel, g_vibratoSpreadSlider,
+        g_pitchAlgorithmLabel, g_pitchAlgorithmCombo, g_pitchShiftLabel,
+        g_pitchShiftSlider, g_pitchWindowLabel, g_pitchWindowSlider,
+        g_pitchLevelLabel, g_pitchLevelSlider,
+        g_pitchDryLevelLabel, g_pitchDryLevelSlider,
         g_noiseReductionLabel, g_noiseReductionSlider,
         g_noiseFftSizeLabel, g_noiseFftSizeCombo, g_noiseCapture,
         g_tunerAlgorithmLabel, g_tunerAlgorithmCombo,
@@ -415,6 +459,14 @@ void ClearEffectEditor()
     SendMessageW(g_distFunctionCombo, CB_SETCURSEL, apo::kDistortionTanh, 0);
     SendMessageW(g_noiseFftSizeCombo, CB_SETCURSEL,
                  apo::NoiseFftSizeIndex(apo::kNoiseDefaultFftSize), 0);
+    SendMessageW(g_echoModeCombo, CB_SETCURSEL,
+                 static_cast<int>(apo::EchoMode::Stereo), 0);
+    SendMessageW(g_tremoloWaveformCombo, CB_SETCURSEL,
+                 static_cast<int>(apo::ModulationWaveform::Sine), 0);
+    SendMessageW(g_vibratoWaveformCombo, CB_SETCURSEL,
+                 static_cast<int>(apo::ModulationWaveform::Sine), 0);
+    SendMessageW(g_pitchAlgorithmCombo, CB_SETCURSEL,
+                 static_cast<int>(apo::PitchAlgorithm::Granular), 0);
     SendMessageW(g_tunerAlgorithmCombo, CB_SETCURSEL,
                  static_cast<int>(apo::TunerAlgorithm::Autocorrelation), 0);
     SendMessageW(g_tunerSampleSizeCombo, CB_SETCURSEL,
@@ -496,6 +548,8 @@ void ReadEffectControls(apo::EffectInstance& effect)
     switch (effect.type) {
     case apo::EffectType::Input:
         GetSliderValue(g_inputGainSlider, effect.gain.gainDb);
+        effect.gain.treatAsMono =
+            SendMessageW(g_inputTreatMono, BM_GETCHECK, 0, 0) == BST_CHECKED;
         break;
     case apo::EffectType::Noise: {
         GetSliderValue(g_noiseReductionSlider, effect.noise.reductionDb);
@@ -543,8 +597,6 @@ void ReadEffectControls(apo::EffectInstance& effect)
     case apo::EffectType::Gain:
         GetSliderValue(g_gainSlider, effect.gain.gainDb);
         break;
-    case apo::EffectType::Mono:
-        break;
     case apo::EffectType::Saturation: {
         const int function = static_cast<int>(
             SendMessageW(g_distFunctionCombo, CB_GETCURSEL, 0, 0));
@@ -573,6 +625,72 @@ void ReadEffectControls(apo::EffectInstance& effect)
         GetSliderValue(g_reverbWidthSlider, effect.reverb.width);
         GetSliderValue(g_reverbDensitySlider, effect.reverb.density);
         GetSliderValue(g_reverbPredelaySlider, effect.reverb.predelayMs);
+        break;
+    }
+    case apo::EffectType::Echo: {
+        const int mode = static_cast<int>(
+            SendMessageW(g_echoModeCombo, CB_GETCURSEL, 0, 0));
+        if (mode >= 0 && mode < static_cast<int>(apo::EchoMode::Count)) {
+            effect.echo.mode = static_cast<apo::EchoMode>(mode);
+        }
+        GetSliderValue(g_echoTimeSlider, effect.echo.timeMs);
+        GetSliderValue(g_echoFeedbackSlider, effect.echo.feedback);
+        GetSliderValue(g_echoDampingSlider, effect.echo.damping);
+        GetSliderValue(g_echoLevelSlider, effect.echo.level);
+        break;
+    }
+    case apo::EffectType::Chorus: {
+        double voices = static_cast<double>(effect.chorus.voices);
+        GetSliderValue(g_chorusVoicesSlider, voices);
+        effect.chorus.voices = static_cast<int>(voices + 0.5);
+        GetSliderValue(g_chorusRateSlider, effect.chorus.rateHz);
+        GetSliderValue(g_chorusDepthSlider, effect.chorus.depthMs);
+        GetSliderValue(g_chorusWidthSlider, effect.chorus.width);
+        GetSliderValue(g_chorusLevelSlider, effect.chorus.level);
+        break;
+    }
+    case apo::EffectType::Tremolo: {
+        const int waveform = static_cast<int>(
+            SendMessageW(g_tremoloWaveformCombo, CB_GETCURSEL, 0, 0));
+        if (waveform >= 0 &&
+            waveform < static_cast<int>(apo::ModulationWaveform::Count)) {
+            effect.tremolo.waveform =
+                static_cast<apo::ModulationWaveform>(waveform);
+        }
+        GetSliderValue(g_tremoloRateSlider, effect.tremolo.rateHz);
+        GetSliderValue(g_tremoloDepthSlider, effect.tremolo.depth);
+        GetSliderValue(g_tremoloSpreadSlider, effect.tremolo.stereoSpread);
+        break;
+    }
+    case apo::EffectType::Vibrato: {
+        const int waveform = static_cast<int>(
+            SendMessageW(g_vibratoWaveformCombo, CB_GETCURSEL, 0, 0));
+        if (waveform >= 0 &&
+            waveform < static_cast<int>(apo::ModulationWaveform::Count)) {
+            effect.vibrato.waveform =
+                static_cast<apo::ModulationWaveform>(waveform);
+        }
+        GetSliderValue(g_vibratoRateSlider, effect.vibrato.rateHz);
+        GetSliderValue(g_vibratoDepthSlider, effect.vibrato.depthCents);
+        GetSliderValue(g_vibratoSpreadSlider, effect.vibrato.stereoSpread);
+        break;
+    }
+    case apo::EffectType::PitchShifter: {
+        const int algorithm = static_cast<int>(
+            SendMessageW(g_pitchAlgorithmCombo, CB_GETCURSEL, 0, 0));
+        if (algorithm >= 0 &&
+            algorithm < static_cast<int>(apo::PitchAlgorithm::Count)) {
+            effect.pitchShifter.algorithm =
+                static_cast<apo::PitchAlgorithm>(algorithm);
+        }
+        GetSliderValue(g_pitchShiftSlider,
+                       effect.pitchShifter.shiftSemitones);
+        double window =
+            static_cast<double>(effect.pitchShifter.windowSamples);
+        GetSliderValue(g_pitchWindowSlider, window);
+        effect.pitchShifter.windowSamples = static_cast<int>(window + 0.5);
+        GetSliderValue(g_pitchLevelSlider, effect.pitchShifter.level);
+        GetSliderValue(g_pitchDryLevelSlider, effect.pitchShifter.dryLevel);
         break;
     }
     case apo::EffectType::Tuner: {
@@ -635,6 +753,8 @@ void ShowEffectForSelected()
 
     g_effectLoading = true;
     SetSliderValue(g_inputGainSlider, effect.gain.gainDb);
+    SendMessageW(g_inputTreatMono, BM_SETCHECK,
+                 effect.gain.treatAsMono ? BST_CHECKED : BST_UNCHECKED, 0);
     SetSliderValue(g_noiseReductionSlider, effect.noise.reductionDb);
     SendMessageW(g_noiseFftSizeCombo, CB_SETCURSEL,
                  apo::NoiseFftSizeIndex(effect.noise.fftSize), 0);
@@ -675,6 +795,35 @@ void ShowEffectForSelected()
     SetSliderValue(g_distDriveSlider, effect.distortion.driveDb);
     SetSliderValue(g_distCurvatureSlider, effect.distortion.curvature);
     SetSliderValue(g_distOutputSlider, effect.distortion.outputDb);
+    SendMessageW(g_echoModeCombo, CB_SETCURSEL,
+                 static_cast<int>(effect.echo.mode), 0);
+    SetSliderValue(g_echoTimeSlider, effect.echo.timeMs);
+    SetSliderValue(g_echoFeedbackSlider, effect.echo.feedback);
+    SetSliderValue(g_echoDampingSlider, effect.echo.damping);
+    SetSliderValue(g_echoLevelSlider, effect.echo.level);
+    SetSliderValue(g_chorusVoicesSlider,
+                   static_cast<double>(effect.chorus.voices));
+    SetSliderValue(g_chorusRateSlider, effect.chorus.rateHz);
+    SetSliderValue(g_chorusDepthSlider, effect.chorus.depthMs);
+    SetSliderValue(g_chorusWidthSlider, effect.chorus.width);
+    SetSliderValue(g_chorusLevelSlider, effect.chorus.level);
+    SendMessageW(g_tremoloWaveformCombo, CB_SETCURSEL,
+                 static_cast<int>(effect.tremolo.waveform), 0);
+    SetSliderValue(g_tremoloRateSlider, effect.tremolo.rateHz);
+    SetSliderValue(g_tremoloDepthSlider, effect.tremolo.depth);
+    SetSliderValue(g_tremoloSpreadSlider, effect.tremolo.stereoSpread);
+    SendMessageW(g_vibratoWaveformCombo, CB_SETCURSEL,
+                 static_cast<int>(effect.vibrato.waveform), 0);
+    SetSliderValue(g_vibratoRateSlider, effect.vibrato.rateHz);
+    SetSliderValue(g_vibratoDepthSlider, effect.vibrato.depthCents);
+    SetSliderValue(g_vibratoSpreadSlider, effect.vibrato.stereoSpread);
+    SendMessageW(g_pitchAlgorithmCombo, CB_SETCURSEL,
+                 static_cast<int>(effect.pitchShifter.algorithm), 0);
+    SetSliderValue(g_pitchShiftSlider, effect.pitchShifter.shiftSemitones);
+    SetSliderValue(g_pitchWindowSlider,
+                   static_cast<double>(effect.pitchShifter.windowSamples));
+    SetSliderValue(g_pitchLevelSlider, effect.pitchShifter.level);
+    SetSliderValue(g_pitchDryLevelSlider, effect.pitchShifter.dryLevel);
     SendMessageW(g_tunerAlgorithmCombo, CB_SETCURSEL,
                  static_cast<int>(effect.tuner.algorithm), 0);
     SendMessageW(g_tunerSampleSizeCombo, CB_SETCURSEL,
@@ -736,6 +885,9 @@ bool CommitEffectEditor(bool showValues = true)
         switch (shown.type) {
         case apo::EffectType::Input:
             SetSliderValue(g_inputGainSlider, shown.gain.gainDb);
+            SendMessageW(g_inputTreatMono, BM_SETCHECK,
+                         shown.gain.treatAsMono ? BST_CHECKED : BST_UNCHECKED,
+                         0);
             break;
         case apo::EffectType::Noise:
             SetSliderValue(g_noiseReductionSlider, shown.noise.reductionDb);
@@ -790,6 +942,50 @@ bool CommitEffectEditor(bool showValues = true)
             SetSliderValue(g_reverbWidthSlider, shown.reverb.width);
             SetSliderValue(g_reverbDensitySlider, shown.reverb.density);
             SetSliderValue(g_reverbPredelaySlider, shown.reverb.predelayMs);
+            break;
+        case apo::EffectType::Echo:
+            SendMessageW(g_echoModeCombo, CB_SETCURSEL,
+                         static_cast<int>(shown.echo.mode), 0);
+            SetSliderValue(g_echoTimeSlider, shown.echo.timeMs);
+            SetSliderValue(g_echoFeedbackSlider, shown.echo.feedback);
+            SetSliderValue(g_echoDampingSlider, shown.echo.damping);
+            SetSliderValue(g_echoLevelSlider, shown.echo.level);
+            break;
+        case apo::EffectType::Chorus:
+            SetSliderValue(g_chorusVoicesSlider,
+                           static_cast<double>(shown.chorus.voices));
+            SetSliderValue(g_chorusRateSlider, shown.chorus.rateHz);
+            SetSliderValue(g_chorusDepthSlider, shown.chorus.depthMs);
+            SetSliderValue(g_chorusWidthSlider, shown.chorus.width);
+            SetSliderValue(g_chorusLevelSlider, shown.chorus.level);
+            break;
+        case apo::EffectType::Tremolo:
+            SendMessageW(g_tremoloWaveformCombo, CB_SETCURSEL,
+                         static_cast<int>(shown.tremolo.waveform), 0);
+            SetSliderValue(g_tremoloRateSlider, shown.tremolo.rateHz);
+            SetSliderValue(g_tremoloDepthSlider, shown.tremolo.depth);
+            SetSliderValue(g_tremoloSpreadSlider,
+                           shown.tremolo.stereoSpread);
+            break;
+        case apo::EffectType::Vibrato:
+            SendMessageW(g_vibratoWaveformCombo, CB_SETCURSEL,
+                         static_cast<int>(shown.vibrato.waveform), 0);
+            SetSliderValue(g_vibratoRateSlider, shown.vibrato.rateHz);
+            SetSliderValue(g_vibratoDepthSlider, shown.vibrato.depthCents);
+            SetSliderValue(g_vibratoSpreadSlider,
+                           shown.vibrato.stereoSpread);
+            break;
+        case apo::EffectType::PitchShifter:
+            SendMessageW(g_pitchAlgorithmCombo, CB_SETCURSEL,
+                         static_cast<int>(shown.pitchShifter.algorithm), 0);
+            SetSliderValue(g_pitchShiftSlider,
+                           shown.pitchShifter.shiftSemitones);
+            SetSliderValue(
+                g_pitchWindowSlider,
+                static_cast<double>(shown.pitchShifter.windowSamples));
+            SetSliderValue(g_pitchLevelSlider, shown.pitchShifter.level);
+            SetSliderValue(g_pitchDryLevelSlider,
+                           shown.pitchShifter.dryLevel);
             break;
         case apo::EffectType::Tuner:
             SendMessageW(g_tunerAlgorithmCombo, CB_SETCURSEL,
@@ -892,6 +1088,60 @@ bool ParameterAtDefault(const apo::EffectInstance& effect,
         return SameValue(effect.reverb.density, defaults.reverb.density);
     case ParamResetReverbPredelay:
         return SameValue(effect.reverb.predelayMs, defaults.reverb.predelayMs);
+    case ParamResetEchoMode:
+        return effect.echo.mode == defaults.echo.mode;
+    case ParamResetEchoTime:
+        return SameValue(effect.echo.timeMs, defaults.echo.timeMs);
+    case ParamResetEchoFeedback:
+        return SameValue(effect.echo.feedback, defaults.echo.feedback);
+    case ParamResetEchoDamping:
+        return SameValue(effect.echo.damping, defaults.echo.damping);
+    case ParamResetEchoLevel:
+        return SameValue(effect.echo.level, defaults.echo.level);
+    case ParamResetChorusVoices:
+        return effect.chorus.voices == defaults.chorus.voices;
+    case ParamResetChorusRate:
+        return SameValue(effect.chorus.rateHz, defaults.chorus.rateHz);
+    case ParamResetChorusDepth:
+        return SameValue(effect.chorus.depthMs, defaults.chorus.depthMs);
+    case ParamResetChorusWidth:
+        return SameValue(effect.chorus.width, defaults.chorus.width);
+    case ParamResetChorusLevel:
+        return SameValue(effect.chorus.level, defaults.chorus.level);
+    case ParamResetTremoloRate:
+        return SameValue(effect.tremolo.rateHz, defaults.tremolo.rateHz);
+    case ParamResetTremoloDepth:
+        return SameValue(effect.tremolo.depth, defaults.tremolo.depth);
+    case ParamResetTremoloWaveform:
+        return effect.tremolo.waveform == defaults.tremolo.waveform;
+    case ParamResetTremoloSpread:
+        return SameValue(effect.tremolo.stereoSpread,
+                         defaults.tremolo.stereoSpread);
+    case ParamResetVibratoRate:
+        return SameValue(effect.vibrato.rateHz, defaults.vibrato.rateHz);
+    case ParamResetVibratoDepth:
+        return SameValue(effect.vibrato.depthCents,
+                         defaults.vibrato.depthCents);
+    case ParamResetVibratoWaveform:
+        return effect.vibrato.waveform == defaults.vibrato.waveform;
+    case ParamResetVibratoSpread:
+        return SameValue(effect.vibrato.stereoSpread,
+                         defaults.vibrato.stereoSpread);
+    case ParamResetPitchAlgorithm:
+        return effect.pitchShifter.algorithm ==
+               defaults.pitchShifter.algorithm;
+    case ParamResetPitchShift:
+        return SameValue(effect.pitchShifter.shiftSemitones,
+                         defaults.pitchShifter.shiftSemitones);
+    case ParamResetPitchWindow:
+        return effect.pitchShifter.windowSamples ==
+               defaults.pitchShifter.windowSamples;
+    case ParamResetPitchLevel:
+        return SameValue(effect.pitchShifter.level,
+                         defaults.pitchShifter.level);
+    case ParamResetPitchDryLevel:
+        return SameValue(effect.pitchShifter.dryLevel,
+                         defaults.pitchShifter.dryLevel);
     case ParamResetDistFunction:
         return effect.distortion.function == defaults.distortion.function;
     case ParamResetDistDrive:
@@ -1052,6 +1302,77 @@ void ResetParameter(int param)
         break;
     case ParamResetReverbPredelay:
         effect.reverb.predelayMs = defaults.reverb.predelayMs;
+        break;
+    case ParamResetEchoMode:
+        effect.echo.mode = defaults.echo.mode;
+        break;
+    case ParamResetEchoTime:
+        effect.echo.timeMs = defaults.echo.timeMs;
+        break;
+    case ParamResetEchoFeedback:
+        effect.echo.feedback = defaults.echo.feedback;
+        break;
+    case ParamResetEchoDamping:
+        effect.echo.damping = defaults.echo.damping;
+        break;
+    case ParamResetEchoLevel:
+        effect.echo.level = defaults.echo.level;
+        break;
+    case ParamResetChorusVoices:
+        effect.chorus.voices = defaults.chorus.voices;
+        break;
+    case ParamResetChorusRate:
+        effect.chorus.rateHz = defaults.chorus.rateHz;
+        break;
+    case ParamResetChorusDepth:
+        effect.chorus.depthMs = defaults.chorus.depthMs;
+        break;
+    case ParamResetChorusWidth:
+        effect.chorus.width = defaults.chorus.width;
+        break;
+    case ParamResetChorusLevel:
+        effect.chorus.level = defaults.chorus.level;
+        break;
+    case ParamResetTremoloRate:
+        effect.tremolo.rateHz = defaults.tremolo.rateHz;
+        break;
+    case ParamResetTremoloDepth:
+        effect.tremolo.depth = defaults.tremolo.depth;
+        break;
+    case ParamResetTremoloWaveform:
+        effect.tremolo.waveform = defaults.tremolo.waveform;
+        break;
+    case ParamResetTremoloSpread:
+        effect.tremolo.stereoSpread = defaults.tremolo.stereoSpread;
+        break;
+    case ParamResetVibratoRate:
+        effect.vibrato.rateHz = defaults.vibrato.rateHz;
+        break;
+    case ParamResetVibratoDepth:
+        effect.vibrato.depthCents = defaults.vibrato.depthCents;
+        break;
+    case ParamResetVibratoWaveform:
+        effect.vibrato.waveform = defaults.vibrato.waveform;
+        break;
+    case ParamResetVibratoSpread:
+        effect.vibrato.stereoSpread = defaults.vibrato.stereoSpread;
+        break;
+    case ParamResetPitchAlgorithm:
+        effect.pitchShifter.algorithm = defaults.pitchShifter.algorithm;
+        break;
+    case ParamResetPitchShift:
+        effect.pitchShifter.shiftSemitones =
+            defaults.pitchShifter.shiftSemitones;
+        break;
+    case ParamResetPitchWindow:
+        effect.pitchShifter.windowSamples =
+            defaults.pitchShifter.windowSamples;
+        break;
+    case ParamResetPitchLevel:
+        effect.pitchShifter.level = defaults.pitchShifter.level;
+        break;
+    case ParamResetPitchDryLevel:
+        effect.pitchShifter.dryLevel = defaults.pitchShifter.dryLevel;
         break;
     case ParamResetDistFunction:
         effect.distortion.function = defaults.distortion.function;
@@ -2337,6 +2658,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
                 OnMainEnableClicked();
             }
             break;
+        case IDC_INPUT_TREAT_MONO:
+            if (HIWORD(wParam) == BN_CLICKED) {
+                MarkSettingsDirty();
+            }
+            break;
         case IDC_EFFECT_ADD:
             if (HIWORD(wParam) == BN_CLICKED) {
                 DoAddEffect();
@@ -2377,6 +2703,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_DIST_FUNCTION_COMBO:
         case IDC_EQ_DYNAMIC_COMBO:
         case IDC_REVERB_ALGORITHM_COMBO:
+        case IDC_ECHO_MODE_COMBO:
+        case IDC_TREMOLO_WAVEFORM_COMBO:
+        case IDC_VIBRATO_WAVEFORM_COMBO:
+        case IDC_PITCH_ALGORITHM_COMBO:
         case IDC_NOISE_FFT_SIZE_COMBO:
         case IDC_TUNER_ALGORITHM_COMBO:
         case IDC_TUNER_SAMPLE_SIZE_COMBO:
@@ -2414,6 +2744,25 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_REVERB_WIDTH_SLIDER:
         case IDC_REVERB_DENSITY_SLIDER:
         case IDC_REVERB_PREDELAY_SLIDER:
+        case IDC_ECHO_TIME_SLIDER:
+        case IDC_ECHO_FEEDBACK_SLIDER:
+        case IDC_ECHO_DAMPING_SLIDER:
+        case IDC_ECHO_LEVEL_SLIDER:
+        case IDC_CHORUS_VOICES_SLIDER:
+        case IDC_CHORUS_RATE_SLIDER:
+        case IDC_CHORUS_DEPTH_SLIDER:
+        case IDC_CHORUS_WIDTH_SLIDER:
+        case IDC_CHORUS_LEVEL_SLIDER:
+        case IDC_TREMOLO_RATE_SLIDER:
+        case IDC_TREMOLO_DEPTH_SLIDER:
+        case IDC_TREMOLO_SPREAD_SLIDER:
+        case IDC_VIBRATO_RATE_SLIDER:
+        case IDC_VIBRATO_DEPTH_SLIDER:
+        case IDC_VIBRATO_SPREAD_SLIDER:
+        case IDC_PITCH_SHIFT_SLIDER:
+        case IDC_PITCH_WINDOW_SLIDER:
+        case IDC_PITCH_LEVEL_SLIDER:
+        case IDC_PITCH_DRY_LEVEL_SLIDER:
         case IDC_DIST_DRIVE_SLIDER:
         case IDC_DIST_CURVATURE_SLIDER:
         case IDC_DIST_OUTPUT_SLIDER:

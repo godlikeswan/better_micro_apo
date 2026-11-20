@@ -37,7 +37,9 @@ the Add effect menu and is enabled with a default of **+12 dB**.
   format-dependent state and allocates nothing.
 - `Process` multiplies every interleaved sample by the scalar when it is not
   1.0. No state, no latency, and no clipping here — final clipping happens when
-  the chain encodes the buffer back to the stream format.
+  the chain encodes the buffer back to the stream format. The same stage also
+  copies channel 0 to the other channels for the fixed Input row when
+  **Treat as mono** is checked; standalone Gain forces that flag off.
 - Gain has an input/output graph: the diagonal curve is the gain setting, the
   dot is the cross-section of the live input and output **peaks** from the APO's
   stage telemetry, and a highlighted cross marks the 0 dB point on both axes.

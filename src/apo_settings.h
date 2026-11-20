@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -11,7 +12,7 @@ namespace apo {
 
 // Settings files with any other version are discarded on load. There is no
 // migration path: a new schema starts from defaults.
-inline constexpr int kSettingsVersion = 11;
+inline constexpr int kSettingsVersion = 15;
 
 // The fixed first stage has its own gain range; it is stored in GainSettings
 // but is separate from the standalone makeup Gain effect.
@@ -180,17 +181,13 @@ struct EqualizerSettings
 };
 
 // Flat gain. A newly added effect starts at +12 dB, which is the usual makeup
-// level after dynamics processing.
+// level after dynamics processing. `treatAsMono` belongs to the fixed Input
+// row only; it is forced off for standalone Gain.
 struct GainSettings
 {
     bool enabled = false;
     double gainDb = 12.0;
-};
-
-// Copies the first (left) channel to every other channel after processing.
-struct MonoSettings
-{
-    bool enabled = false;
+    bool treatAsMono = false;
 };
 
 // Saturation curves. Each function is odd and maps full scale to full scale.
@@ -252,6 +249,144 @@ struct ReverbSettings
     double predelayMs = 20.0;
 };
 
+// Echo repeats the dry signal through a delay line. `Stereo` keeps one loop per
+// channel; `Ping-pong` alternates the repeats between channels. `damping` is a
+// one-pole low-pass in the feedback path, and `level` is the wet return.
+enum class EchoMode : int
+{
+    Stereo = 0,
+    PingPong = 1,
+    Count,
+};
+
+const wchar_t* EchoModeName(EchoMode mode);
+
+inline constexpr double kEchoMinTimeMs = 5.0;
+inline constexpr double kEchoMaxTimeMs = 1200.0;
+inline constexpr double kEchoDefaultTimeMs = 300.0;
+inline constexpr double kEchoMaxFeedback = 98.0;
+inline constexpr double kEchoDefaultFeedback = 35.0;
+inline constexpr double kEchoDefaultDamping = 40.0;
+inline constexpr double kEchoDefaultLevel = 25.0;
+
+struct EchoSettings
+{
+    bool enabled = false;
+    EchoMode mode = EchoMode::Stereo;
+    double timeMs = kEchoDefaultTimeMs;
+    double feedback = kEchoDefaultFeedback;
+    double damping = kEchoDefaultDamping;
+    double level = kEchoDefaultLevel;
+};
+
+// Chorus mixes several gently detuned, LFO-modulated delay lines with the dry
+// signal. `width` decorrelates the LFO phases across channels.
+inline constexpr int kChorusMinVoices = 2;
+inline constexpr int kChorusMaxVoices = 10;
+inline constexpr int kChorusDefaultVoices = 3;
+inline constexpr double kChorusMinRateHz = 0.01;
+inline constexpr double kChorusMaxRateHz = 50.0;
+inline constexpr double kChorusDefaultRateHz = 0.6;
+inline constexpr double kChorusMaxDepthMs = 50.0;
+inline constexpr double kChorusDefaultDepthMs = 4.0;
+inline constexpr double kChorusDefaultWidth = 70.0;
+inline constexpr double kChorusDefaultLevel = 40.0;
+
+struct ChorusSettings
+{
+    bool enabled = false;
+    int voices = kChorusDefaultVoices;
+    double rateHz = kChorusDefaultRateHz;
+    double depthMs = kChorusDefaultDepthMs;
+    double width = kChorusDefaultWidth;
+    double level = kChorusDefaultLevel;
+};
+
+// Shared low-frequency oscillator shape for Tremolo and Vibrato. Sine is the
+// smooth default; Triangle is a little more mechanical, and Square switches
+// between the two extremes.
+enum class ModulationWaveform : int
+{
+    Sine = 0,
+    Triangle = 1,
+    Square = 2,
+    Count,
+};
+
+const wchar_t* ModulationWaveformName(ModulationWaveform waveform);
+
+inline constexpr double kModulationMinRateHz = 0.1;
+inline constexpr double kModulationMaxRateHz = 20.0;
+inline constexpr double kModulationDefaultRateHz = 7.0;
+inline constexpr double kModulationMaxSpread = 100.0;
+inline constexpr double kModulationDefaultSpread = 0.0;
+inline constexpr double kTremoloDefaultDepth = 70.0;
+
+// Tremolo turns the level down once per LFO cycle. `depth` is a percentage of
+// the available range: at 100% the gain swings from unity down to silence.
+struct TremoloSettings
+{
+    bool enabled = false;
+    double rateHz = kModulationDefaultRateHz;
+    double depth = kTremoloDefaultDepth;
+    ModulationWaveform waveform = ModulationWaveform::Sine;
+    double stereoSpread = kModulationDefaultSpread;
+};
+
+// Vibrato moves a fractional delay line with the same LFO. `depthCents` is the
+// peak pitch excursion of a sine LFO; other waveforms reach the same extremes.
+inline constexpr double kVibratoMaxDepthCents = 300.0;
+inline constexpr double kVibratoDefaultDepthCents = 100.0;
+
+struct VibratoSettings
+{
+    bool enabled = false;
+    double rateHz = kModulationDefaultRateHz;
+    double depthCents = kVibratoDefaultDepthCents;
+    ModulationWaveform waveform = ModulationWaveform::Sine;
+    double stereoSpread = kModulationDefaultSpread;
+};
+
+// Pitch shifting engines. Granular uses overlapping grains, WSOLA adds a
+// waveform-similarity search to the grain starts, and Phase vocoder uses FFT
+// phase propagation. All three are real-time safe after Configure().
+enum class PitchAlgorithm : int
+{
+    Granular = 0,
+    Wsola = 1,
+    PhaseVocoder = 2,
+    Count,
+};
+
+const wchar_t* PitchAlgorithmName(PitchAlgorithm algorithm);
+
+inline constexpr int kPitchMinWindowSamples = 512;
+inline constexpr int kPitchMaxWindowSamples = 16384;
+inline constexpr int kPitchDefaultWindowSamples = 4096;
+inline constexpr double kPitchMinSemitones = -24.0;
+inline constexpr double kPitchMaxSemitones = 24.0;
+inline constexpr double kPitchDefaultSemitones = -12.0;
+inline constexpr double kPitchDefaultLevel = 50.0;
+inline constexpr double kPitchDefaultDryLevel = 100.0;
+
+// The window is a sample count for every engine. The phase vocoder rounds it
+// up to the next power of two so it can use the shared radix-2 FFT plans.
+inline int ValidPitchWindow(int value)
+{
+    return std::clamp(value, kPitchMinWindowSamples,
+                      kPitchMaxWindowSamples);
+}
+
+struct PitchShifterSettings
+{
+    bool enabled = false;
+    PitchAlgorithm algorithm = PitchAlgorithm::Granular;
+    double shiftSemitones = kPitchDefaultSemitones;
+    int windowSamples = kPitchDefaultWindowSamples;
+    double level = kPitchDefaultLevel;
+    double dryLevel = kPitchDefaultDryLevel;
+};
+
 // Pitch detection engines offered by the monitoring-only Tuner. Autocorrelation
 // is the default because it tracks the fundamental of monophonic sources well;
 // FFT peak is a faster alternative that can follow harmonics more readily.
@@ -272,6 +407,9 @@ inline constexpr std::array<int, 5> kTunerSampleSizes{{
 }};
 inline constexpr double kTunerMinSmoothing = 0.0;
 inline constexpr double kTunerMaxSmoothing = 100.0;
+// At 100% smoothing the readout averages detections over about this long. The
+// default 8192-sample window updates roughly every 43 ms at 48 kHz.
+inline constexpr double kTunerMaxAverageSeconds = 2.0;
 inline constexpr double kTunerMinReferenceHz = 430.0;
 inline constexpr double kTunerMaxReferenceHz = 450.0;
 inline constexpr double kTunerDefaultSmoothing = 50.0;
@@ -332,9 +470,13 @@ enum class EffectType : int
     Gate,
     Compressor,
     Equalizer,
-    Mono,
     Saturation,
     Reverb,
+    Echo,
+    Chorus,
+    Tremolo,
+    Vibrato,
+    PitchShifter,
     Tuner,
     Count,
 };
@@ -376,9 +518,13 @@ struct EffectInstance
     DynamicsSettings compressor;
     EqualizerSettings equalizer;
     GainSettings gain;
-    MonoSettings mono;
     DistortionSettings distortion;
     ReverbSettings reverb;
+    EchoSettings echo;
+    ChorusSettings chorus;
+    TremoloSettings tremolo;
+    VibratoSettings vibrato;
+    PitchShifterSettings pitchShifter;
     TunerSettings tuner;
 };
 

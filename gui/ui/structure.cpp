@@ -343,13 +343,11 @@ void LayoutEffectParams(int x, int y, int width)
     case apo::EffectType::Input:
         placePair(g_inputGainLabel, g_inputGainSlider, ParamResetInputGain,
                   nullptr, nullptr, 0);
+        MoveWindow(g_inputTreatMono, x, y, width, Scale(24), TRUE);
         break;
     case apo::EffectType::Gain:
         placePair(g_gainLabel, g_gainSlider, ParamResetGain, nullptr, nullptr,
                   0);
-        break;
-    case apo::EffectType::Mono:
-        MoveWindow(g_monoNote, x, y, width, Scale(40), TRUE);
         break;
     case apo::EffectType::Saturation:
         MoveWindow(g_distFunctionLabel, x, y, labelWidth, Scale(20), TRUE);
@@ -386,6 +384,87 @@ void LayoutEffectParams(int x, int y, int width)
                   g_reverbPredelaySlider, ParamResetReverbPredelay);
         placeIcon(g_reverbPredelayIcon, g_reverbPredelayLabel, rightX,
                   y - rowStep);
+        break;
+    }
+    case apo::EffectType::Echo: {
+        const int rightX = x + columnWidth + columnGap;
+        MoveWindow(g_echoModeLabel, x, y, labelWidth, Scale(20), TRUE);
+        MoveWindow(g_echoModeCombo, x + labelWidth, y, sliderWidth,
+                   Scale(200), TRUE);
+        placeReset(ParamResetEchoMode, x, y);
+        MoveWindow(g_echoTimeLabel, rightX, y, labelWidth, Scale(20), TRUE);
+        MoveWindow(g_echoTimeSlider, rightX + labelWidth, y, sliderWidth,
+                   controlHeight, TRUE);
+        placeReset(ParamResetEchoTime, rightX, y);
+        y += rowStep;
+        placePair(g_echoFeedbackLabel, g_echoFeedbackSlider,
+                  ParamResetEchoFeedback, g_echoDampingLabel,
+                  g_echoDampingSlider, ParamResetEchoDamping);
+        placePair(g_echoLevelLabel, g_echoLevelSlider, ParamResetEchoLevel,
+                  nullptr, nullptr, 0);
+        break;
+    }
+    case apo::EffectType::Chorus: {
+        placePair(g_chorusVoicesLabel, g_chorusVoicesSlider,
+                  ParamResetChorusVoices, g_chorusRateLabel,
+                  g_chorusRateSlider, ParamResetChorusRate);
+        placePair(g_chorusDepthLabel, g_chorusDepthSlider,
+                  ParamResetChorusDepth, g_chorusWidthLabel,
+                  g_chorusWidthSlider, ParamResetChorusWidth);
+        placePair(g_chorusLevelLabel, g_chorusLevelSlider,
+                  ParamResetChorusLevel, nullptr, nullptr, 0);
+        break;
+    }
+    case apo::EffectType::Tremolo: {
+        placePair(g_tremoloRateLabel, g_tremoloRateSlider,
+                  ParamResetTremoloRate, g_tremoloDepthLabel,
+                  g_tremoloDepthSlider, ParamResetTremoloDepth);
+        const int rightX = x + columnWidth + columnGap;
+        MoveWindow(g_tremoloWaveformLabel, x, y, labelWidth, Scale(20), TRUE);
+        MoveWindow(g_tremoloWaveformCombo, x + labelWidth, y, sliderWidth,
+                   Scale(200), TRUE);
+        placeReset(ParamResetTremoloWaveform, x, y);
+        MoveWindow(g_tremoloSpreadLabel, rightX, y, labelWidth, Scale(20),
+                   TRUE);
+        MoveWindow(g_tremoloSpreadSlider, rightX + labelWidth, y, sliderWidth,
+                   controlHeight, TRUE);
+        placeReset(ParamResetTremoloSpread, rightX, y);
+        break;
+    }
+    case apo::EffectType::Vibrato: {
+        placePair(g_vibratoRateLabel, g_vibratoRateSlider,
+                  ParamResetVibratoRate, g_vibratoDepthLabel,
+                  g_vibratoDepthSlider, ParamResetVibratoDepth);
+        const int rightX = x + columnWidth + columnGap;
+        MoveWindow(g_vibratoWaveformLabel, x, y, labelWidth, Scale(20), TRUE);
+        MoveWindow(g_vibratoWaveformCombo, x + labelWidth, y, sliderWidth,
+                   Scale(200), TRUE);
+        placeReset(ParamResetVibratoWaveform, x, y);
+        MoveWindow(g_vibratoSpreadLabel, rightX, y, labelWidth, Scale(20),
+                   TRUE);
+        MoveWindow(g_vibratoSpreadSlider, rightX + labelWidth, y, sliderWidth,
+                   controlHeight, TRUE);
+        placeReset(ParamResetVibratoSpread, rightX, y);
+        break;
+    }
+    case apo::EffectType::PitchShifter: {
+        const int rightX = x + columnWidth + columnGap;
+        MoveWindow(g_pitchAlgorithmLabel, x, y, labelWidth, Scale(20), TRUE);
+        MoveWindow(g_pitchAlgorithmCombo, x + labelWidth, y, sliderWidth,
+                   Scale(200), TRUE);
+        placeReset(ParamResetPitchAlgorithm, x, y);
+        MoveWindow(g_pitchWindowLabel, rightX, y, labelWidth, Scale(20),
+                   TRUE);
+        MoveWindow(g_pitchWindowSlider, rightX + labelWidth, y, sliderWidth,
+                   controlHeight, TRUE);
+        placeReset(ParamResetPitchWindow, rightX, y);
+        y += rowStep;
+        placePair(g_pitchShiftLabel, g_pitchShiftSlider,
+                  ParamResetPitchShift, g_pitchLevelLabel,
+                  g_pitchLevelSlider, ParamResetPitchLevel);
+        y += rowStep;
+        placePair(g_pitchDryLevelLabel, g_pitchDryLevelSlider,
+                  ParamResetPitchDryLevel, nullptr, nullptr, 0);
         break;
     }
     case apo::EffectType::Tuner: {
@@ -549,9 +628,11 @@ void CreateControls(HWND root)
     g_effectHeading = ui::Label(window, IDC_EFFECT_HEADING, L"Noise reduction");
     ui::ApplyFont(g_effectHeading, g_boldFont);
     g_effectGraph = ui::Graph(window, IDC_EFFECT_GRAPH);
-    g_monoNote = ui::Label(
-        window, IDC_MONO_NOTE,
-        L"Copies the processed left channel to every other channel.");
+    g_inputTreatMono =
+        ui::CheckBox(window, IDC_INPUT_TREAT_MONO, L"Treat as mono");
+    AddTooltip(g_inputTreatMono,
+               L"Copy the first channel to every other channel before the "
+               L"other effects run.");
     g_distFunctionLabel =
         ui::Label(window, IDC_DIST_FUNCTION_LABEL, L"Function");
     g_distFunctionCombo =
@@ -728,6 +809,148 @@ void CreateControls(HWND root)
         InfoIcon(window, IDC_REVERB_PREDELAY_ICON, InfoIconKind::Latency);
     AddTooltip(g_reverbPredelayIcon,
                L"Adds delay to the audio stream.");
+
+    g_echoModeLabel = ui::Label(window, IDC_ECHO_MODE_LABEL, L"Mode");
+    g_echoModeCombo =
+        ui::ComboBox(window, IDC_ECHO_MODE_COMBO, CBS_DROPDOWNLIST);
+    for (int mode = 0; mode < static_cast<int>(apo::EchoMode::Count);
+         ++mode) {
+        SendMessageW(g_echoModeCombo, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(
+                         apo::EchoModeName(static_cast<apo::EchoMode>(mode))));
+    }
+    SendMessageW(g_echoModeCombo, CB_SETCURSEL,
+                 static_cast<int>(apo::EchoMode::Stereo), 0);
+
+    g_echoTimeLabel =
+        ui::Label(window, IDC_ECHO_TIME_LABEL, L"Time (ms)");
+    g_echoTimeSlider = ui::Slider(
+        window, IDC_ECHO_TIME_SLIDER,
+        {apo::kEchoMinTimeMs, apo::kEchoMaxTimeMs, 1.0, false, 0});
+    g_echoFeedbackLabel =
+        ui::Label(window, IDC_ECHO_FEEDBACK_LABEL, L"Feedback (%)");
+    g_echoFeedbackSlider = ui::Slider(
+        window, IDC_ECHO_FEEDBACK_SLIDER,
+        {0.0, apo::kEchoMaxFeedback, 1.0, false, 0});
+    g_echoDampingLabel =
+        ui::Label(window, IDC_ECHO_DAMPING_LABEL, L"Damping (%)");
+    g_echoDampingSlider = ui::Slider(window, IDC_ECHO_DAMPING_SLIDER,
+                                     {0.0, 100.0, 1.0, false, 0});
+    g_echoLevelLabel = ui::Label(window, IDC_ECHO_LEVEL_LABEL, L"Level (%)");
+    g_echoLevelSlider = ui::Slider(window, IDC_ECHO_LEVEL_SLIDER,
+                                   {0.0, 100.0, 1.0, false, 0});
+
+    g_chorusVoicesLabel =
+        ui::Label(window, IDC_CHORUS_VOICES_LABEL, L"Voices");
+    g_chorusVoicesSlider = ui::Slider(
+        window, IDC_CHORUS_VOICES_SLIDER,
+        {apo::kChorusMinVoices, apo::kChorusMaxVoices, 1.0, false, 0});
+    g_chorusRateLabel =
+        ui::Label(window, IDC_CHORUS_RATE_LABEL, L"Rate (Hz)");
+    g_chorusRateSlider = ui::Slider(
+        window, IDC_CHORUS_RATE_SLIDER,
+        {apo::kChorusMinRateHz, apo::kChorusMaxRateHz, 0.01, false, 2});
+    g_chorusDepthLabel =
+        ui::Label(window, IDC_CHORUS_DEPTH_LABEL, L"Depth (ms)");
+    g_chorusDepthSlider = ui::Slider(
+        window, IDC_CHORUS_DEPTH_SLIDER,
+        {0.0, apo::kChorusMaxDepthMs, 0.1, false, 1});
+    g_chorusWidthLabel =
+        ui::Label(window, IDC_CHORUS_WIDTH_LABEL, L"Width (%)");
+    g_chorusWidthSlider = ui::Slider(window, IDC_CHORUS_WIDTH_SLIDER,
+                                     {0.0, 100.0, 1.0, false, 0});
+    g_chorusLevelLabel =
+        ui::Label(window, IDC_CHORUS_LEVEL_LABEL, L"Level (%)");
+    g_chorusLevelSlider = ui::Slider(window, IDC_CHORUS_LEVEL_SLIDER,
+                                     {0.0, 100.0, 1.0, false, 0});
+
+    g_pitchAlgorithmLabel =
+        ui::Label(window, IDC_PITCH_ALGORITHM_LABEL, L"Algorithm");
+    g_pitchAlgorithmCombo =
+        ui::ComboBox(window, IDC_PITCH_ALGORITHM_COMBO, CBS_DROPDOWNLIST);
+    for (int algorithm = 0;
+         algorithm < static_cast<int>(apo::PitchAlgorithm::Count);
+         ++algorithm) {
+        SendMessageW(g_pitchAlgorithmCombo, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(apo::PitchAlgorithmName(
+                         static_cast<apo::PitchAlgorithm>(algorithm))));
+    }
+    SendMessageW(g_pitchAlgorithmCombo, CB_SETCURSEL,
+                 static_cast<int>(apo::PitchAlgorithm::Granular), 0);
+
+    g_pitchShiftLabel =
+        ui::Label(window, IDC_PITCH_SHIFT_LABEL, L"Shift (semitones)");
+    g_pitchShiftSlider = ui::Slider(
+        window, IDC_PITCH_SHIFT_SLIDER,
+        {apo::kPitchMinSemitones, apo::kPitchMaxSemitones, 0.1, false, 1});
+    g_pitchWindowLabel =
+        ui::Label(window, IDC_PITCH_WINDOW_LABEL, L"Window (samples)");
+    g_pitchWindowSlider = ui::Slider(
+        window, IDC_PITCH_WINDOW_SLIDER,
+        {apo::kPitchMinWindowSamples, apo::kPitchMaxWindowSamples, 1.0, false,
+         0});
+    g_pitchDryLevelLabel =
+        ui::Label(window, IDC_PITCH_DRY_LEVEL_LABEL, L"Dry level (%)");
+    g_pitchDryLevelSlider =
+        ui::Slider(window, IDC_PITCH_DRY_LEVEL_SLIDER,
+                   {0.0, 100.0, 1.0, false, 0});
+
+    g_pitchLevelLabel =
+        ui::Label(window, IDC_PITCH_LEVEL_LABEL, L"Level (%)");
+    g_pitchLevelSlider = ui::Slider(window, IDC_PITCH_LEVEL_SLIDER,
+                                    {0.0, 100.0, 1.0, false, 0});
+
+    g_tremoloRateLabel =
+        ui::Label(window, IDC_TREMOLO_RATE_LABEL, L"Rate (Hz)");
+    g_tremoloRateSlider = ui::Slider(
+        window, IDC_TREMOLO_RATE_SLIDER,
+        {apo::kModulationMinRateHz, apo::kModulationMaxRateHz, 0.1, false, 1});
+    g_tremoloDepthLabel =
+        ui::Label(window, IDC_TREMOLO_DEPTH_LABEL, L"Depth (%)");
+    g_tremoloDepthSlider = ui::Slider(window, IDC_TREMOLO_DEPTH_SLIDER,
+                                      {0.0, 100.0, 1.0, false, 0});
+    g_tremoloWaveformLabel =
+        ui::Label(window, IDC_TREMOLO_WAVEFORM_LABEL, L"Waveform");
+    g_tremoloWaveformCombo =
+        ui::ComboBox(window, IDC_TREMOLO_WAVEFORM_COMBO, CBS_DROPDOWNLIST);
+    g_vibratoWaveformLabel =
+        ui::Label(window, IDC_VIBRATO_WAVEFORM_LABEL, L"Waveform");
+    g_vibratoWaveformCombo =
+        ui::ComboBox(window, IDC_VIBRATO_WAVEFORM_COMBO, CBS_DROPDOWNLIST);
+    for (int waveform = 0;
+         waveform < static_cast<int>(apo::ModulationWaveform::Count);
+         ++waveform) {
+        const LPARAM name = reinterpret_cast<LPARAM>(
+            apo::ModulationWaveformName(
+                static_cast<apo::ModulationWaveform>(waveform)));
+        SendMessageW(g_tremoloWaveformCombo, CB_ADDSTRING, 0, name);
+        SendMessageW(g_vibratoWaveformCombo, CB_ADDSTRING, 0, name);
+    }
+    SendMessageW(g_tremoloWaveformCombo, CB_SETCURSEL,
+                 static_cast<int>(apo::ModulationWaveform::Sine), 0);
+    SendMessageW(g_vibratoWaveformCombo, CB_SETCURSEL,
+                 static_cast<int>(apo::ModulationWaveform::Sine), 0);
+    g_tremoloSpreadLabel =
+        ui::Label(window, IDC_TREMOLO_SPREAD_LABEL, L"Stereo spread (%)");
+    g_tremoloSpreadSlider = ui::Slider(
+        window, IDC_TREMOLO_SPREAD_SLIDER,
+        {0.0, apo::kModulationMaxSpread, 1.0, false, 0});
+
+    g_vibratoRateLabel =
+        ui::Label(window, IDC_VIBRATO_RATE_LABEL, L"Rate (Hz)");
+    g_vibratoRateSlider = ui::Slider(
+        window, IDC_VIBRATO_RATE_SLIDER,
+        {apo::kModulationMinRateHz, apo::kModulationMaxRateHz, 0.1, false, 1});
+    g_vibratoDepthLabel =
+        ui::Label(window, IDC_VIBRATO_DEPTH_LABEL, L"Depth (cents)");
+    g_vibratoDepthSlider = ui::Slider(
+        window, IDC_VIBRATO_DEPTH_SLIDER,
+        {0.0, apo::kVibratoMaxDepthCents, 1.0, false, 0});
+    g_vibratoSpreadLabel =
+        ui::Label(window, IDC_VIBRATO_SPREAD_LABEL, L"Stereo spread (%)");
+    g_vibratoSpreadSlider = ui::Slider(
+        window, IDC_VIBRATO_SPREAD_SLIDER,
+        {0.0, apo::kModulationMaxSpread, 1.0, false, 0});
 
     g_noiseReductionLabel =
         ui::Label(window, IDC_NOISE_REDUCTION_LABEL, L"Reduction (dB)");

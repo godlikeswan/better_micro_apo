@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -117,7 +118,9 @@ private:
     std::vector<double> m_delayBand;
 };
 
-// Flat gain, used both by the fixed Input row and by makeup Gain effects.
+// Flat gain, used both by the fixed Input row and by makeup Gain effects. The
+// Input row can also copy channel 0 to every other channel; standalone Gain
+// never does.
 class GainStage final : public Stage
 {
 public:
@@ -133,6 +136,7 @@ private:
 
     GainSettings m_settings;
     double m_gain = 1.0;
+    bool m_treatAsMono = false;
 };
 
 // Spectral noise reduction. The profile is measured once from the device and
@@ -189,19 +193,6 @@ private:
     std::vector<double> m_spectraImag;
     std::vector<double> m_frameReal;
     std::vector<double> m_frameImag;
-};
-
-// Copies the processed left channel to every other channel.
-class MonoStage final : public Stage
-{
-public:
-    MonoStage() = default;
-
-    void Update(const EffectInstance& effect, const AudioFormat& format) override;
-    void Process(double* samples, UINT32 frames, UINT32 channels) override;
-
-private:
-    bool m_enabled = false;
 };
 
 // Soft saturation with a selectable curve: tanh, arctan, cubic polynomial,
@@ -312,6 +303,247 @@ private:
     double m_fdnRight = 0.0;
 };
 
+// Stereo/ping-pong echo. The dry path stays at unity and the wet return is a
+// damped feedback delay line. All delay memory is allocated in Configure(); a
+// live Time change only moves the read offset.
+class EchoStage final : public Stage
+{
+public:
+    EchoStage() = default;
+
+    void Configure(const AudioFormat& format) override;
+    void Update(const EffectInstance& effect, const AudioFormat& format) override;
+    void Reset() override;
+    bool NeedsSilence() const override
+    {
+        return m_settings.enabled && m_level > 0.0;
+    }
+    void Process(double* samples, UINT32 frames, UINT32 channels) override;
+
+private:
+    void ApplyCoefficients();
+
+    EchoSettings m_settings;
+    std::vector<double> m_delay;
+    std::vector<double> m_feedbackLow;
+    size_t m_capacityFrames = 0;
+    size_t m_delayFrames = 1;
+    size_t m_write = 0;
+    UINT32 m_channels = 0;
+    double m_sampleRate = 48000.0;
+    double m_feedback = 0.0;
+    double m_dampPole = 0.0;
+    double m_level = 0.0;
+};
+
+// Modulated fractional delays summed back into the dry signal. Each voice owns
+// a fixed delay buffer for the stream; a live Voices change only selects how
+// many are mixed, and Width spreads their LFO phases across channels.
+class ChorusStage final : public Stage
+{
+public:
+    ChorusStage() = default;
+
+    void Configure(const AudioFormat& format) override;
+    void Update(const EffectInstance& effect, const AudioFormat& format) override;
+    void Reset() override;
+    bool NeedsSilence() const override
+    {
+        return m_settings.enabled && m_level > 0.0;
+    }
+    void Process(double* samples, UINT32 frames, UINT32 channels) override;
+
+private:
+    struct Voice
+    {
+        std::vector<double> buffer;
+        double phase = 0.0;
+    };
+
+    void ApplyCoefficients();
+    double Read(const Voice& voice, UINT32 channel, double position) const;
+
+    ChorusSettings m_settings;
+    std::vector<Voice> m_voices;
+    std::vector<double> m_wet;
+    std::vector<double> m_input;
+    size_t m_capacityFrames = 0;
+    size_t m_write = 0;
+    UINT32 m_channels = 0;
+    double m_sampleRate = 48000.0;
+    double m_baseDelayFrames = 0.0;
+    double m_modDepthFrames = 0.0;
+    double m_phaseStep = 0.0;
+    double m_voiceSpread = 0.0;
+    double m_channelSpread = 0.0;
+    double m_level = 0.0;
+    int m_activeVoices = apo::kChorusDefaultVoices;
+};
+
+// Level modulation with a shared LFO shape. Rate sets the cycle speed, Depth
+// sets how far the level drops, and Stereo spread offsets the right channel's
+// LFO so the pulsation moves between speakers. Depth 0 leaves the audio alone.
+class TremoloStage final : public Stage
+{
+public:
+    TremoloStage() = default;
+
+    void Configure(const AudioFormat& format) override;
+    void Update(const EffectInstance& effect, const AudioFormat& format) override;
+    void Reset() override;
+    void Process(double* samples, UINT32 frames, UINT32 channels) override;
+
+private:
+    struct ChannelState
+    {
+        double phase = 0.0;
+        double gain = 1.0;
+    };
+
+    void ApplyCoefficients();
+
+    TremoloSettings m_settings;
+    std::vector<ChannelState> m_state;
+    double m_phaseStep = 0.0;
+    double m_spreadCycles = 0.0;
+    double m_depth = 0.0;
+    double m_smoothCoeff = 0.0;
+    UINT32 m_channels = 0;
+    double m_sampleRate = 48000.0;
+};
+
+// Pitch modulation driven by the same LFO shape. The fractional delay is
+// integrated from the requested pitch ratio, so Square holds a sustained
+// pitch offset for each half-cycle instead of only bending during transitions.
+// Depth 0 passes the input through while keeping the delay memory current.
+class VibratoStage final : public Stage
+{
+public:
+    VibratoStage() = default;
+
+    void Configure(const AudioFormat& format) override;
+    void Update(const EffectInstance& effect, const AudioFormat& format) override;
+    void Reset() override;
+    bool NeedsSilence() const override
+    {
+        return m_settings.enabled && m_settings.depthCents > 0.0;
+    }
+    void Process(double* samples, UINT32 frames, UINT32 channels) override;
+
+private:
+    struct DelayChannel
+    {
+        std::vector<double> buffer;
+        size_t write = 0;
+        double phase = 0.0;
+        double delay = 0.0;
+    };
+
+    void ApplyCoefficients();
+    double Read(const DelayChannel& channel, double position) const;
+
+    VibratoSettings m_settings;
+    std::vector<DelayChannel> m_channelsState;
+    size_t m_capacityFrames = 0;
+    double m_baseDelay = 0.0;
+    double m_phaseStep = 0.0;
+    double m_spreadCycles = 0.0;
+    double m_ratioHigh = 1.0;
+    double m_ratioLow = 1.0;
+    double m_ratioMean = 1.0;
+    double m_squareDuty = 0.5;
+    UINT32 m_channels = 0;
+    double m_sampleRate = 48000.0;
+};
+
+// Pitch shifting with three engines sharing one preallocated sample history.
+// Granular uses two crossfading grains, WSOLA adds a bounded waveform-similarity
+// search at each grain restart, and the phase vocoder uses radix-2 FFT plans
+// created at Configure time. No engine allocates in Update() or Process().
+class PitchShifterStage final : public Stage
+{
+public:
+    PitchShifterStage() = default;
+
+    void Configure(const AudioFormat& format) override;
+    void Update(const EffectInstance& effect, const AudioFormat& format) override;
+    void Reset() override;
+    bool NeedsSilence() const override
+    {
+        return m_settings.enabled && m_level > 0.0;
+    }
+    void Process(double* samples, UINT32 frames, UINT32 channels) override;
+
+private:
+    static constexpr size_t kGrainCount = 2;
+
+    struct GrainChannel
+    {
+        std::vector<double> input;
+        size_t write = 0;
+        double position[kGrainCount]{};
+        double phase[kGrainCount]{};
+    };
+
+    struct VocoderChannel
+    {
+        std::vector<double> input;
+        std::vector<double> overlap;
+        // Analysis phase is tracked per input bin; synthesis phase is
+        // accumulated per output bin. They cannot share one array.
+        std::vector<double> lastPhase;
+        std::vector<double> synthPhase;
+        std::vector<double> magnitudes;
+        // Magnitude-weighted target bin and source phase for each synthesis
+        // bin, plus a count so an empty bin can re-lock cleanly.
+        std::vector<double> frequencySum;
+        std::vector<double> phaseReal;
+        std::vector<double> phaseImag;
+        std::vector<int> targetCount;
+        std::vector<unsigned char> phaseValid;
+        size_t write = 0;
+        size_t overlapWrite = 0;
+        size_t frameCounter = 0;
+    };
+
+    void ApplyCoefficients();
+    void ResetGrain(GrainChannel& channel) const;
+    void ResetVocoder(VocoderChannel& channel) const;
+    double ReadGrain(const GrainChannel& channel, double position) const;
+    double GrainMaxLag() const;
+    double LimitedPosition(const GrainChannel& channel, double position,
+                           double writePosition) const;
+    double SearchAlignment(const GrainChannel& channel, double nominal,
+                           double reference, double writePosition) const;
+    double ProcessGrain(GrainChannel& channel, double input, bool wsola);
+    void AnalyzeVocoder(VocoderChannel& channel, size_t writeIndex);
+    double ProcessVocoder(VocoderChannel& channel, double input);
+
+    PitchShifterSettings m_settings;
+    std::vector<GrainChannel> m_grainChannels;
+    std::vector<VocoderChannel> m_vocoderChannels;
+    std::vector<std::unique_ptr<FftPlan>> m_fftPlans;
+    std::vector<std::vector<double>> m_windows;
+    std::vector<double> m_real;
+    std::vector<double> m_imag;
+    std::vector<double> m_wet;
+    std::vector<double> m_inputFrame;
+    UINT32 m_channels = 0;
+    double m_sampleRate = 48000.0;
+    double m_ratio = 0.5;
+    double m_level = 0.5;
+    double m_dryLevel = 1.0;
+    double m_grainPhaseStep = 0.0;
+    double m_synthPhaseStep = 0.0;
+    size_t m_maxWindow = apo::kPitchMaxWindowSamples;
+    size_t m_maxFft = 16384;
+    size_t m_windowSamples = apo::kPitchDefaultWindowSamples;
+    size_t m_fftSize = 4096;
+    size_t m_grainHopFrames = 2048;
+    size_t m_vocoderHopFrames = 1024;
+    int m_fftIndex = 3;
+};
+
 // Monitoring-only pitch detector. It copies the mono sum of the incoming audio
 // into a preallocated analysis window, detects a pitch with the selected engine,
 // and publishes frequency/clarity through the stage monitor. Samples are never
@@ -352,6 +584,11 @@ private:
     std::vector<FftPlan> m_fftPlans;
     double m_lastMidi = 0.0;
     bool m_hasLastMidi = false;
+    double m_timeSeconds = 0.0;
+    std::vector<double> m_averageMidi;
+    std::vector<double> m_averageTime;
+    std::size_t m_averageWrite = 0;
+    std::size_t m_averageCount = 0;
     TunerMonitorData m_monitor;
 };
 
