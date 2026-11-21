@@ -311,6 +311,7 @@ struct Monitor {
     ComPtr<IAudioRenderClient> render;
     HANDLE renderEvent = nullptr;
     ULONGLONG lastStatsTick = 0;
+    UINT32 renderPeriodFrames = 0;
     FormatPtr renderFormat;
     UINT32 sourceRate = 0;
     UINT32 sourceChannels = 0;
@@ -562,74 +563,147 @@ std::wstring OpenMonitor(const std::wstring& endpointId, Monitor& monitor)
               static_cast<unsigned long long>(minPeriod),
               static_cast<unsigned long long>(bufferDuration));
 
-    // Prepare the event before Initialize: a callback stream must have its
-    // handle installed before Start, and Initialize can only be called once
-    // per IAudioClient object.
-    ComPtr<IAudioClient2> renderClient2;
-    ScopedHandle eventHandle;
-    bool useEvent = SUCCEEDED(monitor.renderClient->QueryInterface(
-        __uuidof(IAudioClient2),
-        reinterpret_cast<void**>(renderClient2.put())));
-    if (useEvent) {
-        eventHandle.value = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        if (eventHandle.value == nullptr) {
-            renderClient2.reset();
-            useEvent = false;
+    // IAudioClient3 can request an explicit shared-mode engine period. Legacy
+    // Initialize always allocates two periods (~22 ms here), so probe this on
+    // a separate client first; if any step fails, the untouched client below
+    // keeps using the original path.
+    ComPtr<IAudioClient> probeClient;
+    ComPtr<IAudioClient3> probeClient3;
+    ScopedHandle probeEvent;
+    UINT32 chosenPeriod = 0;
+    bool lowLatency = false;
+
+    hr = renderDevice->Activate(
+        __uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+        reinterpret_cast<void**>(probeClient.put()));
+    if (SUCCEEDED(hr)) {
+        hr = probeClient->QueryInterface(
+            __uuidof(IAudioClient3),
+            reinterpret_cast<void**>(probeClient3.put()));
+        if (SUCCEEDED(hr)) {
+            UINT32 defaultFrames = 0;
+            UINT32 fundamentalFrames = 0;
+            UINT32 minFrames = 0;
+            UINT32 maxFrames = 0;
+            hr = probeClient3->GetSharedModeEnginePeriod(
+                monitor.renderFormat.get(), &defaultFrames,
+                &fundamentalFrames, &minFrames, &maxFrames);
+            ListenLog(
+                L"Render engine periods default=%u fundamental=%u min=%u "
+                L"max=%u hr=0x%08X",
+                defaultFrames, fundamentalFrames, minFrames, maxFrames,
+                static_cast<unsigned>(hr));
+            if (SUCCEEDED(hr) && minFrames != 0 && maxFrames >= minFrames) {
+                // ~5 ms target, rounded up to the driver's fundamental period.
+                UINT32 period = std::min(std::max(minFrames, 256u), maxFrames);
+                if (fundamentalFrames > 1) {
+                    period = ((period + fundamentalFrames - 1) /
+                              fundamentalFrames) * fundamentalFrames;
+                    if (period > maxFrames) {
+                        period = (maxFrames / fundamentalFrames) *
+                                 fundamentalFrames;
+                    }
+                }
+                if (period >= minFrames && period <= maxFrames && period != 0) {
+                    chosenPeriod = period;
+                    probeEvent.value =
+                        CreateEventW(nullptr, FALSE, FALSE, nullptr);
+                    if (probeEvent.value != nullptr) {
+                        hr = probeClient3->InitializeSharedAudioStream(
+                            AUDCLNT_STREAMFLAGS_EVENTCALLBACK, chosenPeriod,
+                            monitor.renderFormat.get(), nullptr);
+                        ListenLog(L"Render Init3 period=%u hr=0x%08X",
+                                  chosenPeriod, static_cast<unsigned>(hr));
+                        if (SUCCEEDED(hr)) {
+                            hr = probeClient3->SetEventHandle(
+                                probeEvent.value);
+                            ListenLog(L"Render SetEventHandle(3) hr=0x%08X",
+                                      static_cast<unsigned>(hr));
+                            lowLatency = SUCCEEDED(hr);
+                        }
+                    }
+                }
+            }
         }
     }
 
-    UINT32 renderFlags = useEvent ? AUDCLNT_STREAMFLAGS_EVENTCALLBACK : 0;
-    hr = monitor.renderClient->Initialize(AUDCLNT_SHAREMODE_SHARED, renderFlags,
-                                          bufferDuration, 0,
-                                          monitor.renderFormat.get(), nullptr);
-    ListenLog(L"Render Init flags=0x%08X hr=0x%08X",
-              renderFlags, static_cast<unsigned>(hr));
-    if (FAILED(hr) && useEvent) {
-        ListenLog(L"Render event init failed; retrying without event");
-        renderClient2.reset();
-        eventHandle.reset();
-        useEvent = false;
-        renderFlags = 0;
-        hr = monitor.renderClient->Initialize(
-            AUDCLNT_SHAREMODE_SHARED, 0, bufferDuration, 0,
-            monitor.renderFormat.get(), nullptr);
-        ListenLog(L"Render Init retry flags=0 hr=0x%08X",
-                  static_cast<unsigned>(hr));
-    }
-    if (FAILED(hr)) {
-        return fail(HresultText(L"Could not start the output stream", hr));
-    }
+    if (lowLatency) {
+        monitor.renderClient = std::move(probeClient);
+        monitor.renderEvent = probeEvent.release();
+        monitor.renderPeriodFrames = chosenPeriod;
+        ListenLog(L"Render low-latency stream active period=%u", chosenPeriod);
+    } else {
+        ListenLog(L"Render low-latency stream unavailable; legacy init");
 
-    if (useEvent) {
-        hr = renderClient2->SetEventHandle(eventHandle.value);
-        if (FAILED(hr)) {
-            ListenLog(L"Render SetEventHandle hr=0x%08X; recreating client",
-                      static_cast<unsigned>(hr));
-            monitor.renderClient.reset();
+        // Prepare the event before Initialize: a callback stream must have its
+        // handle installed before Start, and Initialize can only be called once
+        // per IAudioClient object.
+        ComPtr<IAudioClient2> renderClient2;
+        ScopedHandle eventHandle;
+        bool useEvent = SUCCEEDED(monitor.renderClient->QueryInterface(
+            __uuidof(IAudioClient2),
+            reinterpret_cast<void**>(renderClient2.put())));
+        if (useEvent) {
+            eventHandle.value = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+            if (eventHandle.value == nullptr) {
+                renderClient2.reset();
+                useEvent = false;
+            }
+        }
+
+        UINT32 renderFlags = useEvent ? AUDCLNT_STREAMFLAGS_EVENTCALLBACK : 0;
+        hr = monitor.renderClient->Initialize(AUDCLNT_SHAREMODE_SHARED, renderFlags,
+                                              bufferDuration, 0,
+                                              monitor.renderFormat.get(), nullptr);
+        ListenLog(L"Render Init flags=0x%08X hr=0x%08X",
+                  renderFlags, static_cast<unsigned>(hr));
+        if (FAILED(hr) && useEvent) {
+            ListenLog(L"Render event init failed; retrying without event");
             renderClient2.reset();
             eventHandle.reset();
             useEvent = false;
-            hr = renderDevice->Activate(
-                __uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-                reinterpret_cast<void**>(monitor.renderClient.put()));
-            if (SUCCEEDED(hr)) {
-                hr = monitor.renderClient->Initialize(
-                    AUDCLNT_SHAREMODE_SHARED, 0, bufferDuration, 0,
-                    monitor.renderFormat.get(), nullptr);
-            }
-            ListenLog(L"Render fallback init hr=0x%08X",
+            renderFlags = 0;
+            hr = monitor.renderClient->Initialize(
+                AUDCLNT_SHAREMODE_SHARED, 0, bufferDuration, 0,
+                monitor.renderFormat.get(), nullptr);
+            ListenLog(L"Render Init retry flags=0 hr=0x%08X",
                       static_cast<unsigned>(hr));
+        }
+        if (FAILED(hr)) {
+            return fail(HresultText(L"Could not start the output stream", hr));
+        }
+
+        if (useEvent) {
+            hr = renderClient2->SetEventHandle(eventHandle.value);
             if (FAILED(hr)) {
-                return fail(
-                    HresultText(L"Could not start the output stream", hr));
+                ListenLog(L"Render SetEventHandle hr=0x%08X; recreating client",
+                          static_cast<unsigned>(hr));
+                monitor.renderClient.reset();
+                renderClient2.reset();
+                eventHandle.reset();
+                useEvent = false;
+                hr = renderDevice->Activate(
+                    __uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+                    reinterpret_cast<void**>(monitor.renderClient.put()));
+                if (SUCCEEDED(hr)) {
+                    hr = monitor.renderClient->Initialize(
+                        AUDCLNT_SHAREMODE_SHARED, 0, bufferDuration, 0,
+                        monitor.renderFormat.get(), nullptr);
+                }
+                ListenLog(L"Render fallback init hr=0x%08X",
+                          static_cast<unsigned>(hr));
+                if (FAILED(hr)) {
+                    return fail(
+                        HresultText(L"Could not start the output stream", hr));
+                }
             }
         }
+        if (useEvent) {
+            monitor.renderClient2 = std::move(renderClient2);
+            monitor.renderEvent = eventHandle.release();
+        }
+        ListenLog(L"Render event=%d", monitor.renderEvent != nullptr ? 1 : 0);
     }
-    if (useEvent) {
-        monitor.renderClient2 = std::move(renderClient2);
-        monitor.renderEvent = eventHandle.release();
-    }
-    ListenLog(L"Render event=%d", monitor.renderEvent != nullptr ? 1 : 0);
 
     hr = monitor.renderClient->GetService(
         __uuidof(IAudioRenderClient),
@@ -644,6 +718,12 @@ std::wstring OpenMonitor(const std::wstring& endpointId, Monitor& monitor)
         return fail(HresultText(L"Could not size the output buffer", hr));
     }
     ListenLog(L"Render buffer frames=%u", monitor.renderFrames);
+
+    REFERENCE_TIME streamLatency = 0;
+    if (SUCCEEDED(monitor.renderClient->GetStreamLatency(&streamLatency))) {
+        ListenLog(L"Render stream latency=%llu (100ns)",
+                  static_cast<unsigned long long>(streamLatency));
+    }
 
     monitor.renderFrameBytes = monitor.renderFormat->nBlockAlign;
     monitor.renderChannels = monitor.renderFormat->nChannels;
@@ -892,8 +972,9 @@ void RunMonitor(Monitor& monitor)
         if (now - monitor.lastStatsTick >= 2000) {
             const ULONG queued = monitor.tap.AudioAvailableFrames();
             ListenLog(
-                L"listen stats: renderFrames=%u padding=%u input=%u/%u "
-                L"tapQueued=%u lagMs=%u drops=%u",
+                L"listen stats: period=%u renderFrames=%u padding=%u "
+                L"input=%u/%u tapQueued=%u lagMs=%u drops=%u",
+                monitor.renderPeriodFrames,
                 monitor.renderFrames, padding,
                 static_cast<unsigned>(inputFrames),
                 static_cast<unsigned>(maxInputFrames),
