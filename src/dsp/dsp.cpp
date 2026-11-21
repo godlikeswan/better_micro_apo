@@ -395,6 +395,14 @@ void Chain::Process(const BYTE* source, BYTE* destination, UINT32 frames,
 
     if (m_stages.empty())
     {
+        for (size_t i = 0; i < count; ++i)
+        {
+            scratch[i] = DecodeSample(m_format.sample, source, i);
+        }
+        if (monitor != nullptr)
+        {
+            monitor->WriteAudio(scratch, frames, m_format.channels);
+        }
         if (destination != source)
         {
             std::memcpy(destination, source,
@@ -428,6 +436,10 @@ void Chain::Process(const BYTE* source, BYTE* destination, UINT32 frames,
         if (m_bindings[index].type == apo::EffectType::Tuner) {
             stage->MonitorTuner(tuner);
         }
+        LooperMonitorData looper{};
+        if (m_bindings[index].type == apo::EffectType::Looper) {
+            stage->MonitorLooper(looper);
+        }
         monitor->ObserveStage(index, m_bindings[index], scratch, frames,
                               m_format.channels,
                               static_cast<float>(inputPeak),
@@ -435,7 +447,13 @@ void Chain::Process(const BYTE* source, BYTE* destination, UINT32 frames,
                               static_cast<float>(outputPeak),
                               static_cast<float>(outputRms),
                               static_cast<float>(stage->MonitorValue()),
-                              static_cast<float>(stage->MonitorGainDb()), tuner);
+                              static_cast<float>(stage->MonitorGainDb()),
+                               tuner, looper);
+    }
+
+    if (monitor != nullptr)
+    {
+        monitor->WriteAudio(scratch, frames, m_format.channels);
     }
 
     for (size_t i = 0; i < count; ++i)
@@ -461,6 +479,11 @@ void Chain::ProcessSilence(BYTE* destination, UINT32 frames, double* scratch,
 
     if (m_stages.empty())
     {
+        std::fill(scratch, scratch + count, 0.0);
+        if (monitor != nullptr)
+        {
+            monitor->WriteAudio(scratch, frames, m_format.channels);
+        }
         std::memset(destination, 0, count * m_format.bytesPerSample);
         return;
     }
@@ -488,6 +511,10 @@ void Chain::ProcessSilence(BYTE* destination, UINT32 frames, double* scratch,
         if (m_bindings[index].type == apo::EffectType::Tuner) {
             stage->MonitorTuner(tuner);
         }
+        LooperMonitorData looper{};
+        if (m_bindings[index].type == apo::EffectType::Looper) {
+            stage->MonitorLooper(looper);
+        }
         monitor->ObserveStage(index, m_bindings[index], scratch, frames,
                               m_format.channels,
                               static_cast<float>(inputPeak),
@@ -495,7 +522,13 @@ void Chain::ProcessSilence(BYTE* destination, UINT32 frames, double* scratch,
                               static_cast<float>(outputPeak),
                               static_cast<float>(outputRms),
                               static_cast<float>(stage->MonitorValue()),
-                              static_cast<float>(stage->MonitorGainDb()), tuner);
+                              static_cast<float>(stage->MonitorGainDb()),
+                               tuner, looper);
+    }
+
+    if (monitor != nullptr)
+    {
+        monitor->WriteAudio(scratch, frames, m_format.channels);
     }
 
     for (size_t i = 0; i < count; ++i)

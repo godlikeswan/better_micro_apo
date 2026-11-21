@@ -222,7 +222,11 @@ void BetterMicroApo::FinalRelease()
 STDMETHODIMP BetterMicroApo::Reset()
 {
     const HRESULT hr = CBaseAudioProcessingObject::Reset();
+    // An engine reset clears every stage. Save and restore the Looper bank so
+    // takes survive it, and re-arm the command baseline for the next gesture.
+    m_stagePool.SaveLooperBanks();
     m_chain.Reset();
+    m_stagePool.LoadLooperBanks();
     return hr;
 }
 
@@ -368,7 +372,7 @@ STDMETHODIMP BetterMicroApo::LockForProcess(
         m_captureTap.Configure(m_formatInfo);
         OpenStageCapture();
         OpenStageMonitor();
-        ConfigureDsp();
+        ConfigureDsp(m_endpointId);
     }
     catch (...)
     {
@@ -401,6 +405,8 @@ STDMETHODIMP BetterMicroApo::UnlockForProcess()
     CloseStageMonitor();
     CloseStageCapture();
     CloseRuntimeSettings();
+    // Save takes before the pool that owns their buffers is destroyed.
+    m_stagePool.SaveLooperBanks();
     m_chain.Clear();
     m_stagePool.Clear();
     m_noiseProfile = apo::NoiseProfile{};
@@ -507,16 +513,21 @@ STDMETHODIMP_(void) BetterMicroApo::APOProcess(
     output->u32BufferFlags = BUFFER_VALID;
 }
 
-void BetterMicroApo::ConfigureDsp()
+void BetterMicroApo::ConfigureDsp(const std::wstring& endpointId)
 {
     // Setup path: allocate one stage per possible effect instance, then build
     // the active order from the settings list. Later updates reuse these stages
-    // and only rebuild the non-owning chain.
+    // and only rebuild the non-owning chain. The Looper loads its saved bank
+    // here so a fresh processor starts with the same takes the previous one had.
     m_chain.Clear();
     m_chain.SetFormat(m_formatInfo);
-    m_stagePool.Configure(m_formatInfo, m_noiseProfile);
+    m_stagePool.Configure(m_formatInfo, m_noiseProfile, m_settings,
+                          endpointId);
     RebuildChain();
     m_chain.Reset();
+    // RebuildChain() and Chain::Reset() both reset freshly bound stages, so
+    // restore takes only after the Looper has its final id and settings.
+    m_stagePool.LoadLooperBanks();
 }
 
 void BetterMicroApo::ProcessBuffer(const BYTE* source, BYTE* destination,
@@ -678,7 +689,8 @@ void BetterMicroApo::OpenStageMonitor()
     {
         return;
     }
-    if (!m_monitor.Open(m_endpointId, m_formatInfo.sampleRate))
+    if (!m_monitor.Open(m_endpointId, m_formatInfo.sampleRate,
+                        m_formatInfo.channels))
     {
         Log(L"Could not open the stage monitor channel for %s",
             m_endpointId.c_str());

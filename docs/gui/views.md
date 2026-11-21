@@ -69,8 +69,8 @@ busy.
   inserted after the selected row (never above Input), or appended if nothing
   is selected. The
   graph panel supports Input, Gain, Gate/Expander, Compressor/Limiter,
-  Equalizer, Saturation, and Tuner. Echo, Chorus, Tremolo, Vibrato, and Pitch
-  Shifter have no live graph; selecting one hides the graph control.
+  Equalizer, Saturation, and Tuner. Echo, Chorus, Tremolo, Vibrato, Pitch
+  Shifter, and Looper have no live graph; selecting one hides the graph control.
 - **About → Info** (`gui/ui/info_dialog.cpp`) is a manual modal loop. It shows
   hashes, install path, CLSID, registry status, and `Applied to N devices`, and
   follows theme changes while open. Its OK button is a regular button.

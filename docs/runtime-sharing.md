@@ -17,6 +17,7 @@ filename-safe with `apo::SafeEndpointId`.
 | --- | --- | --- | --- |
 | `C:\ProgramData\better_micro_apo\devices\{id}.ini` | GUI | APO at `LockForProcess` | Durable settings; authoritative on restart. |
 | `C:\ProgramData\better_micro_apo\devices\{id}.noise` | GUI | APO at `LockForProcess` and after a live capture | Durable noise profile, with precomputed magnitude bins. |
+| `C:\ProgramData\better_micro_apo\devices\{id}.looper` | APO at `UnlockForProcess` | APO at next `LockForProcess` | Durable Looper takes, undo bank, and transport state. |
 | `C:\ProgramData\better_micro_apo\runtime\{id}.dat` | GUI | APO while streaming | Live settings snapshot. |
 | `C:\ProgramData\better_micro_apo\runtime\{id}.capture` | Both | Both while streaming | One-shot stage capture control block. |
 | `C:\ProgramData\better_micro_apo\runtime\{id}.monitor` | APO | GUI while streaming | Continuous per-stage levels, engagement, dynamic gain, pitch, and spectra. |
@@ -30,7 +31,7 @@ filename-safe with `apo::SafeEndpointId`.
 | --- | --- | --- |
 | `sequence` | `volatile uint32_t` | Seqlock: odd while writing, even when complete. |
 | `magic` | `uint32_t` | `0x50414D42` (`"BMAP"`). |
-| `version` | `uint32_t` | `17`; bump whenever `ApoSettings` changes layout. |
+| `version` | `uint32_t` | `19`; bump whenever `ApoSettings` changes layout. |
 | `structSize` | `uint32_t` | Size of the full structure. |
 | `generation` | `volatile uint64_t` | Incremented on each published snapshot; this is what the APO polls. |
 | `settings` | `ApoSettings` | The complete settings blob, copied by value. |
@@ -84,6 +85,15 @@ new snapshot is applied exactly once.
 - **Settings-only edits** are saved to the INI and published to the `.dat`
   file about 200 ms after the last edit (`kLiveApplyTimer`). The monitor keeps
   running and audio is not interrupted.
+- **Looper transport gestures** are published immediately through the same
+  `.dat` snapshot. `LooperSettings` carries `command`, `commandTrack`, and a
+  monotonically increasing `commandSerial`; the APO consumes a one-shot command
+  when the serial changes at a buffer boundary. The GUI then saves the INI with
+  the command cleared and keeps the last serial in memory, so a later
+  settings-only apply cannot replay it. The first stage mapping establishes the
+  serial baseline and ignores a stale runtime command. Commands are never
+  written to the INI; only the volume and timing settings are durable there.
+  Takes are saved separately in the per-device `.looper` bank.
 - **Noise-profile capture** uses the stage capture channel below. The selected
   Noise effect stays enabled, all other effects keep running, settings are not
   rewritten, and audio and Listen are not interrupted. The APO retunes the live
@@ -101,7 +111,7 @@ new snapshot is applied exactly once.
 `devices\{id}.ini` has a single `[dsp]` section:
 
 ```
-version=15
+version=17
 preset_count=4
 preset_index=0
 isolate_effects=1
@@ -118,8 +128,8 @@ preset_0_effect_0_noise_fft_size=512
 Each preset stores `effect_count`, `next_effect_id`, and one block per entry
 with `id`, `type`, `enabled`, and the type's parameter keys. Effect types are
 `input`, `gain`, `noise`, `gate`, `compressor`, `equalizer`, `saturation`,
-`reverb`, `echo`, `chorus`, `tremolo`, `vibrato`, `pitch_shifter`, and `tuner`;
-parameter
+`reverb`, `echo`, `chorus`, `tremolo`, `vibrato`, `pitch_shifter`, `tuner`, and
+`looper`; parameter
 keys include `gain_db` (also used by Input), `input_treat_as_mono` (Input only),
 `gate_threshold_db`, `gate_ratio`,
 `gate_hold_ms`, `compressor_threshold_db`, `compressor_ratio`,
@@ -134,9 +144,11 @@ keys include `gain_db` (also used by Input), `input_treat_as_mono` (Input only),
 `vibrato_rate_hz`, `vibrato_depth_cents`, `vibrato_waveform`,
 `vibrato_stereo_spread`, `pitch_algorithm`, `pitch_shift_semitones`,
 `pitch_window_samples`, `pitch_level`, `pitch_dry_level`,
-`tuner_algorithm`, `tuner_sample_size`, `tuner_smoothing`, and
-`tuner_reference_hz`. Waveform keys store 0 for Sine, 1 for Triangle, and 2 for
-Square. Both dynamics blocks also store `input_db`, `output_db`,
+`tuner_algorithm`, `tuner_sample_size`, `tuner_smoothing`,
+`tuner_reference_hz`, and, for tracks 0–4, `looper_track_N_volume`,
+`looper_track_N_free_length`, and `looper_track_N_stop_at_loop_end`. Waveform
+keys store 0 for Sine, 1 for
+Triangle, and 2 for Square. Both dynamics blocks also store `input_db`, `output_db`,
 `attack_ms`, `release_ms`, and `lookahead_ms` under their own prefix; there is
 no mode key. Every preset has an Input row at index 0; it is forced on and
 clamped to −24…+24 dB, and its `input_treat_as_mono` flag copies channel 0 to
@@ -146,11 +158,14 @@ now holds a different effect. Four presets are always written; only
 `preset_index` is processed.
 
 `LoadSettings` starts with defaults. If `[dsp] version` is missing or is not
-**15**, it deletes the INI file and returns the defaults; there is no migration
+**17**, it deletes the INI file and returns the defaults; there is no migration
 path for old settings. Version 13 added Pitch Shifter's Dry level; version 14
 added Tremolo and Vibrato; version 15 added Input's `input_treat_as_mono` and
-removed the standalone Mono effect. For a current file, `ClampSettings` repairs invalid
-values: non-finite numbers fall back to defaults (except `gate_ratio`,
+removed the standalone Mono effect; version 16 added Looper; version 17 removed
+its per-track Sync selector in favor of automatic ratio snapping. For a current
+file,
+`ClampSettings` repairs invalid values: non-finite numbers fall back to defaults
+(except `gate_ratio`,
 `compressor_ratio`, and `equalizer_ratio`, where positive infinity is valid and
 is written as `inf`),
 every numeric field
@@ -162,18 +177,23 @@ forced to `1` on every load/save/publish and is not a user option.
 ## Stage monitor channel
 
 `StageMonitorFile` (`src/stage_monitor.h`, magic `0x544F4D42` / `"BMOT"`,
-version 8) lives in `runtime\{id}.monitor`. It has a fixed header and one
-`StageMonitorSlot` per possible chain position (`kMaxEffects + 2`: the normal
-effect slots, the temporary capture tap, and one padding slot). Each slot has
+version 12) lives in `runtime\{id}.monitor`. It has a fixed header with a
+generation counter (incremented whenever the APO opens the file for a new
+stream and again when it unbinds) and a 32768-frame stereo post-DSP audio ring
+read by Listen and the bottom meter. On unbind the APO also clears the published
+audio format, so a later Listen cannot mistake a stale header for a live tap. It also has one `StageMonitorSlot` per possible chain position
+(`kMaxEffects + 2`: the normal effect slots, the temporary capture tap, and one
+padding slot).
+Each slot has
 its own seqlock and carries
 the bound effect id/type, observed flag, input/output peak and RMS, four
 cross-buffer short holds (input peak, input RMS, output RMS, and output peak),
 a longer output peak hold, a stage-specific engagement value, a signed dynamic
 gain in dB, Tuner frequency and confidence with
-`kStageMonitorFlagTunerValid`, and 128 spectrum bins from a shared 256-point
-FFT. Spectra are published only for Input and Equalizer. All values are `float`
-except the 32-bit control fields, so the mapping has a stable cross-process
-layout.
+`kStageMonitorFlagTunerValid`, five integer Looper transport states, and 128
+spectrum bins from a shared 256-point FFT. Spectra are published only for Input
+and Equalizer. Measurements are `float`; the 32-bit control fields and Looper
+states are integers, so the mapping has a stable cross-process layout.
 
 The holds are accumulated in the APO on every buffer rather than sampled only
 when the GUI polls. Their decay is measured in audio time, so a transient
@@ -194,12 +214,22 @@ not leave stale meters; `Close` publishes one final all-empty generation. The
 temporary capture tap uses an explicit sentinel binding so it can never be
 mistaken for an effect by the GUI.
 
+Listen first checks for an already-published v11 audio ring. If the endpoint is
+enabled but idle, Windows has not called `LockForProcess`, so Listen starts one
+bootstrap shared capture stream to make the APO lock and publishes the ring.
+That stream is drained and discarded on the monitor thread; Listen and the
+bottom meter still read only the APO's post-DSP ring. The bootstrap is skipped
+when another application is already keeping the APO active.
+
 The GUI keeps one read-only `StageMonitorView` open for the selected endpoint
 and polls it from timer id 5 (100 ms). It looks slots up by the stable effect id
 and type, then passes the snapshot to `ui::SetGraphMonitor`; missing or stale
-telemetry calls `ui::ClearGraphMonitor` instead. Polling never writes settings,
-touches bindings, or stops Listen. This channel is independent of the bottom
-Peak/RMS meter, which comes from the WASAPI Listen stream.
+telemetry calls `ui::ClearGraphMonitor` instead. For Looper the snapshot's five
+transport states confirm the GUI's optimistic **Empty**, **Recording**,
+**Playback**, and **Stopped** labels after a gesture. Polling never writes
+settings, touches bindings, or stops Listen. This telemetry channel is
+independent of the bottom Peak/RMS meter, which comes from the same APO
+post-DSP audio ring that Listen renders.
 
 ## Noise profile format
 

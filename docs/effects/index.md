@@ -21,12 +21,14 @@ processed top to bottom in the list.
 | [Vibrato](vibrato.md) | Modulation | Cycles the pitch with the same LFO shapes and a stereo spread. |
 | [Pitch Shifter](pitch-shifter.md) | Pitch | Shifts pitch with Granular, WSOLA, or Phase vocoder engines. |
 | [Tuner](tuner.md) | Analysis | Shows detected pitch, cents, and note range without changing audio. |
+| [Looper](looper.md) | Loop | Records five tracks from the live input, plays them back, overdubs, and undoes the last take. |
 
 Add the remaining effects in any order, use the checkboxes to switch individual
 effects on or off, and click a row to adjust its settings. The list is processed
-from top to bottom, and the same addable effect can be added more than once.
-Input stays at row 0 with no checkbox or delete cell. Each device has four
-presets, so you can keep different effect sets for different situations. Every
+from top to bottom, and most addable effects can be added more than once.
+Looper is limited to one instance per preset; Input stays at row 0 with no
+checkbox or delete cell. Each device has four presets, so you can keep different
+effect sets for different situations. Every
 effect page starts with what it does and what its controls mean; the
 implementation notes come at the end.
 
@@ -45,10 +47,11 @@ All effects implement `apo::dsp::Stage` (`src/dsp/dsp.h`):
 | `Configure(format)` | `LockForProcess` only | Precompute format-dependent coefficients and allocate any buffers. |
 | `Update(effect, format)` | Setup and runtime polling | Retune from one `EffectInstance` without allocating. |
 | `Reset()` | Setup and when instance identity/shape changes | Clear internal state, keep configuration. |
-| `NeedsSilence()` | Query from the chain | True when the stage buffers audio across calls and needs silent buffers to flush its tail. |
+| `NeedsSilence()` | Query from the chain | True when the stage buffers audio across calls and needs silent buffers to flush its tail or loop return. |
 | `MonitorValue()` | Every monitored buffer | Optional 0..1 stage-specific engagement value; Gate/Expander and Compressor/Limiter report gain change, others return zero. |
 | `MonitorGainDb()` | Every monitored buffer | Optional signed gain change in dB; Equalizer reports its current dynamic cut/boost, others return zero. |
 | `MonitorTuner(data)` | Every monitored buffer | Optional pitch measurement (frequency, confidence, validity); Tuner reports it, others leave it empty. |
+| `MonitorLooper(data)` | Every monitored buffer | Optional per-track transport states; Looper reports them, others leave them zero. |
 | `Process(samples, frames, channels)` | Every `APOProcess` | Process `frames * channels` interleaved `double` values in `[-1, 1]`, in place. Real-time safe. |
 
 `Chain` holds non-owning `Stage*` pointers in list order. `Chain::Process`
@@ -61,9 +64,11 @@ is flushed instead of being replayed later.
 When a monitor sink is present, the chain measures peak and RMS immediately
 before and after each stage, calls `ObserveStage` with that stage's binding, and
 clears slots that were not observed in the buffer. Tuner publishes its pitch
-through `MonitorTuner()`. The sink only observes; it never changes samples.
+through `MonitorTuner()`, and Looper publishes its five transport states through
+`MonitorLooper()`. The sink only observes; it never changes samples.
 
-`StagePool` owns one stage per possible instance of each type. `Update` walks
+`StagePool` owns one stage per possible instance of each type; Looper's single
+large stage is created on demand. `Update` walks
 the active preset, skips disabled effects (Input is always enabled), assigns the
 n-th enabled instance of a type to the n-th pool slot, resets a slot whose stable
 instance id changed, retunes it with `Update`, and refills the chain without
@@ -76,7 +81,7 @@ runtime polling path.
 
 - The list holds at most `kMaxEffects` (16) effects in total, including the
   fixed Input row.
-- Input allows one instance; Noise reduction, Gate/Expander,
+- Input and Looper allow one instance each; Noise reduction, Gate/Expander,
   Compressor/Limiter, Reverb, Echo, Chorus, Pitch Shifter, and Tuner are heavy
   and allow at most 4 instances each (`kMaxHeavyEffects`). Tremolo and Vibrato
   are lightweight and allow up to 16 instances each (`kMaxEffects`), still
@@ -91,7 +96,7 @@ runtime polling path.
   Compressor/Limiter, and Equalizer ratios also accept positive infinity),
   inserts or repairs Input at row 0, normalizes ids, and forces
   `isolateEffects = true`.
-- Settings schema version 15 is the only accepted version. A file with a missing
+- Settings schema version 17 is the only accepted version. A file with a missing
   or mismatched `[dsp] version` is deleted on load instead of migrated.
 
 ### Graph and transfer math
@@ -116,8 +121,8 @@ spectrum keeps that left-hand dBFS scale and
 its labels, while its response curves use a centered **−96…+96 dB** scale with
 +96/0/−96 marks just inside the right edge; the plot rectangle does not move.
 Saturation uses normalized −1…1 transfer axes. Echo, Chorus, Tremolo, Vibrato,
-and Pitch Shifter have no live graph; the graph control is hidden when one of
-them is selected.
+Pitch Shifter, and Looper have no live graph; the graph control is hidden when
+one of them is selected.
 
 The saturation stage, both dynamics effects, and their graphs call the same inline
 functions in `src/dsp/transfer.h`, so the displayed curve cannot drift from the
@@ -126,8 +131,8 @@ approximated by `EqualizerStage` and multiplies it by the signed **Level** for
 the static curve, with a dot at the selected center frequency. The yellow live
 curve multiplies the published signed dynamic gain by the same shape, and the
 single dashed curve shows **−Range** for Compressor or **+Range** for Expander.
-Live overlays come from the APO's `.monitor` channel, not from the Listen stream;
-the bottom Peak/RMS display is separate. See
+Live overlays come from the APO's `.monitor` channel, not from the bottom
+Listen meter; the two readouts are separate. See
 [DLL ↔ GUI settings sharing](../runtime-sharing.md) for the telemetry format.
 
 ### Adding a new effect type
@@ -136,5 +141,5 @@ Write a `Stage` subclass, add its `EffectType`, name, settings block and clamps
 in `src/apo_settings.*`, create it in `StagePool::Configure`, add GUI controls,
 and add a page here. If the effect needs live graphics, give it a monitor
 binding and extend `ui::GraphSupported`/`PaintGraph`. Non-audio telemetry can
-extend `Stage::MonitorTuner()` and `StageMonitorSlot` instead. `APOProcess`
-itself does not change.
+extend `Stage::MonitorTuner()`, `Stage::MonitorLooper()`, and `StageMonitorSlot`
+instead. `APOProcess` itself does not change.

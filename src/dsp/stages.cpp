@@ -28,6 +28,20 @@ double EffectiveSampleRate(const AudioFormat& format)
                                    : 48000.0;
 }
 
+bool WantsLooper(const ApoSettings& settings)
+{
+    const EffectPreset& preset = ActivePreset(settings);
+    for (int index = 0; index < preset.effectCount; ++index)
+    {
+        const EffectInstance& effect = preset.effects[index];
+        if (effect.type == EffectType::Looper && EffectEnabled(effect))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Tuner analysis rejects sub-audio rumble before pitch detection. These affect
 // only the detector's mono copy, never the audio buffer.
 constexpr double kTunerRumbleHighPassHz = 45.0;
@@ -2938,10 +2952,748 @@ void TunerStage::ApplyDetection(double frequencyHz, double confidence)
         std::isfinite(smoothedHz) && smoothedHz > 0.0;
 }
 
+void LooperStage::Configure(const AudioFormat& format)
+{
+    m_sampleRate = EffectiveSampleRate(format);
+    m_channels = std::max<UINT32>(1, format.channels);
+    m_maxFrames = static_cast<std::size_t>(
+        std::ceil(apo::kLooperMaxLengthSeconds * m_sampleRate));
+
+    const std::size_t sampleCount = m_maxFrames * m_channels;
+    for (std::vector<float>& buffer : m_buffers) {
+        buffer.assign(sampleCount, 0.0f);
+    }
+    m_undoBuffer.assign(sampleCount, 0.0f);
+    m_preProvisionalTrackBuffer.assign(sampleCount, 0.0f);
+    m_preProvisionalUndoBuffer.assign(sampleCount, 0.0f);
+    m_inputFrame.assign(m_channels, 0.0);
+    m_layerFrame.assign(m_channels, 0.0);
+    ClearAll();
+}
+
+void LooperStage::SaveBank()
+{
+    if (m_storageId.empty() || m_maxFrames == 0)
+    {
+        return;
+    }
+
+    // An unfinished keyboard gesture is not a committed take. Writing the
+    // snapshot from before that press keeps the bank exactly as the user left
+    // it before the gesture started.
+    if (m_provisional)
+    {
+        RestoreProvisionalSnapshot(m_provisionalTrack);
+    }
+
+    apo::LooperBankData bank{};
+    bank.valid = true;
+    bank.sampleRate = static_cast<std::uint32_t>(m_sampleRate);
+    bank.channels = m_channels;
+    bank.maxFrames = static_cast<std::uint32_t>(m_maxFrames);
+    bank.globalFrames = m_globalFrames;
+    bank.referenceTrack = m_referenceTrack;
+    bank.masterFrames = m_masterFrames;
+    bank.syncOrigin = m_syncOrigin;
+
+    for (int track = 0; track < apo::kLooperTrackCount; ++track)
+    {
+        const TrackState& state = m_tracks[static_cast<size_t>(track)];
+        const std::size_t frames = std::min(state.length, m_maxFrames);
+        const std::size_t samples = frames * m_channels;
+        apo::LooperBankTrack& saved = bank.tracks[static_cast<size_t>(track)];
+        saved.state = state.state;
+        saved.length = frames;
+        saved.position = std::min(state.position, m_maxFrames);
+        saved.recordPosition = std::min(state.recordPosition, m_maxFrames);
+        saved.recordFrames = state.recordFrames;
+        saved.synced = state.synced;
+        saved.overdub = state.overdub;
+        saved.pendingStop = state.pendingStop;
+        saved.isReference = state.isReference;
+        if (samples != 0 && samples <= m_buffers[static_cast<size_t>(track)].size())
+        {
+            bank.buffers[static_cast<size_t>(track)].assign(
+                m_buffers[static_cast<size_t>(track)].begin(),
+                m_buffers[static_cast<size_t>(track)].begin() +
+                    static_cast<std::ptrdiff_t>(samples));
+        }
+    }
+
+    bank.undoValid = m_undoValid;
+    bank.undoTrack = m_undoTrack;
+    bank.undoLength = m_undoLength;
+    bank.undoState = m_undoState;
+    bank.undoReferenceTrack = m_undoReferenceTrack;
+    bank.undoMasterFrames = m_undoMasterFrames;
+    bank.undoSyncOrigin = m_undoSyncOrigin;
+    const std::size_t undoSamples = std::min(m_undoLength, m_maxFrames) *
+                                    m_channels;
+    if (m_undoValid && undoSamples != 0 &&
+        undoSamples <= m_undoBuffer.size())
+    {
+        bank.undoBuffer.assign(
+            m_undoBuffer.begin(),
+            m_undoBuffer.begin() + static_cast<std::ptrdiff_t>(undoSamples));
+        bank.undoLength = undoSamples / m_channels;
+    }
+
+    apo::SaveLooperBank(m_storageId, bank);
+}
+
+bool LooperStage::LoadBank()
+{
+    if (m_storageId.empty() || m_maxFrames == 0)
+    {
+        return false;
+    }
+
+    apo::LooperBankData bank{};
+    if (!apo::LoadLooperBank(m_storageId, bank))
+    {
+        return false;
+    }
+
+    // A device format change makes saved sample positions meaningless. Drop the
+    // stale bank instead of resampling recorded audio or playing it at the
+    // wrong speed.
+    if (bank.sampleRate != static_cast<std::uint32_t>(m_sampleRate) ||
+        bank.channels != m_channels ||
+        bank.maxFrames != static_cast<std::uint32_t>(m_maxFrames))
+    {
+        DeleteFileW(apo::LooperBankPath(m_storageId).c_str());
+        return false;
+    }
+
+    ClearAll();
+    m_globalFrames = bank.globalFrames;
+    m_referenceTrack = bank.referenceTrack;
+    m_masterFrames = static_cast<std::size_t>(bank.masterFrames);
+    m_syncOrigin = bank.syncOrigin;
+
+    for (int track = 0; track < apo::kLooperTrackCount; ++track)
+    {
+        const apo::LooperBankTrack& saved =
+            bank.tracks[static_cast<size_t>(track)];
+        TrackState& state = m_tracks[static_cast<size_t>(track)];
+        state.state = saved.state;
+        state.length = static_cast<std::size_t>(saved.length);
+        state.position = static_cast<std::size_t>(saved.position);
+        state.recordPosition = static_cast<std::size_t>(saved.recordPosition);
+        state.recordFrames = saved.recordFrames;
+        state.synced = saved.synced;
+        state.overdub = saved.overdub;
+        state.pendingStop = saved.pendingStop;
+        state.isReference = (track == m_referenceTrack);
+
+        std::vector<float>& buffer = m_buffers[static_cast<size_t>(track)];
+        std::fill(buffer.begin(), buffer.end(), 0.0f);
+        const std::vector<float>& source = bank.buffers[static_cast<size_t>(track)];
+        if (!source.empty() && source.size() <= buffer.size())
+        {
+            std::copy(source.begin(), source.end(), buffer.begin());
+        }
+    }
+
+    m_undoValid = bank.undoValid;
+    m_undoTrack = bank.undoTrack;
+    m_undoLength = static_cast<std::size_t>(bank.undoLength);
+    m_undoState = bank.undoState;
+    m_undoReferenceTrack = bank.undoReferenceTrack;
+    m_undoMasterFrames = static_cast<std::size_t>(bank.undoMasterFrames);
+    m_undoSyncOrigin = bank.undoSyncOrigin;
+    std::fill(m_undoBuffer.begin(), m_undoBuffer.end(), 0.0f);
+    if (!bank.undoBuffer.empty() && bank.undoBuffer.size() <= m_undoBuffer.size())
+    {
+        std::copy(bank.undoBuffer.begin(), bank.undoBuffer.end(),
+                  m_undoBuffer.begin());
+    }
+    return true;
+}
+
+void LooperStage::PrimeCommandSerial()
+{
+    // Update() normally adopts the current serial as a baseline once. Reset()
+    // clears that flag, so a fresh stream would otherwise swallow the user's
+    // first gesture after the bank has been restored.
+    m_lastCommandSerial = m_settings.commandSerial;
+    m_hasCommandSerial = true;
+}
+
+void LooperStage::Update(const EffectInstance& effect, const AudioFormat& format)
+{
+    (void)format;
+    m_settings = effect.looper;
+
+    // The first snapshot after binding establishes the serial baseline. A stale
+    // command left in a runtime file must not fire when an APO first maps it.
+    if (!m_hasCommandSerial) {
+        m_lastCommandSerial = m_settings.commandSerial;
+        m_hasCommandSerial = true;
+        return;
+    }
+
+    if (m_settings.commandSerial == m_lastCommandSerial) {
+        return;
+    }
+    m_lastCommandSerial = m_settings.commandSerial;
+    const int track = static_cast<int>(std::clamp(
+        m_settings.commandTrack, 0, apo::kLooperTrackCount - 1));
+    ApplyCommand(m_settings.command, track);
+}
+
+void LooperStage::Reset()
+{
+    ClearAll();
+    m_hasCommandSerial = false;
+    m_lastCommandSerial = 0;
+}
+
+bool LooperStage::NeedsSilence() const
+{
+    for (const TrackState& track : m_tracks) {
+        if (track.state != LooperState::Empty) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void LooperStage::MonitorLooper(LooperMonitorData& data) const
+{
+    for (int track = 0; track < apo::kLooperTrackCount; ++track) {
+        data.states[track] = static_cast<int>(m_tracks[track].state);
+    }
+}
+
+void LooperStage::ClearTrack(int track)
+{
+    if (track < 0 || track >= apo::kLooperTrackCount) {
+        return;
+    }
+
+    TrackState& state = m_tracks[track];
+    const std::size_t samples = state.length * m_channels;
+    if (samples > 0 && samples <= m_buffers[track].size()) {
+        std::fill(m_buffers[track].begin(),
+                  m_buffers[track].begin() +
+                      static_cast<std::ptrdiff_t>(samples),
+                  0.0f);
+    }
+    if (state.isReference) {
+        ClearReference();
+    }
+    state = TrackState{};
+}
+
+void LooperStage::ClearAll()
+{
+    m_provisional = false;
+    m_provisionalTrack = -1;
+    std::fill(m_preProvisionalTrackBuffer.begin(),
+              m_preProvisionalTrackBuffer.end(), 0.0f);
+    std::fill(m_preProvisionalUndoBuffer.begin(),
+              m_preProvisionalUndoBuffer.end(), 0.0f);
+
+    for (int track = 0; track < apo::kLooperTrackCount; ++track) {
+        ClearTrack(track);
+    }
+    m_undoTrack = -1;
+    m_undoLength = 0;
+    m_undoState = LooperState::Empty;
+    m_undoReferenceTrack = -1;
+    m_undoMasterFrames = 0;
+    m_undoSyncOrigin = 0;
+    m_undoValid = false;
+    m_globalFrames = 0;
+    ClearReference();
+}
+
+void LooperStage::SetReference(int track, std::size_t masterFrames,
+                               std::uint64_t syncOrigin)
+{
+    m_referenceTrack = track;
+    m_masterFrames = masterFrames;
+    m_syncOrigin = syncOrigin;
+    for (int index = 0; index < apo::kLooperTrackCount; ++index) {
+        m_tracks[index].isReference = (index == track);
+    }
+}
+
+void LooperStage::ClearReference()
+{
+    m_referenceTrack = -1;
+    m_masterFrames = 0;
+    m_syncOrigin = 0;
+    for (TrackState& track : m_tracks) {
+        track.isReference = false;
+    }
+}
+
+void LooperStage::SaveProvisionalSnapshot(int track)
+{
+    if (track < 0 || track >= apo::kLooperTrackCount) {
+        return;
+    }
+
+    m_preProvisionalTracks = m_tracks;
+    m_preProvisionalReferenceTrack = m_referenceTrack;
+    m_preProvisionalMasterFrames = m_masterFrames;
+    m_preProvisionalSyncOrigin = m_syncOrigin;
+    m_preProvisionalGlobalFrames = m_globalFrames;
+
+    const std::size_t trackSamples = m_tracks[track].length * m_channels;
+    std::fill(m_preProvisionalTrackBuffer.begin(),
+              m_preProvisionalTrackBuffer.end(), 0.0f);
+    if (trackSamples > 0 &&
+        trackSamples <= m_preProvisionalTrackBuffer.size() &&
+        trackSamples <= m_buffers[track].size())
+    {
+        std::copy_n(m_buffers[track].begin(),
+                    static_cast<std::ptrdiff_t>(trackSamples),
+                    m_preProvisionalTrackBuffer.begin());
+    }
+
+    m_preProvisionalUndoValid = m_undoValid;
+    m_preProvisionalUndoTrack = m_undoTrack;
+    m_preProvisionalUndoLength = m_undoLength;
+    m_preProvisionalUndoState = m_undoState;
+    m_preProvisionalUndoReferenceTrack = m_undoReferenceTrack;
+    m_preProvisionalUndoMasterFrames = m_undoMasterFrames;
+    m_preProvisionalUndoSyncOrigin = m_undoSyncOrigin;
+    const std::size_t undoSamples = m_undoLength * m_channels;
+    std::fill(m_preProvisionalUndoBuffer.begin(),
+              m_preProvisionalUndoBuffer.end(), 0.0f);
+    if (m_undoValid && undoSamples > 0 &&
+        undoSamples <= m_preProvisionalUndoBuffer.size() &&
+        undoSamples <= m_undoBuffer.size())
+    {
+        std::copy_n(m_undoBuffer.begin(),
+                    static_cast<std::ptrdiff_t>(undoSamples),
+                    m_preProvisionalUndoBuffer.begin());
+    }
+}
+
+void LooperStage::RestoreProvisionalSnapshot(int track)
+{
+    if (track < 0 || track >= apo::kLooperTrackCount) {
+        return;
+    }
+
+    std::fill(m_buffers[track].begin(), m_buffers[track].end(), 0.0f);
+    const std::size_t trackSamples = m_preProvisionalTracks[track].length *
+                                     m_channels;
+    if (trackSamples > 0 &&
+        trackSamples <= m_preProvisionalTrackBuffer.size() &&
+        trackSamples <= m_buffers[track].size())
+    {
+        std::copy_n(m_preProvisionalTrackBuffer.begin(),
+                    static_cast<std::ptrdiff_t>(trackSamples),
+                    m_buffers[track].begin());
+    }
+
+    m_tracks = m_preProvisionalTracks;
+    m_referenceTrack = m_preProvisionalReferenceTrack;
+    m_masterFrames = m_preProvisionalMasterFrames;
+    m_syncOrigin = m_preProvisionalSyncOrigin;
+    m_globalFrames = m_preProvisionalGlobalFrames;
+
+    std::fill(m_undoBuffer.begin(), m_undoBuffer.end(), 0.0f);
+    const std::size_t undoSamples = m_preProvisionalUndoLength * m_channels;
+    if (m_preProvisionalUndoValid && undoSamples > 0 &&
+        undoSamples <= m_preProvisionalUndoBuffer.size() &&
+        undoSamples <= m_undoBuffer.size())
+    {
+        std::copy_n(m_preProvisionalUndoBuffer.begin(),
+                    static_cast<std::ptrdiff_t>(undoSamples),
+                    m_undoBuffer.begin());
+    }
+    m_undoValid = m_preProvisionalUndoValid;
+    m_undoTrack = m_preProvisionalUndoTrack;
+    m_undoLength = m_preProvisionalUndoLength;
+    m_undoState = m_preProvisionalUndoState;
+    m_undoReferenceTrack = m_preProvisionalUndoReferenceTrack;
+    m_undoMasterFrames = m_preProvisionalUndoMasterFrames;
+    m_undoSyncOrigin = m_preProvisionalUndoSyncOrigin;
+
+    m_provisional = false;
+    m_provisionalTrack = -1;
+}
+
+std::size_t LooperStage::Phase(int track, std::size_t length) const
+{
+    if (length == 0 || track < 0 || track >= apo::kLooperTrackCount) {
+        return 0;
+    }
+    const TrackState& state = m_tracks[track];
+    if (!state.synced) {
+        return state.position % length;
+    }
+    if (m_globalFrames < m_syncOrigin) {
+        return 0;
+    }
+    return static_cast<std::size_t>((m_globalFrames - m_syncOrigin) % length);
+}
+
+std::size_t LooperStage::SnapSyncedFrames(std::uint64_t recordedFrames) const
+{
+    if (m_maxFrames == 0) {
+        return 0;
+    }
+    if (m_masterFrames == 0) {
+        const std::uint64_t frames =
+            std::min<std::uint64_t>(recordedFrames, m_maxFrames);
+        return static_cast<std::size_t>(frames == 0 ? 1 : frames);
+    }
+
+    const double ratio = apo::NearestLooperAutoSnapRatio(
+        static_cast<double>(recordedFrames) /
+        static_cast<double>(m_masterFrames));
+    const double frames = std::round(
+        static_cast<double>(m_masterFrames) * ratio);
+    const double clamped = std::clamp(frames, 1.0,
+                                      static_cast<double>(m_maxFrames));
+    return static_cast<std::size_t>(clamped);
+}
+
+std::size_t LooperStage::RecordingTarget(const TrackState& state) const
+{
+    if (state.overdub && state.length > 0) {
+        return state.length;
+    }
+    if (state.synced && m_masterFrames > 0) {
+        return SnapSyncedFrames(state.recordFrames);
+    }
+    return m_maxFrames;
+}
+
+void LooperStage::StartRecord(int track)
+{
+    if (track < 0 || track >= apo::kLooperTrackCount) {
+        return;
+    }
+
+    TrackState& state = m_tracks[track];
+    if (state.state == LooperState::Recording) {
+        return;
+    }
+
+    // One shared undo bank: every new take saves the track it is about to
+    // change, whether it is a fresh loop or an overdub.
+    const std::size_t undoSamples = state.length * m_channels;
+    if (undoSamples > 0 && undoSamples <= m_undoBuffer.size() &&
+        undoSamples <= m_buffers[track].size())
+    {
+        std::copy_n(m_buffers[track].begin(),
+                    static_cast<std::ptrdiff_t>(undoSamples),
+                    m_undoBuffer.begin());
+    }
+    m_undoTrack = track;
+    m_undoLength = state.length;
+    m_undoState = state.state;
+    m_undoReferenceTrack = m_referenceTrack;
+    m_undoMasterFrames = m_masterFrames;
+    m_undoSyncOrigin = m_syncOrigin;
+    m_undoValid = true;
+
+    const bool overdub = state.state == LooperState::Playback &&
+                         state.length > 0;
+    const bool synced = !m_settings.tracks[track].freeLength;
+    state.overdub = overdub;
+    state.synced = synced;
+    state.pendingStop = false;
+    state.recordFrames = 0;
+    state.recordPosition = 0;
+
+    // A fresh take on the reference track starts a new reference. Keep the
+    // shared clock intact for an overdub so its phase stays aligned.
+    if (state.isReference && !overdub) {
+        ClearReference();
+    }
+
+    if (!overdub) {
+        std::fill(m_buffers[track].begin(), m_buffers[track].end(), 0.0f);
+        state.length = 0;
+        state.position = 0;
+    }
+
+    state.state = LooperState::Recording;
+}
+
+void LooperStage::FinishRecord(int track)
+{
+    if (track < 0 || track >= apo::kLooperTrackCount) {
+        return;
+    }
+
+    TrackState& state = m_tracks[track];
+    if (state.state != LooperState::Recording) {
+        return;
+    }
+
+    const std::uint64_t recorded = state.recordFrames;
+    if (state.overdub) {
+        state.position = Phase(track, state.length);
+    } else if (!state.synced) {
+        state.length = static_cast<std::size_t>(
+            std::min<std::uint64_t>(recorded, m_maxFrames));
+        state.position = 0;
+    } else {
+        const std::size_t length = SnapSyncedFrames(recorded);
+        state.length = length;
+        if (m_masterFrames == 0) {
+            const std::uint64_t phase = recorded % length;
+            const std::uint64_t origin =
+                (m_globalFrames >= phase) ? (m_globalFrames - phase) : 0;
+            SetReference(track, length, origin);
+        }
+        state.position = Phase(track, length);
+    }
+
+    state.state = LooperState::Playback;
+    state.recordFrames = 0;
+    state.recordPosition = 0;
+    state.overdub = false;
+    if (state.pendingStop) {
+        state.state = LooperState::Stopped;
+        state.position = 0;
+        state.pendingStop = false;
+    }
+}
+
+void LooperStage::ApplyCommand(LooperCommand command, int track)
+{
+    if (track < 0 || track >= apo::kLooperTrackCount) {
+        return;
+    }
+
+    // A provisional take is only authoritative once it is committed. Any
+    // other command means the gesture resolved differently, so undo the take
+    // before applying that command to the state the user actually started from.
+    if (m_provisional) {
+        if (command == LooperCommand::CommitProvisional) {
+            m_provisional = false;
+            m_provisionalTrack = -1;
+            return;
+        }
+        if (command == LooperCommand::DiscardProvisional) {
+            RestoreProvisionalSnapshot(m_provisionalTrack);
+            return;
+        }
+        RestoreProvisionalSnapshot(m_provisionalTrack);
+    }
+
+    TrackState& state = m_tracks[track];
+    switch (command)
+    {
+    case LooperCommand::StartRecordProvisional:
+        SaveProvisionalSnapshot(track);
+        StartRecord(track);
+        m_provisional = true;
+        m_provisionalTrack = track;
+        break;
+
+    case LooperCommand::StartRecord:
+        StartRecord(track);
+        break;
+
+    case LooperCommand::FinishRecord:
+        FinishRecord(track);
+        break;
+
+    case LooperCommand::Play:
+        if (state.state == LooperState::Recording) {
+            FinishRecord(track);
+        } else if (state.state == LooperState::Stopped && state.length > 0) {
+            state.state = LooperState::Playback;
+            state.position = 0;
+            state.pendingStop = false;
+        }
+        break;
+
+    case LooperCommand::Stop:
+        if (state.state == LooperState::Recording) {
+            if (m_settings.tracks[track].stopAtLoopEnd && state.synced &&
+                m_masterFrames > 0)
+            {
+                state.pendingStop = true;
+            } else {
+                FinishRecord(track);
+                state.state = LooperState::Stopped;
+                state.position = 0;
+                state.pendingStop = false;
+            }
+        } else if (state.state == LooperState::Playback) {
+            if (m_settings.tracks[track].stopAtLoopEnd) {
+                state.pendingStop = true;
+            } else {
+                state.state = LooperState::Stopped;
+                state.position = 0;
+                state.pendingStop = false;
+            }
+        }
+        break;
+
+    case LooperCommand::Undo:
+        if (!m_undoValid || m_undoTrack != track) {
+            break;
+        }
+        {
+            const std::size_t samples = m_undoLength * m_channels;
+            if (samples > 0 && samples <= m_undoBuffer.size() &&
+                samples <= m_buffers[track].size())
+            {
+                std::copy_n(m_undoBuffer.begin(),
+                            static_cast<std::ptrdiff_t>(samples),
+                            m_buffers[track].begin());
+            }
+            state.length = m_undoLength;
+            state.position = 0;
+            state.recordPosition = 0;
+            state.recordFrames = 0;
+            state.overdub = false;
+            state.pendingStop = false;
+            state.state = (m_undoLength > 0 &&
+                           m_undoState != LooperState::Empty)
+                              ? LooperState::Playback
+                              : LooperState::Empty;
+            if (m_undoReferenceTrack == track) {
+                if (state.state == LooperState::Empty) {
+                    ClearReference();
+                } else {
+                    SetReference(track, m_undoMasterFrames,
+                                 m_undoSyncOrigin);
+                }
+            }
+        }
+        m_undoValid = false;
+        m_undoTrack = -1;
+        break;
+
+    case LooperCommand::Clear:
+        ClearTrack(track);
+        if (m_undoTrack == track) {
+            m_undoValid = false;
+            m_undoTrack = -1;
+        }
+        break;
+
+    case LooperCommand::CommitProvisional:
+    case LooperCommand::DiscardProvisional:
+        // Handled before the switch; with no provisional take these are no-ops.
+        break;
+
+    case LooperCommand::None:
+    default:
+        break;
+    }
+}
+
+void LooperStage::Process(double* samples, UINT32 frames, UINT32 channels)
+{
+    if (m_channels == 0 || m_maxFrames == 0 || frames == 0 ||
+        samples == nullptr)
+    {
+        return;
+    }
+
+    const UINT32 count = std::min(channels, m_channels);
+    if (count == 0) {
+        return;
+    }
+
+    for (UINT32 frame = 0; frame < frames; ++frame) {
+        const std::size_t base = static_cast<std::size_t>(frame) * count;
+
+        // Capture the raw input before any loop is mixed into `samples`, so no
+        // track can record another track's return.
+        for (UINT32 channel = 0; channel < count; ++channel) {
+            m_inputFrame[channel] = samples[base + channel];
+        }
+
+        for (int track = 0; track < apo::kLooperTrackCount; ++track) {
+            TrackState& state = m_tracks[track];
+            const double gain = m_settings.tracks[track].volume / 100.0;
+
+            if (state.state == LooperState::Recording) {
+                const std::size_t target = RecordingTarget(state);
+                std::size_t position = 0;
+                if (state.overdub) {
+                    position = Phase(track, state.length);
+                } else if (state.synced && m_masterFrames > 0) {
+                    const std::uint64_t elapsed =
+                        (m_globalFrames >= m_syncOrigin)
+                            ? (m_globalFrames - m_syncOrigin)
+                            : 0;
+                    position = static_cast<std::size_t>(elapsed % target);
+                } else {
+                    position = static_cast<std::size_t>(
+                        state.recordFrames % target);
+                }
+                state.recordPosition = position;
+
+                if (position < m_maxFrames) {
+                    const std::size_t offset = position * count;
+                    for (UINT32 channel = 0; channel < count; ++channel) {
+                        float& destination = m_buffers[track][offset + channel];
+                        // Always add. A wrapped pass layers over what was
+                        // already in the buffer, for fresh takes and overdubs.
+                        m_layerFrame[channel] = destination;
+                        destination +=
+                            static_cast<float>(m_inputFrame[channel]);
+                    }
+                } else {
+                    for (UINT32 channel = 0; channel < count; ++channel) {
+                        m_layerFrame[channel] = 0.0;
+                    }
+                }
+
+                // Return only the layer that was there before this frame. The
+                // current input is already in the dry signal, so returning the
+                // post-write value would double it.
+                for (UINT32 channel = 0; channel < count; ++channel) {
+                    samples[base + channel] += m_layerFrame[channel] * gain;
+                }
+
+                const std::size_t monitorLength =
+                    state.overdub ? state.length : target;
+                state.position = (monitorLength > 0)
+                                     ? (position + 1) % monitorLength
+                                     : 0;
+                ++state.recordFrames;
+                if (state.pendingStop && state.recordFrames % target == 0) {
+                    FinishRecord(track);
+                }
+            } else if (state.state == LooperState::Playback &&
+                       state.length > 0)
+            {
+                const std::size_t position = Phase(track, state.length);
+                const std::size_t offset = position * count;
+                for (UINT32 channel = 0; channel < count; ++channel) {
+                    samples[base + channel] +=
+                        static_cast<double>(m_buffers[track][offset + channel]) *
+                        gain;
+                }
+                state.position = (position + 1) % state.length;
+                if (state.pendingStop && state.position == 0) {
+                    state.state = LooperState::Stopped;
+                    state.pendingStop = false;
+                }
+            }
+        }
+
+        ++m_globalFrames;
+    }
+}
+
 void StagePool::Configure(const AudioFormat& format,
-                          const NoiseProfile& profile)
+                          const NoiseProfile& profile,
+                          const ApoSettings& settings,
+                          const std::wstring& endpointId)
 {
     Clear();
+    m_looperStorageId = endpointId;
+    const bool wantsLooper = WantsLooper(settings);
 
     for (int typeIndex = 0;
          typeIndex < static_cast<int>(EffectType::Count); ++typeIndex)
@@ -3002,6 +3754,15 @@ void StagePool::Configure(const AudioFormat& format,
             case EffectType::Tuner:
                 stage = std::make_unique<TunerStage>();
                 break;
+            case EffectType::Looper:
+                // Looper's 120 s banks are far larger than the other stages.
+                // Allocate them only when the preset actually uses Looper; a
+                // live add creates the slot in Update().
+                if (wantsLooper)
+                {
+                    stage = std::make_unique<LooperStage>();
+                }
+                break;
             default:
                 break;
             }
@@ -3009,6 +3770,11 @@ void StagePool::Configure(const AudioFormat& format,
             if (stage != nullptr)
             {
                 stage->Configure(format);
+                if (type == EffectType::Looper)
+                {
+                    static_cast<LooperStage*>(stage.get())->SetStorageId(
+                        endpointId);
+                }
                 slots.stages.push_back(std::move(stage));
             }
         }
@@ -3021,6 +3787,34 @@ void StagePool::Clear()
     {
         slots.stages.clear();
         slots.boundIds.clear();
+    }
+}
+
+void StagePool::SaveLooperBanks()
+{
+    if (m_looperStorageId.empty())
+    {
+        return;
+    }
+    Slots& slots = m_slots[static_cast<int>(EffectType::Looper)];
+    for (const auto& stage : slots.stages)
+    {
+        static_cast<LooperStage*>(stage.get())->SaveBank();
+    }
+}
+
+void StagePool::LoadLooperBanks()
+{
+    if (m_looperStorageId.empty())
+    {
+        return;
+    }
+    Slots& slots = m_slots[static_cast<int>(EffectType::Looper)];
+    for (const auto& stage : slots.stages)
+    {
+        LooperStage* looper = static_cast<LooperStage*>(stage.get());
+        looper->LoadBank();
+        looper->PrimeCommandSerial();
     }
 }
 
@@ -3052,6 +3846,15 @@ int StagePool::Update(const ApoSettings& settings, const AudioFormat& format,
         }
 
         Slots& slots = m_slots[typeIndex];
+        if (effect.type == EffectType::Looper && slots.stages.empty())
+        {
+            // Looper was absent when the pool was configured. Adding it later
+            // is a setup-path settings change, so allocate its one slot now.
+            auto stage = std::make_unique<LooperStage>();
+            stage->Configure(format);
+            stage->SetStorageId(m_looperStorageId);
+            slots.stages.push_back(std::move(stage));
+        }
         if (slots.stages.empty())
         {
             continue;
@@ -3067,13 +3870,23 @@ int StagePool::Update(const ApoSettings& settings, const AudioFormat& format,
         }
 
         Stage* stage = slots.stages[static_cast<size_t>(ordinal)].get();
-        if (slots.boundIds[static_cast<size_t>(ordinal)] != effect.id)
+        const bool rebound =
+            slots.boundIds[static_cast<size_t>(ordinal)] != effect.id;
+        if (rebound)
         {
             stage->Reset();
             slots.boundIds[static_cast<size_t>(ordinal)] = effect.id;
         }
 
         stage->Update(effect, format);
+        if (effect.type == EffectType::Looper && rebound)
+        {
+            // A fresh binding has just cleared the stage. Restore the saved
+            // take bank and re-arm the one-shot command baseline.
+            LooperStage* looper = static_cast<LooperStage*>(stage);
+            looper->LoadBank();
+            looper->PrimeCommandSerial();
+        }
         chain.Add(stage, StageMonitorBinding{effect.id, effect.type,
                                              wantsSpectrum(effect.type)});
         ++boundCount;

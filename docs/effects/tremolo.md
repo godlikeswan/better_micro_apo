@@ -49,7 +49,7 @@ position are untouched.
   recomputes coefficients, `Reset` restarts the LFO, and neither allocates.
   `NeedsSilence()` is false because no audio is buffered.
 - There is no graph or stage telemetry for Tremolo; the bottom meters come from
-  the Listen stream.
+  the post-DSP APO audio ring used by Listen.
 - Settings use the `tremolo_rate_hz`, `tremolo_depth`, `tremolo_waveform`, and
   `tremolo_stereo_spread` keys. Settings schema version 14 added Tremolo and
   Vibrato; version 15 changed their defaults and moved mono copying to the

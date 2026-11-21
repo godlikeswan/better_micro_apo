@@ -118,6 +118,10 @@ public:
     // empty; the chain publishes it with the rest of the slot's telemetry.
     virtual void MonitorTuner(TunerMonitorData& data) const { data = {}; }
 
+    // Optional per-track transport state for the Looper stage. Other stages
+    // leave it empty; the chain publishes it with the slot's telemetry.
+    virtual void MonitorLooper(LooperMonitorData& data) const { data = {}; }
+
     // Processes `frames` frames in place. `samples` holds
     // frames * channels interleaved values in [-1, 1]. Real-time safe.
     virtual void Process(double* samples, UINT32 frames, UINT32 channels) = 0;

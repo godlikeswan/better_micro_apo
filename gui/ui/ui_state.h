@@ -157,6 +157,41 @@ enum : int {
     IDC_TUNER_SMOOTHING_SLIDER,
     IDC_TUNER_REFERENCE_LABEL,
     IDC_TUNER_REFERENCE_SLIDER,
+
+    // Looper. The per-track groups are contiguous so a track index can offset
+    // the first id directly.
+    IDC_LOOPER_HEADER_TRACK,
+    IDC_LOOPER_HEADER_STATE,
+    IDC_LOOPER_HEADER_VOLUME,
+    IDC_LOOPER_HEADER_FREE,
+    IDC_LOOPER_HEADER_STOP,
+    IDC_LOOPER_BUTTON_1,
+    IDC_LOOPER_BUTTON_2,
+    IDC_LOOPER_BUTTON_3,
+    IDC_LOOPER_BUTTON_4,
+    IDC_LOOPER_BUTTON_5,
+    IDC_LOOPER_STATE_1,
+    IDC_LOOPER_STATE_2,
+    IDC_LOOPER_STATE_3,
+    IDC_LOOPER_STATE_4,
+    IDC_LOOPER_STATE_5,
+    IDC_LOOPER_VOLUME_1,
+    IDC_LOOPER_VOLUME_2,
+    IDC_LOOPER_VOLUME_3,
+    IDC_LOOPER_VOLUME_4,
+    IDC_LOOPER_VOLUME_5,
+    IDC_LOOPER_FREE_LENGTH_1,
+    IDC_LOOPER_FREE_LENGTH_2,
+    IDC_LOOPER_FREE_LENGTH_3,
+    IDC_LOOPER_FREE_LENGTH_4,
+    IDC_LOOPER_FREE_LENGTH_5,
+    IDC_LOOPER_STOP_END_1,
+    IDC_LOOPER_STOP_END_2,
+    IDC_LOOPER_STOP_END_3,
+    IDC_LOOPER_STOP_END_4,
+    IDC_LOOPER_STOP_END_5,
+    IDC_LOOPER_NOTE,
+
     IDC_LISTEN,
     IDC_METER,
     IDC_PARAM_RESET,
@@ -229,8 +264,41 @@ enum ParamReset : int {
     ParamResetTunerSampleSize,
     ParamResetTunerSmoothing,
     ParamResetTunerReference,
+    // One group of three per Looper track: volume, free length, stop.
+    ParamResetLooperVolume1,
+    ParamResetLooperFree1,
+    ParamResetLooperStop1,
+    ParamResetLooperVolume2,
+    ParamResetLooperFree2,
+    ParamResetLooperStop2,
+    ParamResetLooperVolume3,
+    ParamResetLooperFree3,
+    ParamResetLooperStop3,
+    ParamResetLooperVolume4,
+    ParamResetLooperFree4,
+    ParamResetLooperStop4,
+    ParamResetLooperVolume5,
+    ParamResetLooperFree5,
+    ParamResetLooperStop5,
     ParamResetCount,
 };
+
+// Gestures posted from the Looper track buttons to the main window. Buttons
+// forward BN_CLICKED through PageProc, but custom messages must go straight to
+// the top-level window.
+constexpr UINT kLooperGestureMessage = WM_APP + 101;
+enum class LooperGesture : int
+{
+    Tap = 0,
+    DoubleTap,
+    LongPress,
+};
+
+// Shared by the mouse subclass and the keyboard shortcuts so both input paths
+// use the same gesture timing.
+constexpr DWORD kLooperTapMaxMs = 400;
+constexpr DWORD kLooperDoubleTapMs = 250;
+constexpr DWORD kLooperLongPressMs = 600;
 
 // Main menu commands. Kept above the control range so they never collide.
 enum : int {
@@ -397,6 +465,17 @@ extern HWND g_tunerSmoothingLabel;
 extern HWND g_tunerSmoothingSlider;
 extern HWND g_tunerReferenceLabel;
 extern HWND g_tunerReferenceSlider;
+extern HWND g_looperHeaderTrack;
+extern HWND g_looperHeaderState;
+extern HWND g_looperHeaderVolume;
+extern HWND g_looperHeaderFree;
+extern HWND g_looperHeaderStop;
+extern HWND g_looperButtons[apo::kLooperTrackCount];
+extern HWND g_looperStateLabels[apo::kLooperTrackCount];
+extern HWND g_looperVolumeSliders[apo::kLooperTrackCount];
+extern HWND g_looperFreeLength[apo::kLooperTrackCount];
+extern HWND g_looperStopAtEnd[apo::kLooperTrackCount];
+extern HWND g_looperNote;
 extern HWND g_listen;
 extern HWND g_meter;
 

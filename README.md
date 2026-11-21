@@ -5,7 +5,7 @@
 Better Micro APO is a Windows program that adjusts the sound of input devices
 like microphones or guitars. It can turn the volume up, quiet down loud sounds,
 reduce background noise, and add effects like saturation, echo, chorus, tremolo,
-vibrato, and pitch shifting.
+vibrato, pitch shifting, and looping.
 
 ## Getting started
 
@@ -41,7 +41,7 @@ To uninstall, uncheck **Enable** on every device, or use **File → Uninstall**.
   Peak is the loudest moment; RMS is the average level
   ([what RMS means](https://en.wikipedia.org/wiki/Root_mean_square)). **CLIP**
   lights up when the signal is too loud, and **drops** counts gaps in the
-  listening stream. This bottom meter comes from the Listen stream.
+  listening stream. This bottom meter comes from the APO's post-DSP audio tap.
 - The selected effect's panel has its own live graph from the APO: Input
   spectrum, Gain input/output peak dot, Gate/Expander or Compressor/Limiter
   engagement and output, Equalizer spectrum with static/live/limit band curves,
@@ -49,8 +49,8 @@ To uninstall, uncheck **Enable** on every device, or use **File → Uninstall**.
   map. The level graphs include a thin output meter with green/yellow/red zones.
   Gain, Saturation, and the meter use short holds so brief sounds are not skipped
   between polls. Polling these graphs never changes settings or stops Listen.
-  Echo, Chorus, Tremolo, Vibrato, and Pitch Shifter have controls but no live
-  graph; the graph is hidden for those effects.
+  Echo, Chorus, Tremolo, Vibrato, Pitch Shifter, and Looper have controls but no
+  live graph; the graph is hidden for those effects.
 - Effects apply as you change them — there is no Apply button. Each slider has
   a small ↺ button that resets only that setting.
 - **Gate/Expander** attenuates signal below the threshold: a finite **Ratio**
@@ -83,6 +83,19 @@ To uninstall, uncheck **Enable** on every device, or use **File → Uninstall**.
   pitch map without changing or delaying the audio. **Smoothing** averages
   recent readings in cents; 100% holds about two seconds with the default
   window, while 50% stays much quicker.
+- **Looper** records five tracks, each up to **120 s**. With Looper selected,
+  keys **1**–**4** and **Space** tap tracks 1–5; the buttons also accept tap,
+  double tap, and long press. Keyboard recording starts and finishes on the
+  first press, with no double-tap delay; a later double tap stops, while holding
+  a newly started take discards it. A tap starts recording, finishes a take,
+  overdubs, or plays a stopped track; recording wraps and layers until you tap
+  again. Double tap stops; long press undoes the last take or clears a stopped
+  track.
+  **Free length** keeps the exact take length. Otherwise the first synced take
+  sets the reference and later takes snap to `1/8`, `1/4`, `1/2`, `1`, `2`, `4`,
+  or `8` times it. **Stop at loop end** is off by default. Undo is one level and
+  only for the track that recorded last; takes are saved per device and come
+  back after audio restarts and GUI reopen.
 - If your device is missing from the list, turn on **View → Show all devices**
   to see inactive inputs too.
 - Windows briefly stops audio when effects are installed or attached to a
@@ -92,8 +105,10 @@ To uninstall, uncheck **Enable** on every device, or use **File → Uninstall**.
   a little audio. Echo, Chorus, Vibrato, and Pitch Shifter buffer more: Echo adds
   roughly its **Time** before the first repeat, Chorus adds a small variable
   delay, Vibrato keeps a center delay while active, and Pitch Shifter uses its
-  **Window** for analysis. Tremolo changes level without buffering. The
-  lookahead and predelay controls are marked with ⏱.
+  **Window** for analysis. Tremolo changes level without buffering. Looper
+  keeps its takes and one undo bank in memory and saves them to a per-device
+  `.looper` bank at shutdown; active buffers use about 352 MiB at 48 kHz
+  stereo. The lookahead and predelay controls are marked with ⏱.
 - A settings file from a different schema version is deleted when it is read;
   the device starts from defaults rather than having old values migrated.
 - Supported input formats are float32, PCM16, PCM24, and PCM32. 24-bit samples

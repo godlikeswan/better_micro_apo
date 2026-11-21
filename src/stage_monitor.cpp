@@ -68,7 +68,19 @@ bool HeaderValid(const StageMonitorFile* file)
            file->slotCount == static_cast<ULONG>(kStageMonitorSlots);
 }
 
-void InitializeHeader(StageMonitorFile* file, UINT32 sampleRate)
+// The GUI maps this file read-only. A locked compare-exchange issues a write
+// cycle even when it only reads the current value, so it faults on that view.
+// The writer publishes with InterlockedExchange; an aligned volatile load with
+// an acquire fence is the matching read side.
+LONG ReadPublishedCounter(const volatile LONG& counter)
+{
+    const LONG value = counter;
+    std::atomic_thread_fence(std::memory_order_acquire);
+    return value;
+}
+
+void InitializeHeader(StageMonitorFile* file, UINT32 sampleRate,
+                      UINT32 channels)
 {
     std::memset(file, 0, sizeof(StageMonitorFile));
     file->magic = kStageMonitorMagic;
@@ -76,6 +88,11 @@ void InitializeHeader(StageMonitorFile* file, UINT32 sampleRate)
     file->structSize = static_cast<ULONG>(sizeof(StageMonitorFile));
     file->sampleRate = sampleRate;
     file->slotCount = static_cast<ULONG>(kStageMonitorSlots);
+    file->generation = 1;
+    file->audioCapacityFrames = kStageMonitorAudioFrames;
+    file->audioSampleRate = sampleRate;
+    file->audioChannels = std::min<UINT32>(kStageMonitorAudioChannels,
+                                           std::max<UINT32>(1u, channels));
 }
 
 } // namespace
@@ -112,7 +129,7 @@ bool StageMonitorView::Open(const std::wstring& endpointId, bool create)
         return false;
     }
 
-    m_view = static_cast<const StageMonitorFile*>(
+    m_view = static_cast<StageMonitorFile*>(
         MapViewOfFile(m_mapping, FILE_MAP_READ, 0, 0,
                       sizeof(StageMonitorFile)));
     if (m_view == nullptr || !HeaderValid(m_view)) {
@@ -121,6 +138,8 @@ bool StageMonitorView::Open(const std::wstring& endpointId, bool create)
     }
 
     m_endpointId = endpointId;
+    m_audioReadFrames =
+        static_cast<ULONG>(ReadPublishedCounter(m_view->audioWriteFrames));
     return true;
 }
 
@@ -139,6 +158,63 @@ void StageMonitorView::Close()
         m_file = nullptr;
     }
     m_endpointId.clear();
+    m_audioReadFrames = 0;
+}
+
+bool StageMonitorView::AudioFormat(ULONG& sampleRate,
+                                   ULONG& channels) const
+{
+    if (m_view == nullptr || m_view->audioSampleRate == 0 ||
+        m_view->audioChannels == 0 ||
+        m_view->audioCapacityFrames != kStageMonitorAudioFrames)
+    {
+        return false;
+    }
+    sampleRate = m_view->audioSampleRate;
+    channels = m_view->audioChannels;
+    return true;
+}
+
+bool StageMonitorView::ReadAudio(float* frames, ULONG maxFrames,
+                                 ULONG& framesRead)
+{
+    framesRead = 0;
+    if (m_view == nullptr || frames == nullptr || maxFrames == 0 ||
+        m_view->audioCapacityFrames == 0 ||
+        m_view->audioCapacityFrames > kStageMonitorAudioFrames)
+    {
+        return false;
+    }
+
+    const ULONG capacity = m_view->audioCapacityFrames;
+    const ULONG write =
+        static_cast<ULONG>(ReadPublishedCounter(m_view->audioWriteFrames));
+    ULONG available = write - m_audioReadFrames;
+    if (available > capacity) {
+        // This reader fell behind; skip to the oldest frame still in the ring.
+        m_audioReadFrames = write - capacity;
+        available = capacity;
+    }
+    framesRead = std::min(maxFrames, available);
+    for (ULONG frame = 0; frame < framesRead; ++frame) {
+        const ULONG slot = (m_audioReadFrames + frame) % capacity;
+        frames[frame * kStageMonitorAudioChannels] =
+            m_view->audioSamples[slot * kStageMonitorAudioChannels];
+        frames[frame * kStageMonitorAudioChannels + 1] =
+            m_view->audioSamples[slot * kStageMonitorAudioChannels + 1];
+    }
+    m_audioReadFrames += framesRead;
+    return true;
+}
+
+void StageMonitorView::RebaseAudioRead()
+{
+    if (m_view == nullptr)
+    {
+        return;
+    }
+    m_audioReadFrames =
+        static_cast<ULONG>(ReadPublishedCounter(m_view->audioWriteFrames));
 }
 
 bool StageMonitorView::Read(int slot, StageMonitorSnapshot& snapshot) const
@@ -173,6 +249,8 @@ bool StageMonitorView::Read(int slot, StageMonitorSnapshot& snapshot) const
         snapshot.dynamicGainDb = source.dynamicGainDb;
         snapshot.tunerFrequencyHz = source.tunerFrequencyHz;
         snapshot.tunerConfidence = source.tunerConfidence;
+        std::memcpy(snapshot.looperStates, source.looperStates,
+                    sizeof(snapshot.looperStates));
         snapshot.flags = source.flags;
         snapshot.valid = (source.flags & kStageMonitorFlagObserved) != 0;
         std::memcpy(snapshot.spectrum, source.spectrum,
@@ -203,7 +281,8 @@ StageMonitor::StageMonitor() : m_impl(std::make_unique<StageMonitorImpl>()) {}
 
 StageMonitor::~StageMonitor() = default;
 
-bool StageMonitor::Open(const std::wstring& endpointId, UINT32 sampleRate)
+bool StageMonitor::Open(const std::wstring& endpointId, UINT32 sampleRate,
+                        UINT32 channels)
 {
     Close();
     if (endpointId.empty()) {
@@ -245,15 +324,31 @@ bool StageMonitor::Open(const std::wstring& endpointId, UINT32 sampleRate)
     }
 
     if (!HeaderValid(m_view)) {
-        InitializeHeader(m_view, sampleRate);
-    } else if (m_view->sampleRate != sampleRate) {
-        // The stream format changed. Old spectrum bins are in the wrong
-        // frequency scale, so drop the published values.
-        m_view->sampleRate = sampleRate;
-        for (int slot = 0; slot < kStageMonitorSlots; ++slot) {
-            m_view->slots[slot].flags = 0;
+        InitializeHeader(m_view, sampleRate, channels);
+    } else {
+        // A new APO bind means its DSP state (including Looper takes) is new.
+        // Publish a fresh generation so the GUI can reset optimistic labels.
+        InterlockedIncrement(reinterpret_cast<volatile LONG*>(
+            &m_view->generation));
+        if (m_view->sampleRate != sampleRate) {
+            // The stream format changed. Old spectrum bins are in the wrong
+            // frequency scale, so drop the published values.
+            m_view->sampleRate = sampleRate;
+            for (int slot = 0; slot < kStageMonitorSlots; ++slot) {
+                m_view->slots[slot].flags = 0;
+            }
         }
     }
+
+    // A fresh stream has no valid old audition audio. Reset the ring and let
+    // ReadAudio views start from this live edge.
+    InterlockedExchange(
+        reinterpret_cast<volatile LONG*>(&m_view->audioWriteFrames), 0);
+    m_view->audioCapacityFrames = kStageMonitorAudioFrames;
+    m_view->audioSampleRate = sampleRate;
+    m_view->audioChannels = std::min<UINT32>(kStageMonitorAudioChannels,
+                                             std::max<UINT32>(1u, channels));
+    std::memset(m_view->audioSamples, 0, sizeof(m_view->audioSamples));
 
     m_observed.fill(false);
     for (auto& bins : m_impl->spectrum) {
@@ -276,10 +371,20 @@ void StageMonitor::Close()
 {
     if (m_view != nullptr) {
         // Publishing an empty set on shutdown keeps the GUI from showing the
-        // last buffer forever after the audio stream unbinds.
+        // last buffer forever after the audio stream unbinds. The audio format
+        // must be invalidated too: otherwise a later Listen sees a stale but
+        // structurally valid header, skips its bootstrap capture, and renders
+        // silence from an APO that is no longer processing audio.
         for (int slot = 0; slot < kStageMonitorSlots; ++slot) {
             ClearSlot(static_cast<size_t>(slot));
         }
+        InterlockedExchange(
+            reinterpret_cast<volatile LONG*>(&m_view->audioWriteFrames), 0);
+        m_view->audioCapacityFrames = 0;
+        m_view->audioSampleRate = 0;
+        m_view->audioChannels = 0;
+        InterlockedIncrement(
+            reinterpret_cast<volatile LONG*>(&m_view->generation));
         UnmapViewOfFile(m_view);
         m_view = nullptr;
     }
@@ -304,7 +409,8 @@ void StageMonitor::ObserveStage(size_t slot, const StageMonitorBinding& binding,
                                 UINT32 channels, float inputPeak,
                                 float inputRms, float outputPeak,
                                 float outputRms, float engagement,
-                                float dynamicGainDb, const TunerMonitorData& tuner)
+                                float dynamicGainDb, const TunerMonitorData& tuner,
+                                 const LooperMonitorData& looper)
 {
     if (m_view == nullptr || slot >= static_cast<size_t>(kStageMonitorSlots)) {
         return;
@@ -320,7 +426,7 @@ void StageMonitor::ObserveStage(size_t slot, const StageMonitorBinding& binding,
             ? static_cast<float>(frames) / static_cast<float>(m_view->sampleRate)
             : 0.0f;
     WriteSlot(slot, binding, inputPeak, inputRms, outputPeak, outputRms,
-              engagement, dynamicGainDb, tuner,
+              engagement, dynamicGainDb, tuner, looper,
               std::pow(0.5f, seconds / kShortPeakHalfLifeSeconds),
               std::pow(0.5f, seconds / kPeakHalfLifeSeconds));
 }
@@ -335,6 +441,37 @@ void StageMonitor::EndBuffer()
             ClearSlot(static_cast<size_t>(slot));
         }
     }
+}
+
+void StageMonitor::WriteAudio(const double* samples, UINT32 frames,
+                              UINT32 channels)
+{
+    if (m_view == nullptr || samples == nullptr || frames == 0 ||
+        channels == 0 || m_view->audioCapacityFrames == 0)
+    {
+        return;
+    }
+
+    const UINT32 capacity = m_view->audioCapacityFrames;
+    const UINT32 write = static_cast<UINT32>(m_view->audioWriteFrames);
+    for (UINT32 frame = 0; frame < frames; ++frame) {
+        const UINT32 slot = (write + frame) % capacity;
+        const double* source = samples + static_cast<size_t>(frame) * channels;
+        for (UINT32 channel = 0; channel < kStageMonitorAudioChannels;
+             ++channel) {
+            double value = 0.0;
+            if (channels == 1) {
+                value = source[0];
+            } else if (channel < channels) {
+                value = source[channel];
+            }
+            m_view->audioSamples[slot * kStageMonitorAudioChannels + channel] =
+                static_cast<float>(std::clamp(value, -1.0, 1.0));
+        }
+    }
+    InterlockedExchange(reinterpret_cast<volatile LONG*>(
+                            &m_view->audioWriteFrames),
+                        static_cast<LONG>(write + frames));
 }
 
 void StageMonitor::AnalyzeSpectrum(size_t slot, const double* samples,
@@ -389,7 +526,8 @@ void StageMonitor::AnalyzeSpectrum(size_t slot, const double* samples,
 void StageMonitor::WriteSlot(size_t slot, const StageMonitorBinding& binding,
                              float inputPeak, float inputRms, float outputPeak,
                              float outputRms, float engagement,
-                             float dynamicGainDb, const TunerMonitorData& tuner, float shortDecay,
+                             float dynamicGainDb, const TunerMonitorData& tuner,
+                              const LooperMonitorData& looper, float shortDecay,
                              float peakDecay)
 {
     StageMonitorSlot& target = m_view->slots[slot];
@@ -427,6 +565,8 @@ void StageMonitor::WriteSlot(size_t slot, const StageMonitorBinding& binding,
     target.dynamicGainDb = dynamicGainDb;
     target.tunerFrequencyHz = tuner.frequencyHz;
     target.tunerConfidence = tuner.confidence;
+    std::memcpy(target.looperStates, looper.states,
+                sizeof(target.looperStates));
 
     if (binding.spectrum) {
         const auto& bins = m_impl->spectrum[slot];
@@ -462,6 +602,7 @@ void StageMonitor::ClearSlot(size_t slot)
     target.dynamicGainDb = 0.0f;
     target.tunerFrequencyHz = 0.0f;
     target.tunerConfidence = 0.0f;
+    std::memset(target.looperStates, 0, sizeof(target.looperStates));
     std::memset(target.spectrum, 0, sizeof(target.spectrum));
 
     auto& bins = m_impl->spectrum[slot];

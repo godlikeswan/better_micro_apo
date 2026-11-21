@@ -54,5 +54,5 @@ the Add effect menu and is enabled with a default of **+12 dB**.
   floating-point signal exceeds full scale before final conversion. The graph
   range is **−96 to +24 dBFS**, so a large boost can put the curve or dot above
   the visible area.
-- The graph and meter come from `.monitor` polling, not from the Listen stream,
-  so they do not change settings or stop audio.
+- The graph and its meter come from `.monitor` polling, not from the bottom
+  Listen meter, so they do not change settings or stop audio.

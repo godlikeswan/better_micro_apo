@@ -19,11 +19,11 @@ at [docs/index.md](docs/index.md):
 Every preset starts with a fixed `Input` row, followed by `Gain`, `Noise
 reduction`, `Gate/Expander`, `Compressor/Limiter`, `Equalizer`,
 `Saturation/Overdrive/Distortion`, `Reverb`, `Echo`, `Chorus`, `Tremolo`,
-`Vibrato`, `Pitch Shifter`, and `Tuner` in type/menu order. The list itself is
-processed from top to bottom
-in the order the user adds or moves effects. Tuner is monitoring-only: it
-publishes detected pitch for its graph without changing samples, adding gain, or
-buffering audio.
+`Vibrato`, `Pitch Shifter`, `Tuner`, and `Looper` in type/menu order. The list
+itself is processed from top to bottom in the order the user adds or moves
+effects. Tuner is monitoring-only: it publishes detected pitch for its graph
+without changing samples, adding gain, or buffering audio. Looper is the last
+addable type and is limited to one instance per preset.
 Input is always first, enabled, and not addable or deletable; its gain defaults
 to **0 dB** with a **−24 to +24 dB** range, and its **Treat as mono** checkbox
 copies channel 0 to every other channel at the Input stage before the addable
@@ -55,8 +55,21 @@ and **Dry level** (default 100%) for the unshifted signal. Phase vocoder rounds
 Window up to a power of two; the grain engines use the exact sample count. None
 of these five has a live graph.
 
-Durable settings use schema version 15, the runtime snapshot uses version 17,
-and the stage-monitor channel uses version 8.
+Looper records five tracks from the input before loop returns are mixed in. Each
+track has 0–100% return **Volume**, a **Free length** checkbox, and a
+**Stop at loop end** checkbox that is off by default. Taps, double taps, and long
+presses on the key buttons drive record, overdub, play, stop, one-level undo, and
+clear; while Looper is selected, keys **1**–**4** and **Space** tap tracks 1–5.
+Takes are capped at **120 s** and recording wraps and layers instead of stopping
+at a boundary. The first synced take sets the reference length; later synced
+takes snap automatically to `1/8`, `1/4`, `1/2`, `1`, `2`, `4`, or `8` times that
+reference on a monotonic clock. Free tracks keep their exact length and own
+playhead. Transport commands are one-shot runtime messages; takes are persisted
+per device in a `.looper` bank. Looper has no live graph; only its transport
+states are published as telemetry.
+
+Durable settings use schema version 17, the runtime snapshot uses version 19,
+and the stage-monitor channel uses version 12.
 Loading a settings file with any other `[dsp] version` deletes the file and
 starts from defaults; there is no migration path. See
 [DLL ↔ GUI settings sharing](docs/runtime-sharing.md) for the file formats, the

@@ -109,7 +109,8 @@ effects is offset to stay clear of the left-hand dB labels. Saturation
 draws the fixed shaping curve and marks the operating point by feeding the
 input peak through the Drive pre-gain, so a higher Drive widens the marker gap
 toward the flat part instead of bending the curve. These are stage-local
-displays, independent of the bottom Peak/RMS label fed by the Listen stream.
+displays, independent of the bottom Peak/RMS label fed by the post-DSP APO audio
+ring used by Listen.
 
 ## Icons, tooltips, and reset buttons
 

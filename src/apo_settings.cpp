@@ -222,6 +222,7 @@ const wchar_t* EffectTypeName(EffectType type)
     case EffectType::Vibrato:    return L"Vibrato";
     case EffectType::PitchShifter: return L"Pitch Shifter";
     case EffectType::Tuner:      return L"Tuner";
+    case EffectType::Looper:     return L"Looper";
     default:                     return L"";
     }
 }
@@ -304,6 +305,18 @@ const wchar_t* DistortionFunctionName(int function)
     }
 }
 
+const wchar_t* LooperStateName(LooperState state)
+{
+    switch (state)
+    {
+    case LooperState::Empty:      return L"Empty";
+    case LooperState::Recording:  return L"Recording";
+    case LooperState::Playback:   return L"Playback";
+    case LooperState::Stopped:    return L"Stopped";
+    default:                      return L"";
+    }
+}
+
 const char* EffectTypeKey(EffectType type)
 {
     switch (type)
@@ -322,6 +335,7 @@ const char* EffectTypeKey(EffectType type)
     case EffectType::Vibrato:    return "vibrato";
     case EffectType::PitchShifter: return "pitch_shifter";
     case EffectType::Tuner:      return "tuner";
+    case EffectType::Looper:     return "looper";
     default:                     return "gain";
     }
 }
@@ -345,6 +359,7 @@ int EffectTypeCapacity(EffectType type)
     switch (type)
     {
     case EffectType::Input:
+    case EffectType::Looper:
         return 1;
     case EffectType::Noise:
     case EffectType::Gate:
@@ -378,6 +393,7 @@ bool EffectEnabled(const EffectInstance& effect)
     case EffectType::Vibrato:    return effect.vibrato.enabled;
     case EffectType::PitchShifter: return effect.pitchShifter.enabled;
     case EffectType::Tuner:      return effect.tuner.enabled;
+    case EffectType::Looper:     return effect.looper.enabled;
     default:                     return false;
     }
 }
@@ -400,6 +416,7 @@ void SetEffectEnabled(EffectInstance& effect, bool enabled)
     case EffectType::Vibrato:    effect.vibrato.enabled = enabled; break;
     case EffectType::PitchShifter: effect.pitchShifter.enabled = enabled; break;
     case EffectType::Tuner:      effect.tuner.enabled = enabled; break;
+    case EffectType::Looper:     effect.looper.enabled = enabled; break;
     default:                     break;
     }
 }
@@ -651,6 +668,20 @@ void ClampEffect(EffectInstance& effect)
                     kTunerMinReferenceHz, kTunerMaxReferenceHz);
         break;
 
+    case EffectType::Looper:
+        for (LooperTrackSettings& track : effect.looper.tracks) {
+            ClampFinite(track.volume, kLooperDefaultVolume, 0.0, 100.0);
+        }
+        // Transport commands are normalized but never cleared here: they must
+        // survive every settings publish that follows the gesture.
+        if (effect.looper.command < LooperCommand::None ||
+            effect.looper.command > LooperCommand::DiscardProvisional) {
+            effect.looper.command = LooperCommand::None;
+        }
+        effect.looper.commandTrack = static_cast<int>(
+            Clamp(effect.looper.commandTrack, 0, kLooperTrackCount - 1));
+        break;
+
     default:
         effect.type = EffectType::Gain;
         break;
@@ -807,6 +838,7 @@ void LoadEffectFields(const std::vector<KeyValue>& entries,
     getBool(L"enabled", effect.vibrato.enabled);
     getBool(L"enabled", effect.pitchShifter.enabled);
     getBool(L"enabled", effect.tuner.enabled);
+    getBool(L"enabled", effect.looper.enabled);
 
     switch (effect.type)
     {
@@ -930,6 +962,23 @@ void LoadEffectFields(const std::vector<KeyValue>& entries,
         getDouble(L"tuner_reference_hz", effect.tuner.referenceHz);
         break;
     }
+
+    case EffectType::Looper:
+        for (int track = 0; track < kLooperTrackCount; ++track) {
+            const std::wstring trackPrefix =
+                L"looper_track_" + std::to_wstring(track) + L"_";
+            auto trackValue = [&](const wchar_t* field, double& value) {
+                getDouble((trackPrefix + field).c_str(), value);
+            };
+            auto trackBool = [&](const wchar_t* field, bool& value) {
+                getBool((trackPrefix + field).c_str(), value);
+            };
+            trackValue(L"volume", effect.looper.tracks[track].volume);
+            trackBool(L"free_length", effect.looper.tracks[track].freeLength);
+            trackBool(L"stop_at_loop_end",
+                      effect.looper.tracks[track].stopAtLoopEnd);
+        }
+        break;
 
     default:
         break;
@@ -1271,6 +1320,23 @@ bool SaveSettings(const std::wstring& endpointId, const ApoSettings& input)
                         FormatDouble(effect.tuner.referenceHz) + "\n";
                 break;
 
+            case EffectType::Looper:
+                // Transport commands live only in the runtime channel. No
+                // command is written to the durable INI file.
+                for (int track = 0; track < kLooperTrackCount; ++track) {
+                    const std::string trackPrefix =
+                        prefix + "looper_track_" + std::to_string(track) + "_";
+                    const LooperTrackSettings& trackSettings =
+                        effect.looper.tracks[track];
+                    text += trackPrefix + "volume=" +
+                            FormatDouble(trackSettings.volume) + "\n";
+                    text += trackPrefix + "free_length=" +
+                            (trackSettings.freeLength ? "1" : "0") + "\n";
+                    text += trackPrefix + "stop_at_loop_end=" +
+                            (trackSettings.stopAtLoopEnd ? "1" : "0") + "\n";
+                }
+                break;
+
             default:
                 break;
             }
@@ -1304,6 +1370,46 @@ struct NoiseBinsHeader
 constexpr std::uint32_t kNoiseFileVersion = 1;
 constexpr std::uint32_t kNoiseBinsVersion = 2;
 constexpr std::uint64_t kNoiseFileLimit = 64ull * 1024 * 1024;
+
+#pragma pack(push, 1)
+struct LooperBankFileHeader
+{
+    char magic[4];
+    std::uint32_t version;
+    std::uint32_t sampleRate;
+    std::uint32_t channels;
+    std::uint32_t maxFrames;
+    std::uint32_t trackCount;
+    std::uint64_t globalFrames;
+    std::int32_t referenceTrack;
+    std::uint64_t masterFrames;
+    std::uint64_t syncOrigin;
+    std::uint32_t undoValid;
+    std::int32_t undoTrack;
+    std::uint64_t undoLength;
+    std::int32_t undoState;
+    std::int32_t undoReferenceTrack;
+    std::uint64_t undoMasterFrames;
+    std::uint64_t undoSyncOrigin;
+};
+
+struct LooperBankFileTrack
+{
+    std::int32_t state;
+    std::uint64_t length;
+    std::uint64_t position;
+    std::uint64_t recordPosition;
+    std::uint64_t recordFrames;
+    std::uint32_t flags;
+};
+#pragma pack(pop)
+
+constexpr std::uint32_t kLooperBankVersion = 1;
+constexpr std::uint64_t kLooperBankFileLimit = 2ull * 1024 * 1024 * 1024;
+constexpr std::uint32_t kLooperTrackSyncedFlag = 1u;
+constexpr std::uint32_t kLooperTrackOverdubFlag = 2u;
+constexpr std::uint32_t kLooperTrackPendingStopFlag = 4u;
+constexpr std::uint32_t kLooperTrackReferenceFlag = 8u;
 
 bool ValidNoiseHeader(const NoiseFileHeader& header)
 {
@@ -1530,6 +1636,345 @@ bool LoadNoiseProfile(const std::wstring& endpointId, NoiseProfile& profile)
 
     CloseHandle(file);
     return ok;
+}
+
+std::wstring LooperBankPath(const std::wstring& endpointId)
+{
+    return SettingsDirectory() + L"\\" + SafeEndpointId(endpointId) +
+           L".looper";
+}
+
+bool SaveLooperBank(const std::wstring& endpointId,
+                    const LooperBankData& bank)
+{
+    if (!bank.valid || endpointId.empty() || bank.sampleRate == 0 ||
+        bank.channels == 0 || bank.maxFrames == 0)
+    {
+        return false;
+    }
+
+    const std::uint64_t expectedMax = static_cast<std::uint64_t>(
+        std::ceil(apo::kLooperMaxLengthSeconds * bank.sampleRate) + 1.0);
+    if (bank.maxFrames > expectedMax)
+    {
+        return false;
+    }
+
+    CreateDirectoryW(kDataDirectory, nullptr);
+    CreateDirectoryW(kDevicesDirectory, nullptr);
+
+    const std::wstring finalPath = LooperBankPath(endpointId);
+    const std::wstring tempPath = finalPath + L".tmp";
+    HANDLE file = CreateFileW(
+        tempPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_TEMPORARY, nullptr);
+    if (file == nullptr || file == INVALID_HANDLE_VALUE)
+    {
+        return false;
+    }
+
+    auto writeExact = [file](const void* data, DWORD bytes) {
+        DWORD written = 0;
+        return WriteFile(file, data, bytes, &written, nullptr) &&
+               written == bytes;
+    };
+
+    std::array<std::uint64_t, apo::kLooperTrackCount> trackSamples{};
+    std::uint64_t totalBytes = sizeof(LooperBankFileHeader) +
+                               sizeof(LooperBankFileTrack) *
+                                   apo::kLooperTrackCount;
+    for (int index = 0; index < apo::kLooperTrackCount; ++index)
+    {
+        const LooperBankTrack& track = bank.tracks[static_cast<size_t>(index)];
+        const std::uint64_t samples =
+            static_cast<std::uint64_t>(track.length) * bank.channels;
+        if (track.length > bank.maxFrames || track.position > bank.maxFrames ||
+            track.recordPosition > bank.maxFrames)
+        {
+            CloseHandle(file);
+            DeleteFileW(tempPath.c_str());
+            return false;
+        }
+        const std::uint64_t bytes = samples * sizeof(float);
+        if (bytes > std::numeric_limits<DWORD>::max() ||
+            bank.buffers[static_cast<size_t>(index)].size() < samples)
+        {
+            CloseHandle(file);
+            DeleteFileW(tempPath.c_str());
+            return false;
+        }
+        trackSamples[static_cast<size_t>(index)] = samples;
+        totalBytes += bytes;
+    }
+
+    const std::uint64_t undoSamples =
+        static_cast<std::uint64_t>(bank.undoLength) * bank.channels;
+    const std::uint64_t undoBytes = undoSamples * sizeof(float);
+    if (bank.undoLength > bank.maxFrames ||
+        undoBytes > std::numeric_limits<DWORD>::max() ||
+        (bank.undoValid && bank.undoBuffer.size() < undoSamples))
+    {
+        CloseHandle(file);
+        DeleteFileW(tempPath.c_str());
+        return false;
+    }
+    totalBytes += sizeof(LooperBankFileTrack) + undoBytes;
+    if (totalBytes > kLooperBankFileLimit)
+    {
+        CloseHandle(file);
+        DeleteFileW(tempPath.c_str());
+        return false;
+    }
+
+    LooperBankFileHeader header{};
+    std::memcpy(header.magic, "BMLP", 4);
+    header.version = kLooperBankVersion;
+    header.sampleRate = bank.sampleRate;
+    header.channels = bank.channels;
+    header.maxFrames = bank.maxFrames;
+    header.trackCount = apo::kLooperTrackCount;
+    header.globalFrames = bank.globalFrames;
+    header.referenceTrack = bank.referenceTrack;
+    header.masterFrames = bank.masterFrames;
+    header.syncOrigin = bank.syncOrigin;
+    header.undoValid = bank.undoValid ? 1u : 0u;
+    header.undoTrack = bank.undoTrack;
+    header.undoLength = bank.undoLength;
+    header.undoState = static_cast<std::int32_t>(bank.undoState);
+    header.undoReferenceTrack = bank.undoReferenceTrack;
+    header.undoMasterFrames = bank.undoMasterFrames;
+    header.undoSyncOrigin = bank.undoSyncOrigin;
+
+    bool ok = writeExact(&header, sizeof(header));
+    for (int index = 0; index < apo::kLooperTrackCount && ok; ++index)
+    {
+        const LooperBankTrack& track = bank.tracks[static_cast<size_t>(index)];
+        LooperBankFileTrack fileTrack{};
+        fileTrack.state = static_cast<std::int32_t>(track.state);
+        fileTrack.length = track.length;
+        fileTrack.position = track.position;
+        fileTrack.recordPosition = track.recordPosition;
+        fileTrack.recordFrames = track.recordFrames;
+        fileTrack.flags =
+            (track.synced ? kLooperTrackSyncedFlag : 0u) |
+            (track.overdub ? kLooperTrackOverdubFlag : 0u) |
+            (track.pendingStop ? kLooperTrackPendingStopFlag : 0u) |
+            (track.isReference ? kLooperTrackReferenceFlag : 0u);
+        ok = writeExact(&fileTrack, sizeof(fileTrack));
+
+        const std::uint64_t samples = trackSamples[static_cast<size_t>(index)];
+        if (ok && samples != 0)
+        {
+            ok = writeExact(
+                bank.buffers[static_cast<size_t>(index)].data(),
+                static_cast<DWORD>(samples * sizeof(float)));
+        }
+    }
+
+    if (ok)
+    {
+        LooperBankFileTrack undoTrack{};
+        undoTrack.state = header.undoState;
+        undoTrack.length = bank.undoLength;
+        undoTrack.flags = 0;
+        ok = writeExact(&undoTrack, sizeof(undoTrack));
+        if (ok && bank.undoValid && undoSamples != 0)
+        {
+            ok = writeExact(
+                bank.undoBuffer.data(),
+                static_cast<DWORD>(undoSamples * sizeof(float)));
+        }
+    }
+
+    CloseHandle(file);
+    if (!ok)
+    {
+        DeleteFileW(tempPath.c_str());
+        return false;
+    }
+    if (!MoveFileExW(tempPath.c_str(), finalPath.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    {
+        DeleteFileW(tempPath.c_str());
+        return false;
+    }
+    return true;
+}
+
+bool LoadLooperBank(const std::wstring& endpointId, LooperBankData& bank)
+{
+    bank = LooperBankData{};
+    if (endpointId.empty())
+    {
+        return false;
+    }
+
+    const std::wstring path = LooperBankPath(endpointId);
+    HANDLE file = CreateFileW(
+        path.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == nullptr || file == INVALID_HANDLE_VALUE)
+    {
+        return false;
+    }
+
+    auto readExact = [file](void* data, DWORD bytes) {
+        DWORD read = 0;
+        return ReadFile(file, data, bytes, &read, nullptr) && read == bytes;
+    };
+    auto reject = [&]() {
+        CloseHandle(file);
+        DeleteFileW(path.c_str());
+        bank = LooperBankData{};
+        return false;
+    };
+
+    LooperBankFileHeader header{};
+    if (!readExact(&header, sizeof(header)) ||
+        std::memcmp(header.magic, "BMLP", 4) != 0 ||
+        header.version != kLooperBankVersion ||
+        header.trackCount != apo::kLooperTrackCount || header.sampleRate == 0 ||
+        header.channels == 0 || header.maxFrames == 0)
+    {
+        return reject();
+    }
+
+    const std::uint64_t expectedMax = static_cast<std::uint64_t>(
+        std::ceil(apo::kLooperMaxLengthSeconds * header.sampleRate) + 1.0);
+    if (header.maxFrames > expectedMax ||
+        (header.undoValid != 0u && header.undoValid != 1u) ||
+        (header.referenceTrack != -1 &&
+         (header.referenceTrack < 0 ||
+          header.referenceTrack >= apo::kLooperTrackCount)) ||
+        (header.undoReferenceTrack != -1 &&
+         (header.undoReferenceTrack < 0 ||
+          header.undoReferenceTrack >= apo::kLooperTrackCount)) ||
+        (header.undoState < static_cast<std::int32_t>(LooperState::Empty) ||
+         header.undoState > static_cast<std::int32_t>(LooperState::Stopped)))
+    {
+        return reject();
+    }
+
+    bank.sampleRate = header.sampleRate;
+    bank.channels = header.channels;
+    bank.maxFrames = header.maxFrames;
+    bank.globalFrames = header.globalFrames;
+    bank.referenceTrack = header.referenceTrack;
+    bank.masterFrames = header.masterFrames;
+    bank.syncOrigin = header.syncOrigin;
+    bank.undoValid = header.undoValid != 0u;
+    bank.undoTrack = header.undoTrack;
+    bank.undoLength = header.undoLength;
+    bank.undoState = static_cast<LooperState>(header.undoState);
+    bank.undoReferenceTrack = header.undoReferenceTrack;
+    bank.undoMasterFrames = header.undoMasterFrames;
+    bank.undoSyncOrigin = header.undoSyncOrigin;
+
+    std::array<std::uint64_t, apo::kLooperTrackCount> trackSamples{};
+    std::uint64_t totalBytes = sizeof(header) +
+                               sizeof(LooperBankFileTrack) *
+                                   apo::kLooperTrackCount;
+    for (int index = 0; index < apo::kLooperTrackCount; ++index)
+    {
+        LooperBankFileTrack fileTrack{};
+        if (!readExact(&fileTrack, sizeof(fileTrack)) ||
+            fileTrack.state < static_cast<std::int32_t>(LooperState::Empty) ||
+            fileTrack.state > static_cast<std::int32_t>(LooperState::Stopped) ||
+            (fileTrack.flags & ~(kLooperTrackSyncedFlag |
+                                 kLooperTrackOverdubFlag |
+                                 kLooperTrackPendingStopFlag |
+                                 kLooperTrackReferenceFlag)) != 0u)
+        {
+            return reject();
+        }
+
+        LooperBankTrack& track = bank.tracks[static_cast<size_t>(index)];
+        track.state = static_cast<LooperState>(fileTrack.state);
+        track.length = fileTrack.length;
+        track.position = fileTrack.position;
+        track.recordPosition = fileTrack.recordPosition;
+        track.recordFrames = fileTrack.recordFrames;
+        track.synced = (fileTrack.flags & kLooperTrackSyncedFlag) != 0u;
+        track.overdub = (fileTrack.flags & kLooperTrackOverdubFlag) != 0u;
+        track.pendingStop =
+            (fileTrack.flags & kLooperTrackPendingStopFlag) != 0u;
+        track.isReference = (fileTrack.flags & kLooperTrackReferenceFlag) != 0u;
+
+        if (track.length > header.maxFrames ||
+            track.position > header.maxFrames ||
+            track.recordPosition > header.maxFrames)
+        {
+            return reject();
+        }
+        const std::uint64_t samples =
+            static_cast<std::uint64_t>(track.length) * header.channels;
+        const std::uint64_t bytes = samples * sizeof(float);
+        if (bytes > std::numeric_limits<DWORD>::max())
+        {
+            return reject();
+        }
+        trackSamples[static_cast<size_t>(index)] = samples;
+        totalBytes += bytes;
+    }
+
+    if (bank.undoLength > header.maxFrames ||
+        (bank.undoTrack != -1 &&
+         (bank.undoTrack < 0 ||
+          bank.undoTrack >= apo::kLooperTrackCount)))
+    {
+        return reject();
+    }
+    const std::uint64_t undoSamples =
+        static_cast<std::uint64_t>(bank.undoLength) * header.channels;
+    const std::uint64_t undoBytes = undoSamples * sizeof(float);
+    if (undoBytes > std::numeric_limits<DWORD>::max())
+    {
+        return reject();
+    }
+    totalBytes += sizeof(LooperBankFileTrack) + undoBytes;
+    if (totalBytes > kLooperBankFileLimit)
+    {
+        return reject();
+    }
+
+    for (int index = 0; index < apo::kLooperTrackCount; ++index)
+    {
+        const std::uint64_t samples = trackSamples[static_cast<size_t>(index)];
+        std::vector<float>& buffer = bank.buffers[static_cast<size_t>(index)];
+        if (samples == 0)
+        {
+            continue;
+        }
+        buffer.assign(static_cast<size_t>(samples), 0.0f);
+        if (!readExact(buffer.data(),
+                       static_cast<DWORD>(samples * sizeof(float))))
+        {
+            return reject();
+        }
+    }
+
+    LooperBankFileTrack undoTrack{};
+    if (!readExact(&undoTrack, sizeof(undoTrack)) ||
+        undoTrack.state < static_cast<std::int32_t>(LooperState::Empty) ||
+        undoTrack.state > static_cast<std::int32_t>(LooperState::Stopped) ||
+        undoTrack.length != bank.undoLength)
+    {
+        return reject();
+    }
+    if (bank.undoValid && undoSamples != 0)
+    {
+        bank.undoBuffer.assign(static_cast<size_t>(undoSamples), 0.0f);
+        if (!readExact(bank.undoBuffer.data(),
+                       static_cast<DWORD>(undoSamples * sizeof(float))))
+        {
+            return reject();
+        }
+    }
+
+    CloseHandle(file);
+    bank.valid = true;
+    return true;
 }
 
 } // namespace apo

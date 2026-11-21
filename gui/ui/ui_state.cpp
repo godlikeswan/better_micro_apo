@@ -151,6 +151,17 @@ HWND g_tunerSmoothingLabel = nullptr;
 HWND g_tunerSmoothingSlider = nullptr;
 HWND g_tunerReferenceLabel = nullptr;
 HWND g_tunerReferenceSlider = nullptr;
+HWND g_looperHeaderTrack = nullptr;
+HWND g_looperHeaderState = nullptr;
+HWND g_looperHeaderVolume = nullptr;
+HWND g_looperHeaderFree = nullptr;
+HWND g_looperHeaderStop = nullptr;
+HWND g_looperButtons[apo::kLooperTrackCount]{};
+HWND g_looperStateLabels[apo::kLooperTrackCount]{};
+HWND g_looperVolumeSliders[apo::kLooperTrackCount]{};
+HWND g_looperFreeLength[apo::kLooperTrackCount]{};
+HWND g_looperStopAtEnd[apo::kLooperTrackCount]{};
+HWND g_looperNote = nullptr;
 HWND g_listen = nullptr;
 HWND g_meter = nullptr;
 

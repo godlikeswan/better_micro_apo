@@ -18,7 +18,7 @@ effects and both output sides. It replaces the old standalone Mono effect.
   the rest of the chain, so you can see where the voice and the room noise sit.
 - Raise **Input gain (dB)** until the spectrum and the thin output meter look
   comfortable. For speech, aim for peaks around **−5 dBFS** and RMS around
-  **−20 dBFS** on the bottom Listen meter. The meter next to the graph follows
+  **−20 dBFS** on the bottom meter from the APO audio tap. The meter next to the graph follows
   the Input stage output, after the gain trim.
 - If turning the mic up also makes room noise obvious, fix that with
   [Noise reduction](noise-reduction.md), [Gate/Expander](gate-expander.md), or

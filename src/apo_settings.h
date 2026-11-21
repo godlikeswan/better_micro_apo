@@ -12,7 +12,7 @@ namespace apo {
 
 // Settings files with any other version are discarded on load. There is no
 // migration path: a new schema starts from defaults.
-inline constexpr int kSettingsVersion = 15;
+inline constexpr int kSettingsVersion = 17;
 
 // The fixed first stage has its own gain range; it is stored in GainSettings
 // but is separate from the standalone makeup Gain effect.
@@ -459,6 +459,120 @@ struct TunerSettings
     double referenceHz = kTunerDefaultReferenceHz;
 };
 
+// Five-track looper. One-shot transport requests cross the shared-memory
+// boundary as a command and a monotonically increasing serial; the APO consumes
+// a request when the serial changes at a buffer boundary. Commands are never
+// written to the durable INI file, so restarting starts with empty tracks.
+enum class LooperCommand : int
+{
+    None = 0,
+    StartRecord,
+    FinishRecord,
+    Play,
+    Stop,
+    Undo,
+    Clear,
+    // Keyboard taps start recording immediately. These commands let the GUI
+    // commit that provisional take, or discard it when the same gesture turns
+    // out to be a double tap or a long press.
+    StartRecordProvisional,
+    CommitProvisional,
+    DiscardProvisional,
+};
+
+enum class LooperState : int
+{
+    Empty = 0,
+    Recording,
+    Playback,
+    Stopped,
+};
+
+const wchar_t* LooperStateName(LooperState state);
+
+inline constexpr int kLooperTrackCount = 5;
+inline constexpr double kLooperMaxLengthSeconds = 120.0;
+inline constexpr double kLooperDefaultVolume = 100.0;
+// Synced takes choose the nearest of these multiples of the first synced take.
+// The choice is internal; there is no per-track ratio control.
+inline constexpr std::array<double, 7> kLooperAutoSnapRatios{{
+    0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0}};
+
+inline double NearestLooperAutoSnapRatio(double ratio)
+{
+    if (!(ratio > 0.0)) {
+        return 1.0;
+    }
+    double best = 1.0;
+    double bestDifference = std::numeric_limits<double>::infinity();
+    for (double candidate : kLooperAutoSnapRatios) {
+        const double difference =
+            (ratio > candidate) ? (ratio - candidate) : (candidate - ratio);
+        if (difference <= bestDifference) {
+            bestDifference = difference;
+            best = candidate;
+        }
+    }
+    return best;
+}
+
+struct LooperTrackSettings
+{
+    // Percentage applied to this track's loop return; input is never changed.
+    double volume = kLooperDefaultVolume;
+    // Checked: keep the exact recorded length instead of snapping to a ratio.
+    bool freeLength = false;
+    // Checked: defer a Stop request to this track's loop boundary.
+    bool stopAtLoopEnd = false;
+};
+
+struct LooperSettings
+{
+    bool enabled = false;
+    LooperTrackSettings tracks[kLooperTrackCount];
+    LooperCommand command = LooperCommand::None;
+    std::uint64_t commandSerial = 0;
+    int commandTrack = 0;
+};
+
+// Persistent take bank. Looper samples are too large for the INI settings file,
+// so they live in their own .looper file next to it. Everything that affects
+// playback after an audio restart is stored here; transient gesture data is not.
+struct LooperBankTrack
+{
+    LooperState state = LooperState::Empty;
+    std::uint64_t length = 0;
+    std::uint64_t position = 0;
+    std::uint64_t recordPosition = 0;
+    std::uint64_t recordFrames = 0;
+    bool synced = true;
+    bool overdub = false;
+    bool pendingStop = false;
+    bool isReference = false;
+};
+
+struct LooperBankData
+{
+    bool valid = false;
+    std::uint32_t sampleRate = 0;
+    std::uint32_t channels = 0;
+    std::uint32_t maxFrames = 0;
+    std::uint64_t globalFrames = 0;
+    int referenceTrack = -1;
+    std::uint64_t masterFrames = 0;
+    std::uint64_t syncOrigin = 0;
+    std::array<LooperBankTrack, kLooperTrackCount> tracks{};
+    std::array<std::vector<float>, kLooperTrackCount> buffers{};
+    bool undoValid = false;
+    int undoTrack = -1;
+    std::uint64_t undoLength = 0;
+    LooperState undoState = LooperState::Empty;
+    int undoReferenceTrack = -1;
+    std::uint64_t undoMasterFrames = 0;
+    std::uint64_t undoSyncOrigin = 0;
+    std::vector<float> undoBuffer;
+};
+
 // Effect types the list can hold. The list order is the DSP order, and a type
 // may appear more than once. Input is generated automatically as row 0 and is
 // never addable or deletable; Gain is the first optional effect after it.
@@ -478,6 +592,7 @@ enum class EffectType : int
     Vibrato,
     PitchShifter,
     Tuner,
+    Looper,
     Count,
 };
 
@@ -526,6 +641,7 @@ struct EffectInstance
     VibratoSettings vibrato;
     PitchShifterSettings pitchShifter;
     TunerSettings tuner;
+    LooperSettings looper;
 };
 
 bool EffectEnabled(const EffectInstance& effect);
@@ -601,5 +717,15 @@ bool SaveNoiseProfileBins(const std::wstring& endpointId,
 // Reads and analyzes the endpoint's noise profile. Missing or invalid files
 // leave `profile` invalid and return false.
 bool LoadNoiseProfile(const std::wstring& endpointId, NoiseProfile& profile);
+
+// C:\ProgramData\better_micro_apo\devices\{endpoint-guid}.looper
+std::wstring LooperBankPath(const std::wstring& endpointId);
+
+// Writes the five track buffers, undo bank and shared timing reference. Any
+// format or length mismatch invalidates the file on load rather than resampling
+// recorded audio.
+bool SaveLooperBank(const std::wstring& endpointId,
+                    const LooperBankData& bank);
+bool LoadLooperBank(const std::wstring& endpointId, LooperBankData& bank);
 
 } // namespace apo

@@ -73,9 +73,13 @@ handler, so the effect list stays visible but read-only during work.
 
 Listening is stopped only when an operation actually restarts audio. The GUI
 remembers the endpoint and restarts the monitor afterwards. Settings-only
-applies and noise-profile captures leave it running. Stage-monitor polling is
-read-only and follows the selected endpoint; it closes the view when no enabled
-effect is selected and never touches the Listen stream.
+applies and noise-profile captures leave it running. Listen reads the APO's
+post-DSP audio ring through the default render device. Windows does not lock a
+capture APO merely because it is enabled, so Listen opens one bootstrap capture
+stream only when the tap is not already live; that stream is drained and
+discarded, never used as the audition source. Stage-monitor polling is read-only
+and follows the selected endpoint; it closes the view when no enabled effect is
+selected and never restarts audio.
 
 ## Module ownership
 

@@ -57,6 +57,10 @@ constexpr UINT kRefreshPollMs = 1200;
 constexpr UINT kStageMonitorPollMs = 100;
 constexpr UINT kDeviceChangeDebounceMs = 200;
 constexpr DWORD kMeterWindowMs = 500;
+// Keyboard Looper gestures use the main window's timer IDs. The mouse buttons
+// own their own timer IDs, so these never collide.
+constexpr UINT_PTR kLooperKeyLongPressBase = 10;
+constexpr UINT_PTR kLooperKeyTapBase = 20;
 
 constexpr wchar_t kWindowClass[] = L"BetterMicroApoInstaller";
 constexpr wchar_t kInstanceMutex[] = L"Local\\better_micro_apo_gui_instance";
@@ -65,6 +69,43 @@ constexpr wchar_t kInstanceMutex[] = L"Local\\better_micro_apo_gui_instance";
 DWORD g_clipHoldUntil = 0;
 unsigned g_dropTotal = 0;
 bool g_liveApplyPending = false;
+
+// Looper gestures are optimistic: telemetry confirms the APO's real transport
+// state on the next poll, but the labels and the next gesture must not wait for
+// that round trip. Commands use a monotonic serial so a later settings-only
+// apply cannot replay an old transport request.
+apo::LooperState g_looperLocalStates[apo::kLooperTrackCount]{};
+apo::LooperState g_looperLocalUndoState = apo::LooperState::Empty;
+int g_looperLocalUndoTrack = -1;
+bool g_looperLocalUndoValid = false;
+std::wstring g_looperLocalEndpointId;
+int g_looperLocalEffectId = -1;
+ULONGLONG g_looperCommandSerial = 0;
+ULONG g_lastLooperMonitorGeneration = 0;
+std::wstring g_lastLooperMonitorEndpointId;
+DWORD g_looperMonitorMissingSince = 0;
+
+struct LooperKeyGestureState
+{
+    bool down = false;
+    bool longFired = false;
+    bool consumed = false;
+    bool tapPending = false;
+    bool provisional = false;
+    // Recording already finished on the first press; the gesture only needs
+    // to know whether a later double tap must still stop the track.
+    bool provisionalFinish = false;
+    DWORD downTick = 0;
+    DWORD lastTapTick = 0;
+    unsigned generation = 0;
+    unsigned timerGeneration = 0;
+    apo::LooperState originalState = apo::LooperState::Empty;
+    bool originalUndoValid = false;
+    int originalUndoTrack = -1;
+    apo::LooperState originalUndoState = apo::LooperState::Empty;
+};
+
+LooperKeyGestureState g_looperKeyGestures[apo::kLooperTrackCount];
 
 apo::DynamicsSettings& DynamicsOf(apo::EffectInstance& effect)
 {
@@ -132,6 +173,9 @@ bool ValidEffectIndex();
 void DoEnable(bool enable);
 void UpdateChromeUi();
 void PollStageMonitor();
+void HandleLooperKeyTimer(int track, bool longTimer);
+bool PublishLooperCommand(apo::LooperCommand command, int track);
+void SetLooperLocalState(int track, apo::LooperState state);
 
 // Describes the install state and the identity/state/bindings of every capture
 // endpoint. Deliberately excludes per-device settings: those are edited in
@@ -347,6 +391,16 @@ void ShowEffectControls(apo::EffectType type, bool show)
                  g_tunerSmoothingLabel, g_tunerSmoothingSlider,
                  g_tunerReferenceLabel, g_tunerReferenceSlider});
         break;
+    case apo::EffectType::Looper:
+        showAll({g_looperHeaderTrack, g_looperHeaderState,
+                 g_looperHeaderVolume, g_looperHeaderFree,
+                 g_looperHeaderStop, g_looperNote});
+        for (int track = 0; track < apo::kLooperTrackCount; ++track) {
+            showAll({g_looperButtons[track], g_looperStateLabels[track],
+                     g_looperVolumeSliders[track],
+                     g_looperFreeLength[track], g_looperStopAtEnd[track]});
+        }
+        break;
     default:
         break;
     }
@@ -411,6 +465,19 @@ void EnableEffectControls(bool enabled)
         g_tunerSampleSizeLabel, g_tunerSampleSizeCombo,
         g_tunerSmoothingLabel, g_tunerSmoothingSlider,
         g_tunerReferenceLabel, g_tunerReferenceSlider,
+        g_looperButtons[0], g_looperStateLabels[0], g_looperVolumeSliders[0],
+        g_looperFreeLength[0], g_looperStopAtEnd[0],
+        g_looperButtons[1], g_looperStateLabels[1], g_looperVolumeSliders[1],
+        g_looperFreeLength[1], g_looperStopAtEnd[1],
+        g_looperButtons[2], g_looperStateLabels[2], g_looperVolumeSliders[2],
+        g_looperFreeLength[2], g_looperStopAtEnd[2],
+        g_looperButtons[3], g_looperStateLabels[3], g_looperVolumeSliders[3],
+        g_looperFreeLength[3], g_looperStopAtEnd[3],
+        g_looperButtons[4], g_looperStateLabels[4], g_looperVolumeSliders[4],
+        g_looperFreeLength[4], g_looperStopAtEnd[4],
+        g_looperHeaderTrack, g_looperHeaderState, g_looperHeaderVolume,
+        g_looperHeaderFree, g_looperHeaderStop,
+        g_looperNote,
         g_effectGraph,
     };
     for (HWND control : controls) {
@@ -538,6 +605,77 @@ void RebuildEffectList()
     SendMessageW(g_effectList, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(g_effectList, nullptr, TRUE);
     g_effectLoading = false;
+}
+
+void CancelLooperKeyGestures()
+{
+    for (int track = 0; track < apo::kLooperTrackCount; ++track) {
+        LooperKeyGestureState& state = g_looperKeyGestures[track];
+        if (g_window != nullptr) {
+            KillTimer(g_window, kLooperKeyLongPressBase + track);
+            KillTimer(g_window, kLooperKeyTapBase + track);
+        }
+        if (state.provisional && !state.provisionalFinish) {
+            // Focus loss or a reset must not leave a half-gesture take behind.
+            if (!g_busy && !g_effectLoading && ValidEffectIndex() &&
+                HasEffectSelection() && g_endpoints[g_effectIndex].Enabled())
+            {
+                PublishLooperCommand(apo::LooperCommand::DiscardProvisional,
+                                     track);
+            }
+            g_looperLocalUndoValid = state.originalUndoValid;
+            g_looperLocalUndoTrack = state.originalUndoTrack;
+            g_looperLocalUndoState = state.originalUndoState;
+            SetLooperLocalState(track, state.originalState);
+        }
+        ++state.generation;
+        state.timerGeneration = state.generation;
+        state.down = false;
+        state.longFired = false;
+        state.consumed = false;
+        state.tapPending = false;
+        state.provisional = false;
+        state.provisionalFinish = false;
+        state.lastTapTick = 0;
+    }
+}
+
+void SetLooperLocalState(int track, apo::LooperState state)
+{
+    if (track < 0 || track >= apo::kLooperTrackCount) {
+        return;
+    }
+    g_looperLocalStates[track] = state;
+    if (g_looperStateLabels[track] != nullptr) {
+        SetWindowTextW(g_looperStateLabels[track],
+                       apo::LooperStateName(state));
+    }
+}
+
+void ResetLooperLocalStates()
+{
+    CancelLooperKeyGestures();
+    for (int track = 0; track < apo::kLooperTrackCount; ++track) {
+        SetLooperLocalState(track, apo::LooperState::Empty);
+    }
+    g_looperLocalUndoState = apo::LooperState::Empty;
+    g_looperLocalUndoTrack = -1;
+    g_looperLocalUndoValid = false;
+}
+
+// Takes are restored from the per-device bank, not guessed by the GUI. Reset
+// the optimistic state only when the selected Looper instance actually changes,
+// so switching away and back does not make a live loop look empty.
+void EnsureLooperLocalStates(const apo::Endpoint& endpoint, int effectId)
+{
+    if (g_looperLocalEndpointId == endpoint.id &&
+        g_looperLocalEffectId == effectId)
+    {
+        return;
+    }
+    g_looperLocalEndpointId = endpoint.id;
+    g_looperLocalEffectId = effectId;
+    ResetLooperLocalStates();
 }
 
 // Copies the editor controls into `effect`. The sliders always hold valid
@@ -711,6 +849,19 @@ void ReadEffectControls(apo::EffectInstance& effect)
         GetSliderValue(g_tunerReferenceSlider, effect.tuner.referenceHz);
         break;
     }
+    case apo::EffectType::Looper:
+        for (int track = 0; track < apo::kLooperTrackCount; ++track) {
+            apo::LooperTrackSettings& settings =
+                effect.looper.tracks[track];
+            GetSliderValue(g_looperVolumeSliders[track], settings.volume);
+            settings.freeLength =
+                SendMessageW(g_looperFreeLength[track], BM_GETCHECK, 0, 0) ==
+                BST_CHECKED;
+            settings.stopAtLoopEnd =
+                SendMessageW(g_looperStopAtEnd[track], BM_GETCHECK, 0, 0) ==
+                BST_CHECKED;
+        }
+        break;
     default:
         break;
     }
@@ -830,6 +981,21 @@ void ShowEffectForSelected()
                  apo::TunerSampleSizeIndex(effect.tuner.sampleSize), 0);
     SetSliderValue(g_tunerSmoothingSlider, effect.tuner.smoothing);
     SetSliderValue(g_tunerReferenceSlider, effect.tuner.referenceHz);
+    if (effect.type == apo::EffectType::Looper) {
+        EnsureLooperLocalStates(g_endpoints[g_effectIndex], effect.id);
+        for (int track = 0; track < apo::kLooperTrackCount; ++track) {
+            const apo::LooperTrackSettings& settings =
+                effect.looper.tracks[track];
+            SetSliderValue(g_looperVolumeSliders[track], settings.volume);
+            SendMessageW(g_looperFreeLength[track], BM_SETCHECK,
+                         settings.freeLength ? BST_CHECKED : BST_UNCHECKED, 0);
+            SendMessageW(g_looperStopAtEnd[track], BM_SETCHECK,
+                         settings.stopAtLoopEnd ? BST_CHECKED : BST_UNCHECKED,
+                         0);
+            SetWindowTextW(g_looperStateLabels[track],
+                           apo::LooperStateName(g_looperLocalStates[track]));
+        }
+    }
 
     SetWindowTextW(g_effectHeading, apo::EffectTypeName(effect.type));
     // The parameter panel is shared: hide every type first so switching to an
@@ -994,6 +1160,24 @@ bool CommitEffectEditor(bool showValues = true)
                          apo::TunerSampleSizeIndex(shown.tuner.sampleSize), 0);
             SetSliderValue(g_tunerSmoothingSlider, shown.tuner.smoothing);
             SetSliderValue(g_tunerReferenceSlider, shown.tuner.referenceHz);
+            break;
+        case apo::EffectType::Looper:
+            for (int track = 0; track < apo::kLooperTrackCount; ++track) {
+                const apo::LooperTrackSettings& trackSettings =
+                    shown.looper.tracks[track];
+                SetSliderValue(g_looperVolumeSliders[track],
+                               trackSettings.volume);
+                SendMessageW(
+                    g_looperFreeLength[track], BM_SETCHECK,
+                    trackSettings.freeLength ? BST_CHECKED : BST_UNCHECKED, 0);
+                SendMessageW(g_looperStopAtEnd[track], BM_SETCHECK,
+                             trackSettings.stopAtLoopEnd ? BST_CHECKED
+                                                         : BST_UNCHECKED,
+                             0);
+                SetWindowTextW(
+                    g_looperStateLabels[track],
+                    apo::LooperStateName(g_looperLocalStates[track]));
+            }
             break;
         default:
             break;
@@ -1160,6 +1344,29 @@ bool ParameterAtDefault(const apo::EffectInstance& effect,
     case ParamResetTunerReference:
         return SameValue(effect.tuner.referenceHz, defaults.tuner.referenceHz);
     default:
+        if (param >= ParamResetLooperVolume1 &&
+            param <= ParamResetLooperStop5)
+        {
+            const int local = param - ParamResetLooperVolume1;
+            const int track = local / 3;
+            const int kind = local % 3;
+            if (track >= 0 && track < apo::kLooperTrackCount) {
+                const apo::LooperTrackSettings& value =
+                    effect.looper.tracks[track];
+                const apo::LooperTrackSettings& initial =
+                    defaults.looper.tracks[track];
+                switch (kind) {
+                case 0:
+                    return SameValue(value.volume, initial.volume);
+                case 1:
+                    return value.freeLength == initial.freeLength;
+                case 2:
+                    return value.stopAtLoopEnd == initial.stopAtLoopEnd;
+                default:
+                    break;
+                }
+            }
+        }
         return true;
     }
 }
@@ -1399,6 +1606,33 @@ void ResetParameter(int param)
         effect.tuner.referenceHz = defaults.tuner.referenceHz;
         break;
     default:
+        if (param >= ParamResetLooperVolume1 &&
+            param <= ParamResetLooperStop5)
+        {
+            const int local = param - ParamResetLooperVolume1;
+            const int track = local / 3;
+            const int kind = local % 3;
+            if (track >= 0 && track < apo::kLooperTrackCount) {
+                apo::LooperTrackSettings& value =
+                    effect.looper.tracks[track];
+                const apo::LooperTrackSettings& initial =
+                    defaults.looper.tracks[track];
+                switch (kind) {
+                case 0:
+                    value.volume = initial.volume;
+                    break;
+                case 1:
+                    value.freeLength = initial.freeLength;
+                    break;
+                case 2:
+                    value.stopAtLoopEnd = initial.stopAtLoopEnd;
+                    break;
+                default:
+                    return;
+                }
+                break;
+            }
+        }
         return;
     }
 
@@ -1576,6 +1810,232 @@ void DoLiveApply()
                                    : L"Settings saved.");
 }
 
+// Transport requests ride in the runtime snapshot, not the durable INI file.
+// The serial changes on every gesture so the APO can consume a one-shot command
+// at a buffer boundary; a later settings-only publish carries the same serial
+// with the command already cleared and cannot replay it.
+bool PublishLooperCommand(apo::LooperCommand command, int track)
+{
+    if (g_busy || g_effectLoading || !HasEffectSelection() ||
+        g_effectType != apo::EffectType::Looper ||
+        track < 0 || track >= apo::kLooperTrackCount ||
+        command == apo::LooperCommand::None)
+    {
+        return false;
+    }
+    if (!CommitEffectEditor(false)) {
+        return false;
+    }
+
+    apo::Endpoint& endpoint = g_endpoints[g_effectIndex];
+    if (!endpoint.Enabled()) {
+        apo::ApoSettings durable = endpoint.settings;
+        apo::LooperSettings& looper =
+            apo::ActivePreset(durable).effects[g_effectSelection].looper;
+        looper.command = apo::LooperCommand::None;
+        looper.commandSerial = 0;
+        looper.commandTrack = 0;
+        if (!apo::SaveSettings(endpoint.id, durable)) {
+            SetWindowTextW(g_status, L"Could not save the settings file.");
+            return false;
+        }
+        endpoint.settings = durable;
+        endpoint.settingsDirty = false;
+        UpdateEffectsUi();
+        SetWindowTextW(g_status, L"Enable this effect to use the looper.");
+        return false;
+    }
+    if (!apo::RuntimeSettingsFileReady(endpoint.id)) {
+        SetWindowTextW(g_status, L"Apply the effect before using the looper.");
+        return false;
+    }
+
+    const ULONGLONG now = GetTickCount64();
+    g_looperCommandSerial =
+        (now > g_looperCommandSerial) ? now : g_looperCommandSerial + 1;
+    apo::ApoSettings published = endpoint.settings;
+    apo::LooperSettings& live =
+        apo::ActivePreset(published).effects[g_effectSelection].looper;
+    live.command = command;
+    live.commandTrack = track;
+    live.commandSerial = g_looperCommandSerial;
+    apo::ClampSettings(published);
+
+    if (!apo::WriteRuntimeSettings(endpoint.id, published)) {
+        SetWindowTextW(g_status, L"Could not send the looper command.");
+        return false;
+    }
+
+    apo::ApoSettings durable = published;
+    apo::LooperSettings& stored =
+        apo::ActivePreset(durable).effects[g_effectSelection].looper;
+    stored.command = apo::LooperCommand::None;
+    stored.commandSerial = 0;
+    stored.commandTrack = 0;
+    apo::ClampSettings(durable);
+
+    // Keep the serial in memory so a later settings-only publish has the same
+    // generation and cannot replay this command.
+    apo::LooperSettings& remembered =
+        apo::ActivePreset(published).effects[g_effectSelection].looper;
+    remembered.command = apo::LooperCommand::None;
+    remembered.commandTrack = 0;
+    apo::ClampSettings(published);
+    endpoint.settings = published;
+    KillTimer(g_window, kLiveApplyTimer);
+    g_liveApplyPending = false;
+    if (!apo::SaveSettings(endpoint.id, durable)) {
+        endpoint.settingsDirty = true;
+        SetWindowTextW(
+            g_status,
+            L"Looper command sent, but the settings file could not be saved.");
+    } else {
+        endpoint.settingsDirty = false;
+        SetWindowTextW(g_status, L"Looper command sent.");
+    }
+    UpdateEffectsUi();
+    return true;
+}
+
+struct LooperGestureResult
+{
+    apo::LooperCommand command = apo::LooperCommand::None;
+    apo::LooperState next = apo::LooperState::Empty;
+};
+
+LooperGestureResult ResolveLooperGesture(apo::LooperState state,
+                                         LooperGesture gesture, int track)
+{
+    const auto checked = [](HWND control) {
+        return control != nullptr &&
+               SendMessageW(control, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    };
+    const bool stopAtEnd = checked(g_looperStopAtEnd[track]);
+    const bool freeLength = checked(g_looperFreeLength[track]);
+
+    LooperGestureResult result{apo::LooperCommand::None, state};
+    switch (gesture) {
+    case LooperGesture::Tap:
+        switch (state) {
+        case apo::LooperState::Empty:
+            result.command = apo::LooperCommand::StartRecord;
+            result.next = apo::LooperState::Recording;
+            break;
+        case apo::LooperState::Recording:
+            result.command = apo::LooperCommand::FinishRecord;
+            result.next = apo::LooperState::Playback;
+            break;
+        case apo::LooperState::Playback:
+            result.command = apo::LooperCommand::StartRecord;
+            result.next = apo::LooperState::Recording;
+            break;
+        case apo::LooperState::Stopped:
+            result.command = apo::LooperCommand::Play;
+            result.next = apo::LooperState::Playback;
+            break;
+        }
+        break;
+
+    case LooperGesture::DoubleTap:
+        if (state == apo::LooperState::Stopped) {
+            result.command = apo::LooperCommand::Play;
+            result.next = apo::LooperState::Playback;
+        } else if (state == apo::LooperState::Recording ||
+                   state == apo::LooperState::Playback)
+        {
+            result.command = apo::LooperCommand::Stop;
+            const bool defer = stopAtEnd &&
+                               (state == apo::LooperState::Playback ||
+                                !freeLength);
+            result.next = defer ? state : apo::LooperState::Stopped;
+        }
+        break;
+
+    case LooperGesture::LongPress:
+        if (state == apo::LooperState::Recording) {
+            result.command = apo::LooperCommand::FinishRecord;
+            result.next = apo::LooperState::Playback;
+        } else if (state == apo::LooperState::Playback) {
+            result.command = apo::LooperCommand::Undo;
+            if (g_looperLocalUndoValid && g_looperLocalUndoTrack == track) {
+                result.next = g_looperLocalUndoState == apo::LooperState::Empty
+                                  ? apo::LooperState::Empty
+                                  : apo::LooperState::Playback;
+            }
+        } else if (state == apo::LooperState::Stopped) {
+            result.command = apo::LooperCommand::Clear;
+            result.next = apo::LooperState::Empty;
+        }
+        break;
+    }
+    return result;
+}
+
+void UpdateLooperUndoAfterCommand(apo::LooperCommand command, int track,
+                                  apo::LooperState previousState)
+{
+    if (command == apo::LooperCommand::StartRecord ||
+        command == apo::LooperCommand::StartRecordProvisional)
+    {
+        g_looperLocalUndoState = previousState;
+        g_looperLocalUndoTrack = track;
+        g_looperLocalUndoValid = true;
+    } else if (command == apo::LooperCommand::Undo ||
+               (command == apo::LooperCommand::Clear &&
+                g_looperLocalUndoTrack == track))
+    {
+        g_looperLocalUndoValid = false;
+        g_looperLocalUndoTrack = -1;
+    }
+}
+
+void ApplyLooperGesture(int track, LooperGesture gesture)
+{
+    if (g_busy || g_effectLoading || !HasEffectSelection() ||
+        g_effectType != apo::EffectType::Looper ||
+        track < 0 || track >= apo::kLooperTrackCount)
+    {
+        return;
+    }
+
+    EnsureLooperLocalStates(g_endpoints[g_effectIndex],
+                            apo::ActivePreset(g_endpoints[g_effectIndex].settings)
+                                .effects[g_effectSelection]
+                                .id);
+    const apo::LooperState state = g_looperLocalStates[track];
+    const LooperGestureResult result = ResolveLooperGesture(state, gesture, track);
+    if (result.command == apo::LooperCommand::None ||
+        !PublishLooperCommand(result.command, track))
+    {
+        return;
+    }
+
+    UpdateLooperUndoAfterCommand(result.command, track, state);
+    SetLooperLocalState(track, result.next);
+}
+
+// Keyboard presses start a take before the double-tap window closes. If the
+// gesture later resolves as a double tap or long press, the APO discards that
+// provisional take before applying the real command, so this local state must
+// be calculated from the state the gesture started from.
+void ApplyLooperGestureFromState(int track, apo::LooperState originalState,
+                                 LooperGesture gesture)
+{
+    const LooperGestureResult result =
+        ResolveLooperGesture(originalState, gesture, track);
+    const apo::LooperCommand command =
+        result.command == apo::LooperCommand::None
+            ? apo::LooperCommand::DiscardProvisional
+            : result.command;
+    if (!PublishLooperCommand(command, track)) {
+        return;
+    }
+    if (result.command != apo::LooperCommand::None) {
+        UpdateLooperUndoAfterCommand(result.command, track, originalState);
+    }
+    SetLooperLocalState(track, result.next);
+}
+
 // ---------------------------------------------------------------------------
 // Meter and audition
 // ---------------------------------------------------------------------------
@@ -1662,16 +2122,41 @@ void PollStageMonitor()
     if (g_effectGraph == nullptr) {
         return;
     }
-    if (g_busy || !ValidEffectIndex() || !HasEffectSelection() ||
-        !g_endpoints[g_effectIndex].Enabled()) {
+    const bool unavailable = !ValidEffectIndex() || !HasEffectSelection() ||
+                             !g_endpoints[g_effectIndex].Enabled();
+    if (g_busy || unavailable) {
         g_stageMonitor.Close();
         ui::ClearGraphMonitor(g_effectGraph);
+        if (unavailable) {
+            // A disabled/unbound endpoint has no live DSP state. Noise capture
+            // and other busy work do not: those keep the generation baseline.
+            g_looperMonitorMissingSince = 0;
+            g_lastLooperMonitorGeneration = 0;
+            g_lastLooperMonitorEndpointId.clear();
+            ResetLooperLocalStates();
+        }
         return;
     }
 
     const apo::Endpoint& endpoint = g_endpoints[g_effectIndex];
+    if (g_lastLooperMonitorEndpointId != endpoint.id) {
+        g_lastLooperMonitorEndpointId = endpoint.id;
+        g_lastLooperMonitorGeneration = 0;
+        g_looperMonitorMissingSince = 0;
+    }
     if (g_stageMonitor.EndpointId() != endpoint.id) {
         g_stageMonitor.Open(endpoint.id, false);
+    }
+
+    // The APO publishes a new generation each time it locks for a new stream.
+    // Takes are now restored from the Looper bank, so cancel any half-finished
+    // gesture but let the snapshot below publish the real restored states.
+    // Settings-only applies keep the same generation and same state.
+    const ULONG generation = g_stageMonitor.Generation();
+    if (generation != 0 && generation != g_lastLooperMonitorGeneration) {
+        g_lastLooperMonitorGeneration = generation;
+        g_looperMonitorMissingSince = 0;
+        CancelLooperKeyGestures();
     }
 
     const apo::EffectInstance& effect =
@@ -1679,9 +2164,30 @@ void PollStageMonitor()
     apo::StageMonitorSnapshot snapshot;
     if (g_stageMonitor.EndpointId() == endpoint.id &&
         g_stageMonitor.Find(effect.id, effect.type, snapshot)) {
+        g_looperMonitorMissingSince = 0;
+        if (effect.type == apo::EffectType::Looper) {
+            for (int track = 0; track < apo::kLooperTrackCount; ++track) {
+                const int value = snapshot.looperStates[track];
+                if (value >= static_cast<int>(apo::LooperState::Empty) &&
+                    value <= static_cast<int>(apo::LooperState::Stopped))
+                {
+                    SetLooperLocalState(
+                        track, static_cast<apo::LooperState>(value));
+                }
+            }
+        }
         ui::SetGraphMonitor(g_effectGraph, snapshot);
     } else {
         ui::ClearGraphMonitor(g_effectGraph);
+        // A missing monitor can also mean the APO died without publishing a
+        // new generation. Treat a sustained absence as a real restart, but
+        // tolerate a short gap while the audio engine settles.
+        const DWORD now = GetTickCount();
+        if (g_looperMonitorMissingSince == 0) {
+            g_looperMonitorMissingSince = now;
+        } else if (now - g_looperMonitorMissingSince >= 1000) {
+            ResetLooperLocalStates();
+        }
     }
 }
 
@@ -1694,6 +2200,7 @@ bool IsListening()
 
 void StopListening()
 {
+    apo::LogListenEvent(L"StopListening requested");
     KillTimer(g_window, kMonitorTimer);
     if (g_listen != nullptr) {
         SendMessageW(g_listen, BM_SETCHECK, BST_UNCHECKED, 0);
@@ -1708,8 +2215,12 @@ bool StartListening()
         return false;
     }
 
+    apo::LogListenEvent(L"StartListening requested for " +
+                        g_endpoints[g_effectIndex].id);
     const std::wstring error =
         apo::StartMonitor(g_endpoints[g_effectIndex].id);
+    apo::LogListenEvent(error.empty() ? L"StartListening succeeded"
+                                      : (L"StartListening failed: " + error));
     if (!error.empty()) {
         SendMessageW(g_listen, BM_SETCHECK, BST_UNCHECKED, 0);
         ResetMeter();
@@ -1922,6 +2433,9 @@ void CheckForExternalChanges()
         return;
     }
 
+    // A device enable/disable or binding change rebuilds the APO chain. Drop
+    // optimistic labels now; the restored bank will confirm the real states.
+    ResetLooperLocalStates();
     g_preserveDirtyEffects = true;
     Refresh();
 }
@@ -1990,6 +2504,7 @@ void StartApply(std::vector<apo::Change> changes, const wchar_t* status)
 
     if (restart) {
         StopListening();
+        ResetLooperLocalStates();
     }
     g_resumeListen = wasListening && !listenId.empty();
     g_resumeListenId = g_resumeListen ? listenId : std::wstring();
@@ -2082,6 +2597,7 @@ void DoEnable(bool enable)
     // A binding change is not a settings-only apply, so do not bring the
     // audition stream back afterwards.
     StopListening();
+    ResetLooperLocalStates();
     g_resumeListen = false;
     g_resumeListenId.clear();
 
@@ -2537,6 +3053,14 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         return result;
     }
 
+    case WM_ACTIVATE:
+        // A key released after the window loses focus would otherwise fire a
+        // stale tap or long press.
+        if (LOWORD(wParam) == WA_INACTIVE) {
+            CancelLooperKeyGestures();
+        }
+        return 0;
+
     case WM_NCPAINT: {
         LRESULT result = DefWindowProcW(window, message, wParam, lParam);
         PaintMenuDivider(window);
@@ -2632,6 +3156,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             return TRUE;
         }
         break;
+
+    case kLooperGestureMessage:
+        ApplyLooperGesture(static_cast<int>(wParam),
+                           static_cast<LooperGesture>(lParam));
+        return 0;
 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
@@ -2768,9 +3297,36 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         case IDC_DIST_OUTPUT_SLIDER:
         case IDC_TUNER_SMOOTHING_SLIDER:
         case IDC_TUNER_REFERENCE_SLIDER:
+        case IDC_LOOPER_VOLUME_1:
+        case IDC_LOOPER_VOLUME_2:
+        case IDC_LOOPER_VOLUME_3:
+        case IDC_LOOPER_VOLUME_4:
+        case IDC_LOOPER_VOLUME_5:
             if (ui::IsSliderChange(HIWORD(wParam))) {
                 MarkSettingsDirty();
             }
+            break;
+        case IDC_LOOPER_FREE_LENGTH_1:
+        case IDC_LOOPER_FREE_LENGTH_2:
+        case IDC_LOOPER_FREE_LENGTH_3:
+        case IDC_LOOPER_FREE_LENGTH_4:
+        case IDC_LOOPER_FREE_LENGTH_5:
+        case IDC_LOOPER_STOP_END_1:
+        case IDC_LOOPER_STOP_END_2:
+        case IDC_LOOPER_STOP_END_3:
+        case IDC_LOOPER_STOP_END_4:
+        case IDC_LOOPER_STOP_END_5:
+            // The button's own BN_CLICKED is ignored; gestures are delivered as
+            // kLooperGestureMessage by the subclass.
+            if (HIWORD(wParam) == BN_CLICKED) {
+                MarkSettingsDirty();
+            }
+            break;
+        case IDC_LOOPER_BUTTON_1:
+        case IDC_LOOPER_BUTTON_2:
+        case IDC_LOOPER_BUTTON_3:
+        case IDC_LOOPER_BUTTON_4:
+        case IDC_LOOPER_BUTTON_5:
             break;
         case IDC_NOISE_CAPTURE:
             if (HIWORD(wParam) == BN_CLICKED) {
@@ -2862,6 +3418,16 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
             CheckForExternalChanges();
         } else if (wParam == kRefreshTimer) {
             CheckForExternalChanges();
+        } else if (wParam >= kLooperKeyLongPressBase &&
+                   wParam < kLooperKeyLongPressBase + apo::kLooperTrackCount)
+        {
+            HandleLooperKeyTimer(
+                static_cast<int>(wParam - kLooperKeyLongPressBase), true);
+        } else if (wParam >= kLooperKeyTapBase &&
+                   wParam < kLooperKeyTapBase + apo::kLooperTrackCount)
+        {
+            HandleLooperKeyTimer(
+                static_cast<int>(wParam - kLooperKeyTapBase), false);
         } else if (wParam == kStageMonitorTimer) {
             PollStageMonitor();
         }
@@ -2893,6 +3459,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         KillTimer(window, kRefreshTimer);
         KillTimer(window, kDeviceChangeTimer);
         KillTimer(window, kStageMonitorTimer);
+        for (int track = 0; track < apo::kLooperTrackCount; ++track) {
+            KillTimer(window, kLooperKeyLongPressBase + track);
+            KillTimer(window, kLooperKeyTapBase + track);
+        }
+        CancelLooperKeyGestures();
         g_liveApplyPending = false;
         g_stageMonitor.Close();
         apo::StopMonitor();
@@ -2909,6 +3480,267 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
         return DefWindowProcW(window, message, wParam, lParam);
     }
     return 0;
+}
+
+bool AnyComboDropped(std::initializer_list<HWND> combos)
+{
+    for (HWND combo : combos) {
+        if (combo != nullptr && IsWindow(combo) &&
+            SendMessageW(combo, CB_GETDROPPEDSTATE, 0, 0) != 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Keyboard shortcuts act only while Looper is the selected effect. A drop-down
+// keeps its normal keyboard handling, and modifier keys stay available for menu
+// and system shortcuts.
+int LooperKeyTrack(const MSG& message)
+{
+    switch (message.wParam) {
+    case '1': return 0;
+    case '2': return 1;
+    case '3': return 2;
+    case '4': return 3;
+    case VK_SPACE: return 4;
+    default: return -1;
+    }
+}
+
+bool LooperKeyboardReady()
+{
+    return !g_busy && !g_effectLoading && HasEffectSelection() &&
+           g_effectType == apo::EffectType::Looper &&
+           !AnyComboDropped({
+               g_effectDeviceCombo, g_effectPresetCombo, g_noiseFftSizeCombo,
+               g_eqDynamicCombo, g_distFunctionCombo, g_reverbAlgorithmCombo,
+               g_echoModeCombo, g_tremoloWaveformCombo, g_vibratoWaveformCombo,
+               g_pitchAlgorithmCombo, g_tunerAlgorithmCombo,
+               g_tunerSampleSizeCombo});
+}
+
+void HandleLooperKeyTimer(int track, bool longTimer)
+{
+    if (track < 0 || track >= apo::kLooperTrackCount) {
+        return;
+    }
+    LooperKeyGestureState& state = g_looperKeyGestures[track];
+    if (longTimer) {
+        if (!state.down || state.longFired || state.consumed ||
+            state.timerGeneration != state.generation)
+        {
+            return;
+        }
+        ++state.generation;
+        state.timerGeneration = state.generation;
+        state.longFired = true;
+        state.tapPending = false;
+        state.lastTapTick = 0;
+        KillTimer(g_window, kLooperKeyLongPressBase + track);
+        KillTimer(g_window, kLooperKeyTapBase + track);
+        if (state.provisional && !state.provisionalFinish) {
+            ApplyLooperGestureFromState(track, state.originalState,
+                                        LooperGesture::LongPress);
+        } else if (!state.provisional) {
+            ApplyLooperGesture(track, LooperGesture::LongPress);
+        }
+        // A provisional finish already did the long-press action.
+        state.provisional = false;
+        state.provisionalFinish = false;
+        return;
+    }
+
+    if (!state.tapPending || state.timerGeneration != state.generation) {
+        return;
+    }
+    ++state.generation;
+    state.timerGeneration = state.generation;
+    state.tapPending = false;
+    state.lastTapTick = 0;
+    if (state.provisional && !state.provisionalFinish) {
+        // The press was a tap: keep the recording that already started and
+        // make its undo snapshot authoritative.
+        if (PublishLooperCommand(apo::LooperCommand::CommitProvisional, track)) {
+            UpdateLooperUndoAfterCommand(
+                apo::LooperCommand::StartRecordProvisional, track,
+                state.originalState);
+        }
+    } else if (!state.provisional) {
+        ApplyLooperGesture(track, LooperGesture::Tap);
+    }
+    // A provisional finish was already committed on the keydown.
+    state.provisional = false;
+    state.provisionalFinish = false;
+}
+
+bool HandleLooperKeyboard(const MSG& message)
+{
+    if (message.message != WM_KEYDOWN && message.message != WM_KEYUP) {
+        return false;
+    }
+
+    const int track = LooperKeyTrack(message);
+    if (track < 0) {
+        return false;
+    }
+    if (!LooperKeyboardReady()) {
+        CancelLooperKeyGestures();
+        return false;
+    }
+
+    EnsureLooperLocalStates(g_endpoints[g_effectIndex],
+                            apo::ActivePreset(g_endpoints[g_effectIndex].settings)
+                                .effects[g_effectSelection]
+                                .id);
+    LooperKeyGestureState& state = g_looperKeyGestures[track];
+    if (message.message == WM_KEYDOWN) {
+        constexpr DWORD_PTR kRepeatMask = DWORD_PTR{1} << 30;
+        if (GetKeyState(VK_CONTROL) < 0 || GetKeyState(VK_MENU) < 0 ||
+            GetKeyState(VK_SHIFT) < 0)
+        {
+            CancelLooperKeyGestures();
+            return false;
+        }
+        if ((static_cast<DWORD_PTR>(message.lParam) & kRepeatMask) != 0) {
+            // Auto-repeat must not turn a held key into repeated taps.
+            return true;
+        }
+        if (state.down) {
+            return true;
+        }
+
+        const DWORD now = GetTickCount();
+        KillTimer(g_window, kLooperKeyLongPressBase + track);
+        KillTimer(g_window, kLooperKeyTapBase + track);
+        ++state.generation;
+        state.timerGeneration = state.generation;
+        state.down = true;
+        state.downTick = now;
+        state.longFired = false;
+
+        if (state.tapPending && state.lastTapTick != 0 &&
+            now - state.lastTapTick <= kLooperDoubleTapMs)
+        {
+            state.consumed = true;
+            state.tapPending = false;
+            state.lastTapTick = 0;
+            if (state.provisional) {
+                // An immediate finish already moved the track to Playback;
+                // treat the double tap from there, not from the pre-finish
+                // Recording state, so Stop at loop end resolves correctly.
+                const apo::LooperState gestureState =
+                    state.provisionalFinish ? g_looperLocalStates[track]
+                                            : state.originalState;
+                ApplyLooperGestureFromState(track, gestureState,
+                                            LooperGesture::DoubleTap);
+            } else {
+                ApplyLooperGesture(track, LooperGesture::DoubleTap);
+            }
+            state.provisional = false;
+            state.provisionalFinish = false;
+            return true;
+        }
+
+        state.consumed = false;
+        state.tapPending = false;
+        state.lastTapTick = 0;
+
+        // Keyboard start and finish must not wait for the double-tap window;
+        // sending them on keydown keeps the loop boundary aligned with the
+        // press. A later double tap or long press still overrides a new take.
+        const apo::LooperState current = g_looperLocalStates[track];
+        if (current == apo::LooperState::Empty ||
+            current == apo::LooperState::Playback)
+        {
+            if (PublishLooperCommand(apo::LooperCommand::StartRecordProvisional,
+                                     track))
+            {
+                state.provisional = true;
+                state.provisionalFinish = false;
+                state.originalState = current;
+                state.originalUndoValid = g_looperLocalUndoValid;
+                state.originalUndoTrack = g_looperLocalUndoTrack;
+                state.originalUndoState = g_looperLocalUndoState;
+                SetLooperLocalState(track, apo::LooperState::Recording);
+            } else {
+                state.consumed = true;
+                return true;
+            }
+        } else if (current == apo::LooperState::Recording) {
+            // Finish the take on keydown so the loop boundary is not pushed
+            // 250 ms later by the double-tap window. A later double tap still
+            // sends Stop; a long press already means FinishRecord.
+            if (PublishLooperCommand(apo::LooperCommand::FinishRecord, track)) {
+                state.provisional = true;
+                state.provisionalFinish = true;
+                state.originalState = current;
+                SetLooperLocalState(track, apo::LooperState::Playback);
+            } else {
+                state.consumed = true;
+                return true;
+            }
+        } else {
+            state.provisional = false;
+            state.provisionalFinish = false;
+        }
+
+        SetTimer(g_window, kLooperKeyLongPressBase + track,
+                 kLooperLongPressMs, nullptr);
+        return true;
+    }
+
+    if (!state.down) {
+        return false;
+    }
+    state.down = false;
+    KillTimer(g_window, kLooperKeyLongPressBase + track);
+
+    if (state.consumed) {
+        state.consumed = false;
+        state.tapPending = false;
+        state.lastTapTick = 0;
+        ++state.generation;
+        return true;
+    }
+    if (state.longFired) {
+        state.longFired = false;
+        state.tapPending = false;
+        state.lastTapTick = 0;
+        ++state.generation;
+        return true;
+    }
+
+    const DWORD now = GetTickCount();
+    const DWORD held = now - state.downTick;
+    state.timerGeneration = state.generation;
+    if (held >= kLooperLongPressMs) {
+        ++state.generation;
+        state.lastTapTick = 0;
+        if (state.provisional && !state.provisionalFinish) {
+            ApplyLooperGestureFromState(track, state.originalState,
+                                        LooperGesture::LongPress);
+        } else if (!state.provisional) {
+            ApplyLooperGesture(track, LooperGesture::LongPress);
+        }
+        // A provisional finish already did the long-press action.
+        state.provisional = false;
+        state.provisionalFinish = false;
+        return true;
+    }
+    // A provisional take has already started, so a release before the long
+    // press threshold is a tap regardless of the 400 ms tap-max guideline.
+    if (state.provisional || held < kLooperTapMaxMs) {
+        state.tapPending = true;
+        state.lastTapTick = now;
+        SetTimer(g_window, kLooperKeyTapBase + track, kLooperDoubleTapMs,
+                 nullptr);
+    } else {
+        state.tapPending = false;
+        state.lastTapTick = 0;
+    }
+    return true;
 }
 
 std::wstring DescribeEffectList(const apo::ApoSettings& settings)
@@ -3099,6 +3931,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show)
 
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+        if (HandleLooperKeyboard(message)) {
+            continue;
+        }
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }

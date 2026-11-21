@@ -87,7 +87,7 @@ public:
 private:
     static bool IsSupportedFormat(const UNCOMPRESSEDAUDIOFORMAT& format);
 
-    void ConfigureDsp();
+    void ConfigureDsp(const std::wstring& endpointId);
     void ProcessBuffer(const BYTE* source, BYTE* destination, UINT32 frames,
                        apo::StageMonitorSink* monitor);
 

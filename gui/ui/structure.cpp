@@ -7,6 +7,7 @@
 #include "widgets.h"
 
 #include <commctrl.h>
+#include <windowsx.h>
 
 #include <algorithm>
 #include <iterator>
@@ -187,6 +188,174 @@ void PlaceInfoIcon(HWND icon, HWND textControl, int x, int y, int iconSize,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
+constexpr UINT_PTR kLooperGestureSubclassId = 6;
+constexpr UINT_PTR kLooperLongPressTimer = 1;
+constexpr UINT_PTR kLooperSingleTapTimer = 2;
+
+struct LooperGestureState
+{
+    bool active = false;
+    bool longFired = false;
+    bool consumed = false;
+    bool tapPending = false;
+    DWORD downTick = 0;
+    DWORD lastTapTick = 0;
+    // Every new press invalidates the previous press's timers. A delayed
+    // WM_TIMER can then never deliver a stale Tap after a DoubleTap or hold.
+    unsigned generation = 0;
+    unsigned timerGeneration = 0;
+};
+
+LooperGestureState g_looperGestures[apo::kLooperTrackCount];
+
+LRESULT CALLBACK LooperGestureProc(HWND window, UINT message, WPARAM wParam,
+                                   LPARAM lParam, UINT_PTR, DWORD_PTR ref)
+{
+    const int track = static_cast<int>(ref);
+    if (track < 0 || track >= apo::kLooperTrackCount) {
+        return DefSubclassProc(window, message, wParam, lParam);
+    }
+    LooperGestureState& state = g_looperGestures[track];
+    const auto post = [track](LooperGesture gesture) {
+        PostMessageW(g_window, kLooperGestureMessage,
+                     static_cast<WPARAM>(track),
+                     static_cast<LPARAM>(gesture));
+    };
+
+    switch (message) {
+    case WM_LBUTTONDOWN: {
+        const DWORD now = GetTickCount();
+        // Decide on the second press, not its release, so a pending single tap
+        // cannot fire first.
+        if (state.tapPending && state.lastTapTick != 0 &&
+            now - state.lastTapTick <= kLooperDoubleTapMs)
+        {
+            KillTimer(window, kLooperSingleTapTimer);
+            KillTimer(window, kLooperLongPressTimer);
+            ++state.generation;
+            state.timerGeneration = state.generation;
+            state.active = true;
+            state.consumed = true;
+            state.longFired = false;
+            state.tapPending = false;
+            state.lastTapTick = 0;
+            state.downTick = now;
+            SetCapture(window);
+            post(LooperGesture::DoubleTap);
+            return 0;
+        }
+
+        KillTimer(window, kLooperSingleTapTimer);
+        KillTimer(window, kLooperLongPressTimer);
+        ++state.generation;
+        state.timerGeneration = state.generation;
+        state.active = true;
+        state.consumed = false;
+        state.longFired = false;
+        state.tapPending = false;
+        state.lastTapTick = 0;
+        state.downTick = now;
+        SetTimer(window, kLooperLongPressTimer, kLooperLongPressMs, nullptr);
+        SetCapture(window);
+        return 0;
+    }
+
+    case WM_TIMER:
+        if (wParam == kLooperLongPressTimer && state.active &&
+            !state.consumed && !state.longFired &&
+            state.timerGeneration == state.generation)
+        {
+            ++state.generation;
+            state.timerGeneration = state.generation;
+            state.longFired = true;
+            state.tapPending = false;
+            state.lastTapTick = 0;
+            KillTimer(window, kLooperLongPressTimer);
+            KillTimer(window, kLooperSingleTapTimer);
+            post(LooperGesture::LongPress);
+            return 0;
+        }
+        if (wParam == kLooperSingleTapTimer && state.tapPending &&
+            state.timerGeneration == state.generation)
+        {
+            ++state.generation;
+            state.timerGeneration = state.generation;
+            state.tapPending = false;
+            state.lastTapTick = 0;
+            post(LooperGesture::Tap);
+            return 0;
+        }
+        break;
+
+    case WM_CANCELMODE:
+        KillTimer(window, kLooperLongPressTimer);
+        KillTimer(window, kLooperSingleTapTimer);
+        ++state.generation;
+        state.timerGeneration = state.generation;
+        state.active = false;
+        state.consumed = false;
+        state.longFired = false;
+        state.tapPending = false;
+        state.lastTapTick = 0;
+        if (GetCapture() == window) {
+            ReleaseCapture();
+        }
+        break;
+
+    case WM_LBUTTONUP: {
+        if (!state.active) {
+            break;
+        }
+        state.active = false;
+        if (GetCapture() == window) {
+            ReleaseCapture();
+        }
+        KillTimer(window, kLooperLongPressTimer);
+
+        if (state.consumed) {
+            state.consumed = false;
+            state.tapPending = false;
+            state.lastTapTick = 0;
+            ++state.generation;
+            return 0;
+        }
+        if (state.longFired) {
+            state.longFired = false;
+            state.tapPending = false;
+            state.lastTapTick = 0;
+            ++state.generation;
+            return 0;
+        }
+
+        const DWORD now = GetTickCount();
+        const DWORD held = now - state.downTick;
+        state.timerGeneration = state.generation;
+        if (held >= kLooperLongPressMs) {
+            ++state.generation;
+            state.lastTapTick = 0;
+            post(LooperGesture::LongPress);
+            return 0;
+        }
+        if (held < kLooperTapMaxMs) {
+            state.tapPending = true;
+            state.lastTapTick = now;
+            // Delay the single tap just long enough for a second press to win.
+            SetTimer(window, kLooperSingleTapTimer, kLooperDoubleTapMs,
+                     nullptr);
+        } else {
+            state.tapPending = false;
+            state.lastTapTick = 0;
+        }
+        return 0;
+    }
+
+    default:
+        break;
+    }
+
+    return DefSubclassProc(window, message, wParam, lParam);
+}
+
 void CreateParamResetButtons(HWND parent)
 {
     for (int param = 0; param < ParamResetCount; ++param) {
@@ -244,14 +413,17 @@ void LayoutEffectParams(int x, int y, int width)
     const int controlHeight = Scale(26);
     const int rowStep = Scale(32);
 
-    auto placeReset = [&](int param, int columnX, int rowY) {
+    auto placeResetAt = [&](int param, int columnX, int rowY, int columnW) {
         if (param < 0 || param >= ParamResetCount) {
             return;
         }
         HWND button = g_paramResetButtons[param];
-        MoveWindow(button, columnX + columnWidth - resetWidth, rowY,
-                   resetWidth, controlHeight, TRUE);
+        MoveWindow(button, columnX + columnW - resetWidth, rowY, resetWidth,
+                   controlHeight, TRUE);
         ShowWindow(button, SW_SHOW);
+    };
+    auto placeReset = [&](int param, int columnX, int rowY) {
+        placeResetAt(param, columnX, rowY, columnWidth);
     };
 
     const int iconSize = Scale(16);
@@ -465,6 +637,64 @@ void LayoutEffectParams(int x, int y, int width)
         y += rowStep;
         placePair(g_pitchDryLevelLabel, g_pitchDryLevelSlider,
                   ParamResetPitchDryLevel, nullptr, nullptr, 0);
+        break;
+    }
+    case apo::EffectType::Looper: {
+        const int gap = Scale(6);
+        const int looperRowStep = Scale(34);
+        const int buttonWidth = Scale(52);
+        const int stateWidth = Scale(76);
+        const int volumeLabelWidth = Scale(34);
+        const int extra = std::max(0, width - Scale(572));
+        const int volumeSliderWidth = Scale(90) + extra / 3;
+        const int freeWidth = Scale(96) + extra / 3;
+        const int stopWidth = Scale(116) + extra / 3;
+        const int volumeAreaWidth =
+            volumeLabelWidth + volumeSliderWidth + resetWidth + resetGap;
+        const int freeAreaWidth = freeWidth + resetWidth + resetGap;
+        const int stopAreaWidth = stopWidth + resetWidth + resetGap;
+
+        int cursor = x;
+        MoveWindow(g_looperHeaderTrack, cursor, y, buttonWidth, Scale(20),
+                   TRUE);
+        cursor += buttonWidth + gap;
+        MoveWindow(g_looperHeaderState, cursor, y, stateWidth, Scale(20), TRUE);
+        cursor += stateWidth + gap;
+        MoveWindow(g_looperHeaderVolume, cursor, y, volumeAreaWidth, Scale(20),
+                   TRUE);
+        cursor += volumeAreaWidth + gap;
+        MoveWindow(g_looperHeaderFree, cursor, y, freeAreaWidth, Scale(20),
+                   TRUE);
+        cursor += freeAreaWidth + gap;
+        MoveWindow(g_looperHeaderStop, cursor, y, stopAreaWidth, Scale(20),
+                   TRUE);
+
+        int rowY = y + Scale(24);
+        for (int track = 0; track < apo::kLooperTrackCount; ++track) {
+            cursor = x;
+            MoveWindow(g_looperButtons[track], cursor, rowY, buttonWidth,
+                       controlHeight, TRUE);
+            cursor += buttonWidth + gap;
+            MoveWindow(g_looperStateLabels[track], cursor, rowY, stateWidth,
+                       controlHeight, TRUE);
+            cursor += stateWidth + gap;
+            MoveWindow(g_looperVolumeSliders[track], cursor, rowY,
+                       volumeSliderWidth, controlHeight, TRUE);
+            placeResetAt(ParamResetLooperVolume1 + track * 3, cursor, rowY,
+                         volumeAreaWidth);
+            cursor += volumeAreaWidth + gap;
+            MoveWindow(g_looperFreeLength[track], cursor, rowY, freeWidth,
+                       controlHeight, TRUE);
+            placeResetAt(ParamResetLooperFree1 + track * 3, cursor, rowY,
+                         freeAreaWidth);
+            cursor += freeAreaWidth + gap;
+            MoveWindow(g_looperStopAtEnd[track], cursor, rowY, stopWidth,
+                       controlHeight, TRUE);
+            placeResetAt(ParamResetLooperStop1 + track * 3, cursor, rowY,
+                         stopAreaWidth);
+            rowY += looperRowStep;
+        }
+        MoveWindow(g_looperNote, x, rowY, width, Scale(40), TRUE);
         break;
     }
     case apo::EffectType::Tuner: {
@@ -1008,6 +1238,62 @@ void CreateControls(HWND root)
         window, IDC_TUNER_REFERENCE_SLIDER,
         {apo::kTunerMinReferenceHz, apo::kTunerMaxReferenceHz, 0.1, false, 1});
 
+    g_looperHeaderTrack =
+        ui::Label(window, IDC_LOOPER_HEADER_TRACK, L"Key");
+    g_looperHeaderState =
+        ui::Label(window, IDC_LOOPER_HEADER_STATE, L"State");
+    g_looperHeaderVolume =
+        ui::Label(window, IDC_LOOPER_HEADER_VOLUME, L"Volume");
+    g_looperHeaderFree =
+        ui::Label(window, IDC_LOOPER_HEADER_FREE, L"Free length");
+    g_looperHeaderStop =
+        ui::Label(window, IDC_LOOPER_HEADER_STOP, L"Stop at loop end");
+    for (int track = 0; track < apo::kLooperTrackCount; ++track) {
+        const wchar_t* key = L"?";
+        if (track == 0) {
+            key = L"1";
+        } else if (track == 1) {
+            key = L"2";
+        } else if (track == 2) {
+            key = L"3";
+        } else if (track == 3) {
+            key = L"4";
+        } else if (track == 4) {
+            key = L"Space";
+        }
+
+        HWND button =
+            ui::Button(window, IDC_LOOPER_BUTTON_1 + track, key);
+        SetWindowSubclass(button, LooperGestureProc,
+                          kLooperGestureSubclassId,
+                          static_cast<DWORD_PTR>(track));
+        g_looperButtons[track] = button;
+        g_looperStateLabels[track] = ui::Label(
+            window, IDC_LOOPER_STATE_1 + track, L"Empty", SS_CENTER);
+        g_looperVolumeSliders[track] = ui::Slider(
+            window, IDC_LOOPER_VOLUME_1 + track,
+            {0.0, 100.0, 1.0, false, 0});
+        g_looperFreeLength[track] = ui::CheckBox(
+            window, IDC_LOOPER_FREE_LENGTH_1 + track, L"Free length");
+        g_looperStopAtEnd[track] = ui::CheckBox(
+            window, IDC_LOOPER_STOP_END_1 + track, L"Stop at loop end");
+    }
+    g_looperNote = ui::Label(
+        window, IDC_LOOPER_NOTE,
+        L"Tap: record / finish / overdub. Recording wraps and layers. "
+        L"Double tap: stop. Long press: undo / clear.");
+
+    AddTooltip(g_looperFreeLength[0],
+               L"Keep the exact recorded length; otherwise this track snaps "
+               L"to a multiple of the first synced take.");
+    AddTooltip(g_looperStopAtEnd[0],
+               L"Defer a double-tap stop until this loop reaches its end.");
+    AddTooltip(g_looperNote,
+               L"Tap under ~400 ms. Press twice within ~250 ms for a double "
+               L"tap, or hold about 600 ms. Keys 1-4 and Space start or finish "
+               L"a take on the first press; a later double tap stops, and "
+               L"holding a provisional start discards it. Takes are saved per device and restored after audio restarts and GUI reopen.");
+
     g_listen = ui::CheckBox(window, IDC_LISTEN, L"Listen to this device");
 
     CreateParamResetButtons(window);
@@ -1049,6 +1335,16 @@ void DestroyInfoIcons()
         if (icon != nullptr) {
             RemoveWindowSubclass(icon, InfoIconProc, kInfoIconSubclassId);
         }
+    }
+    for (int track = 0; track < apo::kLooperTrackCount; ++track) {
+        HWND button = g_looperButtons[track];
+        if (button != nullptr) {
+            KillTimer(button, kLooperLongPressTimer);
+            KillTimer(button, kLooperSingleTapTimer);
+            RemoveWindowSubclass(button, LooperGestureProc,
+                                 kLooperGestureSubclassId);
+        }
+        g_looperGestures[track] = LooperGestureState{};
     }
 }
 

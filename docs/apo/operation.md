@@ -57,7 +57,7 @@ All of these happen once per stream bind; none happen in `APOProcess`.
 | --- | --- | --- |
 | `BetterMicroApo` | `m_scratch` | `maxFrames * channels` `double`s. The interleaved input is decoded here, stages run in place, and the result is encoded to the output. |
 | `Chain` | `m_stages` | Reserves `kMaxEffects + 2` (18) `Stage*` slots and monitor bindings at construction so the temporary capture tap never allocates; `Clear`/refill never allocates. |
-| `StagePool` | stage objects | One stage per possible slot per type, `Configure`d once. Input allows 1, heavy types (noise, gate/expander, compressor/limiter, reverb, echo, chorus, pitch shifter, tuner) allow 4, and other addable types — including Tremolo and Vibrato — allow 16. Noise stages are always created and pass audio through until a profile is available. |
+| `StagePool` | stage objects | One stage per possible slot per type, `Configure`d once. Looper's single large stage is created only when its type is present. Input and Looper allow 1, heavy types (noise, gate/expander, compressor/limiter, reverb, echo, chorus, pitch shifter, tuner) allow 4, and other addable types — including Tremolo and Vibrato — allow 16. Noise stages are always created and pass audio through until a profile is available. |
 | `DynamicsStage` | `m_delay` | `ceil(300 ms * sampleRate) * channels` `double`s, sized for the maximum clamp so a live lookahead change never allocates. |
 | `EqualizerStage` | `m_ic1`, `m_ic2`, `m_band` | Per-channel filter and band state. |
 | `NoiseStage` | FFT plans + analysis buffers | Radix-2 tables and windows for every supported size (256–4096), profile bins, gain arrays, input/output/history/overlap-add and real/imag arrays sized for the largest size. `Update` switches the active size without allocating. |
@@ -68,9 +68,10 @@ All of these happen once per stream bind; none happen in `APOProcess`.
 | `VibratoStage` | delay buffers | One circular buffer per channel sized for the deepest Depth at the slowest Rate, about 83,000 frames at 48 kHz, plus per-channel LFO and integrated-pitch state. |
 | `PitchShifterStage` | histories + FFT plans | Per channel: `6 * 16384 + 8` grain-history samples and `2 * 16384 + 8` vocoder input/overlap samples with separate analysis/synthesis phase, magnitude, weighted target-bin, and phase-lock accumulators; shared radix-2 plans and Hann windows for FFT sizes 512–16384. |
 | `TunerStage` | analysis + smoothing buffers + FFT plans | Mono, decimated, lag, and FFT arrays for the largest sample size, a plan for every supported size, and a time-stamped cents ring sized for the 2-second maximum smoothing window. `Process` writes only telemetry, never samples. |
+| `LooperStage` | five track buffers + one undo bank + two provisional snapshots | `ceil(120 s * sampleRate) * channels` `float`s each, about 352 MiB total at 48 kHz stereo. Allocated only when the preset uses Looper; one instance per pool. `Process` adds playing returns to the dry input and snapshots the input before any loop is mixed in. |
 | `BetterMicroApo` | runtime file mapping | A read-only `MapViewOfFile` of `runtime\{endpoint-guid}.dat`, closed in `UnlockForProcess`. |
 | `BetterMicroApo` | capture mapping and tap | A read/write mapping of `runtime\{endpoint-guid}.capture` plus one configured `StageCaptureTap`, both closed in `UnlockForProcess`. |
-| `BetterMicroApo` | stage-monitor mapping | A read/write mapping of `runtime\{endpoint-guid}.monitor`, one shared 256-point FFT plan, and per-slot spectrum history. Opened in `LockForProcess`; `Close` publishes empty slots before unmapping in `UnlockForProcess`/`FinalRelease`. |
+| `BetterMicroApo` | stage-monitor mapping | A read/write mapping of `runtime\{endpoint-guid}.monitor`, one shared 256-point FFT plan, per-slot spectrum history, and a 32768-frame stereo post-DSP audio ring used by Listen and the bottom meter. Opened in `LockForProcess`; `Close` publishes empty slots before unmapping in `UnlockForProcess`/`FinalRelease`. |
 
 Input reuses `GainStage`, adding only an in-place channel copy when **Treat as
 mono** is checked; it needs no buffers beyond the general scratch buffer. Gain
@@ -78,8 +79,9 @@ and saturation stages also allocate no buffers at bind time; their coefficients
 are derived in `Update`. Tremolo allocates only per-channel LFO state, and its
 coefficients are likewise retuned without allocation.
 
-`UnlockForProcess` closes the runtime, capture, and monitor mappings, clears the
-chain and pool, drops the profile and format, and releases the scratch buffer.
+`UnlockForProcess` saves the Looper bank, then closes the runtime, capture, and
+monitor mappings, clears the chain and pool, drops the profile and format, and
+releases the scratch buffer.
 
 ## APOProcess: the real-time path
 
@@ -96,13 +98,15 @@ chain and pool, drops the profile and format, and releases the scratch buffer.
    be cleared at the end.
 4. For `BUFFER_SILENT`, runs `Chain::ProcessSilence` with the monitor sink only
    when a stage needs silence (to flush a lookahead, reverb tail, echo repeat,
-   chorus history, vibrato delay, or pitch-shift grain); otherwise the output is
-   marked silent and zeroed if the engine did not supply an in-place buffer.
+   chorus history, vibrato delay, pitch-shift grain, or non-empty loop return);
+   otherwise the output is marked silent and zeroed if the engine did not supply
+   an in-place buffer.
 5. Otherwise `ProcessBuffer` calls `Chain::Process` with the monitor sink:
    decode interleaved bytes into the `double` scratch buffer, measure peak/RMS
    before and after each stage, call `Stage::Process`, publish the stage's
-   `ObserveStage` metrics, optional spectrum, and optional Tuner pitch from
-   `MonitorTuner()`, then encode and clip back into the output buffer.
+   `ObserveStage` metrics, optional spectrum, optional Tuner pitch from
+   `MonitorTuner()`, and optional Looper transport states from
+   `MonitorLooper()`, then encode and clip back into the output buffer.
    `EndBuffer()` clears unobserved slots.
 6. Copies the input's valid frame count to the output.
 
@@ -123,13 +127,27 @@ monitor binding (stable id, type, and spectrum flag), and is included in the
 returned active count. Input and Equalizer request spectra; Gate/Expander and
 Compressor/Limiter supply engagement through `Stage::MonitorValue()`, Equalizer
 supplies its signed dynamic gain through `Stage::MonitorGainDb()`, and Tuner
-supplies pitch through `Stage::MonitorTuner()`. Echo, Chorus, Tremolo, Vibrato,
-and Pitch Shifter request no spectra and publish no live graph telemetry. The
-chain is cleared and refilled
-without allocation, which is what makes live settings changes safe from the
-real-time path. `RebuildChain` is the single place that fills the chain, so a
-capture tap survives a settings change made while a profile is being recorded;
-the tap is bound with an explicit sentinel that cannot match a real effect.
+supplies pitch through `Stage::MonitorTuner()`. Looper publishes its five
+transport states through `Stage::MonitorLooper()`. Echo, Chorus, Tremolo,
+Vibrato, Pitch Shifter, and Looper request no spectra and have no live graph. The
+chain is cleared and refilled without allocation, which is what makes live
+settings changes safe from the real-time path. Stable instance ids mean a
+parameter-only publish retunes stages without resetting loop state. On a fresh
+stream, `Configure` takes the endpoint id, and `LoadLooperBanks` restores takes
+only after `RebuildChain` and `Chain::Reset` have finished binding and resetting
+the stages.
+`RebuildChain` is the single place that fills the chain, so a capture tap
+survives a settings change made while a profile is being recorded; the tap is
+bound with an explicit sentinel that cannot match a real effect.
+
+`LooperStage::Update` also watches `commandSerial` in the runtime snapshot. The
+first update after binding records the current serial as its baseline; later
+serial changes invoke the one-shot command for `commandTrack` at the buffer
+boundary. A parameter-only publish leaves the serial unchanged, and a stale
+command in a newly mapped runtime file cannot fire. A recording track stays in
+`Recording` across loop boundaries; its writes wrap and layer until a later
+command finishes or stops the take. The first synced take supplies the shared
+reference length used for internal ratio snapping.
 
 `StagePool::UpdateProfileBins` retunes every allocated noise stage from the
 leading `NoiseProfile::binCount` bins without allocating or rebuilding the pool.
