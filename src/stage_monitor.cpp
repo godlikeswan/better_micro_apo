@@ -175,6 +175,17 @@ bool StageMonitorView::AudioFormat(ULONG& sampleRate,
     return true;
 }
 
+ULONG StageMonitorView::AudioAvailableFrames() const
+{
+    if (m_view == nullptr || m_view->audioCapacityFrames == 0) {
+        return 0;
+    }
+    const ULONG write =
+        static_cast<ULONG>(ReadPublishedCounter(m_view->audioWriteFrames));
+    return std::min(write - m_audioReadFrames,
+                    m_view->audioCapacityFrames);
+}
+
 bool StageMonitorView::ReadAudio(float* frames, ULONG maxFrames,
                                  ULONG& framesRead)
 {

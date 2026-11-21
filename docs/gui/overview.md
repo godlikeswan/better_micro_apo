@@ -77,9 +77,15 @@ applies and noise-profile captures leave it running. Listen reads the APO's
 post-DSP audio ring through the default render device. Windows does not lock a
 capture APO merely because it is enabled, so Listen opens one bootstrap capture
 stream only when the tap is not already live; that stream is drained and
-discarded, never used as the audition source. Stage-monitor polling is read-only
-and follows the selected endpoint; it closes the view when no enabled effect is
-selected and never restarts audio.
+discarded, never used as the audition source. To keep audition delay low, Listen
+requests a short shared-mode render buffer based on the device period, waits on
+the render event instead of sleeping, and reads only enough tap audio to satisfy
+the current render request plus a small cushion; the 25 ms queue is only a safety
+ceiling. The tap read cursor is rebased just before the render stream starts so
+audio buffered during setup is skipped. `listen.log` records render padding,
+queue depth and estimated lag every two seconds.
+Stage-monitor polling is read-only and follows the selected endpoint; it closes
+the view when no enabled effect is selected and never restarts audio.
 
 ## Module ownership
 

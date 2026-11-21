@@ -79,6 +79,35 @@ private:
     T* ptr_ = nullptr;
 };
 
+struct ScopedHandle {
+    HANDLE value = nullptr;
+
+    ScopedHandle() = default;
+    ScopedHandle(const ScopedHandle&) = delete;
+    ScopedHandle& operator=(const ScopedHandle&) = delete;
+    ~ScopedHandle()
+    {
+        if (value != nullptr) {
+            CloseHandle(value);
+        }
+    }
+
+    void reset()
+    {
+        if (value != nullptr) {
+            CloseHandle(value);
+            value = nullptr;
+        }
+    }
+
+    HANDLE release()
+    {
+        HANDLE result = value;
+        value = nullptr;
+        return result;
+    }
+};
+
 struct CoTaskMemDeleter {
     void operator()(void* value) const { CoTaskMemFree(value); }
 };
@@ -278,7 +307,10 @@ struct Monitor {
     ComPtr<IAudioCaptureClient> bootstrap;
     StageMonitorView tap;
     ComPtr<IAudioClient> renderClient;
+    ComPtr<IAudioClient2> renderClient2;
     ComPtr<IAudioRenderClient> render;
+    HANDLE renderEvent = nullptr;
+    ULONGLONG lastStatsTick = 0;
     FormatPtr renderFormat;
     UINT32 sourceRate = 0;
     UINT32 sourceChannels = 0;
@@ -296,6 +328,10 @@ struct Monitor {
         }
         if (renderClient) {
             renderClient->Stop();
+        }
+        if (renderEvent != nullptr) {
+            CloseHandle(renderEvent);
+            renderEvent = nullptr;
         }
     }
 };
@@ -432,7 +468,7 @@ std::wstring OpenMonitor(const std::wstring& endpointId, Monitor& monitor)
             tapReady = true;
             break;
         }
-        Sleep(20);
+        Sleep(10);
     }
     ListenLog(L"Initial APO tap ready=%d", tapReady ? 1 : 0);
 
@@ -453,7 +489,7 @@ std::wstring OpenMonitor(const std::wstring& endpointId, Monitor& monitor)
                 tapReady = true;
                 break;
             }
-            Sleep(20);
+            Sleep(10);
         }
         if (!tapReady) {
             std::wstring message =
@@ -505,13 +541,95 @@ std::wstring OpenMonitor(const std::wstring& endpointId, Monitor& monitor)
         return fail(L"Could not copy the output format.");
     }
 
-    hr = monitor.renderClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0,
-                                          2000000, 0,
+    // A 200 ms shared-mode buffer was robust but added avoidable padding. Ask
+    // for a short buffer based on the device period, clamped to 10-30 ms. The
+    // device period is the real scheduling unit; GetBufferSize reports the
+    // resulting buffer after Initialize.
+    REFERENCE_TIME defaultPeriod = 0;
+    REFERENCE_TIME minPeriod = 0;
+    constexpr REFERENCE_TIME kMinRenderBuffer = 100000; // 10 ms floor
+    constexpr REFERENCE_TIME kMaxRenderBuffer = 300000; // 30 ms cap
+    REFERENCE_TIME bufferDuration = kMinRenderBuffer;
+    hr = monitor.renderClient->GetDevicePeriod(&defaultPeriod, &minPeriod);
+    if (SUCCEEDED(hr) && minPeriod != 0) {
+        bufferDuration =
+            std::max<REFERENCE_TIME>(minPeriod * 2, kMinRenderBuffer);
+        bufferDuration =
+            std::min<REFERENCE_TIME>(bufferDuration, kMaxRenderBuffer);
+    }
+    ListenLog(L"Render period default=%llu min=%llu requested=%llu (100ns)",
+              static_cast<unsigned long long>(defaultPeriod),
+              static_cast<unsigned long long>(minPeriod),
+              static_cast<unsigned long long>(bufferDuration));
+
+    // Prepare the event before Initialize: a callback stream must have its
+    // handle installed before Start, and Initialize can only be called once
+    // per IAudioClient object.
+    ComPtr<IAudioClient2> renderClient2;
+    ScopedHandle eventHandle;
+    bool useEvent = SUCCEEDED(monitor.renderClient->QueryInterface(
+        __uuidof(IAudioClient2),
+        reinterpret_cast<void**>(renderClient2.put())));
+    if (useEvent) {
+        eventHandle.value = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (eventHandle.value == nullptr) {
+            renderClient2.reset();
+            useEvent = false;
+        }
+    }
+
+    UINT32 renderFlags = useEvent ? AUDCLNT_STREAMFLAGS_EVENTCALLBACK : 0;
+    hr = monitor.renderClient->Initialize(AUDCLNT_SHAREMODE_SHARED, renderFlags,
+                                          bufferDuration, 0,
                                           monitor.renderFormat.get(), nullptr);
-    ListenLog(L"Render Init hr=0x%08X", static_cast<unsigned>(hr));
+    ListenLog(L"Render Init flags=0x%08X hr=0x%08X",
+              renderFlags, static_cast<unsigned>(hr));
+    if (FAILED(hr) && useEvent) {
+        ListenLog(L"Render event init failed; retrying without event");
+        renderClient2.reset();
+        eventHandle.reset();
+        useEvent = false;
+        renderFlags = 0;
+        hr = monitor.renderClient->Initialize(
+            AUDCLNT_SHAREMODE_SHARED, 0, bufferDuration, 0,
+            monitor.renderFormat.get(), nullptr);
+        ListenLog(L"Render Init retry flags=0 hr=0x%08X",
+                  static_cast<unsigned>(hr));
+    }
     if (FAILED(hr)) {
         return fail(HresultText(L"Could not start the output stream", hr));
     }
+
+    if (useEvent) {
+        hr = renderClient2->SetEventHandle(eventHandle.value);
+        if (FAILED(hr)) {
+            ListenLog(L"Render SetEventHandle hr=0x%08X; recreating client",
+                      static_cast<unsigned>(hr));
+            monitor.renderClient.reset();
+            renderClient2.reset();
+            eventHandle.reset();
+            useEvent = false;
+            hr = renderDevice->Activate(
+                __uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+                reinterpret_cast<void**>(monitor.renderClient.put()));
+            if (SUCCEEDED(hr)) {
+                hr = monitor.renderClient->Initialize(
+                    AUDCLNT_SHAREMODE_SHARED, 0, bufferDuration, 0,
+                    monitor.renderFormat.get(), nullptr);
+            }
+            ListenLog(L"Render fallback init hr=0x%08X",
+                      static_cast<unsigned>(hr));
+            if (FAILED(hr)) {
+                return fail(
+                    HresultText(L"Could not start the output stream", hr));
+            }
+        }
+    }
+    if (useEvent) {
+        monitor.renderClient2 = std::move(renderClient2);
+        monitor.renderEvent = eventHandle.release();
+    }
+    ListenLog(L"Render event=%d", monitor.renderEvent != nullptr ? 1 : 0);
 
     hr = monitor.renderClient->GetService(
         __uuidof(IAudioRenderClient),
@@ -548,6 +666,11 @@ std::wstring OpenMonitor(const std::wstring& endpointId, Monitor& monitor)
               monitor.renderFrameBytes, monitor.renderSampleBytes,
               monitor.renderIsFloat ? 1 : 0);
 
+    // Opening the tap and configuring the render stream takes ~100 ms. Discard
+    // the audio the APO wrote during that setup so the first thing we play is
+    // live audio, not a stale backlog.
+    monitor.tap.RebaseAudioRead();
+
     hr = monitor.renderClient->Start();
     ListenLog(L"Render Start hr=0x%08X", static_cast<unsigned>(hr));
     if (FAILED(hr)) {
@@ -576,8 +699,20 @@ void RunMonitor(Monitor& monitor)
     // software so WASAPI never has to reconfigure either endpoint's APO chain.
     double sourceStep =
         static_cast<double>(sourceRate) / static_cast<double>(renderRate);
-    const size_t maxInputFrames = sourceRate; // one second
-    constexpr ULONG kTapFrames = 4096;
+    bool directRate = sourceRate == renderRate;
+    // Keep a short cushion ahead of the render cursor. A fixed 512-frame
+    // append used to add more source frames per event than rendering consumed,
+    // so the queue slowly filled to its 25 ms cap and stayed there. Reading to
+    // an explicit target keeps the queue near the cushion instead.
+    const auto cushionForRate = [](UINT32 rate) -> size_t {
+        return std::max<size_t>(rate / 200u, 128u); // ~5 ms
+    };
+    const auto maxInputFramesForRate = [](UINT32 rate) -> size_t {
+        return std::max<size_t>(rate / 40u, 512u); // 25 ms safety ceiling
+    };
+    size_t cushionFrames = cushionForRate(sourceRate);
+    size_t maxInputFrames = maxInputFramesForRate(sourceRate);
+    constexpr ULONG kTapFrames = 512;
     std::vector<float> block(kTapFrames * kStageMonitorAudioChannels);
     std::vector<float> input;
     input.reserve(maxInputFrames * kStageMonitorAudioChannels);
@@ -585,6 +720,14 @@ void RunMonitor(Monitor& monitor)
     double sourcePos = 0.0;  // next render frame's position in tap frames
 
     while (g_running.load()) {
+        // Wake on the render device's own clock. The timeout keeps StopMonitor
+        // responsive if the event never fires.
+        if (monitor.renderEvent != nullptr) {
+            WaitForSingleObject(monitor.renderEvent, 20);
+        } else {
+            Sleep(1);
+        }
+
         // Keep the bootstrap stream alive and moving; its samples are not part
         // of the audition path.
         DrainBootstrapCapture(monitor);
@@ -601,6 +744,9 @@ void RunMonitor(Monitor& monitor)
             monitor.sourceChannels = tapChannels;
             sourceStep = static_cast<double>(sourceRate) /
                          static_cast<double>(renderRate);
+            directRate = sourceRate == renderRate;
+            cushionFrames = cushionForRate(sourceRate);
+            maxInputFrames = maxInputFramesForRate(sourceRate);
             input.clear();
             inputBase = 0;
             sourcePos = 0.0;
@@ -618,19 +764,45 @@ void RunMonitor(Monitor& monitor)
             sourcePos = 0.0;
         }
 
-        ULONG frames = 0;
-        if (monitor.tap.ReadAudio(block.data(), kTapFrames, frames) &&
-            frames != 0)
-        {
+        // Ask the render device how much audio it needs, then read only that
+        // much source audio plus a short cushion. A fixed 512-frame append used
+        // to overrun demand, so the queue drifted up to its 25 ms cap.
+        UINT32 padding = 0;
+        UINT32 available = 0;
+        if (SUCCEEDED(monitor.renderClient->GetCurrentPadding(&padding))) {
+            available = (padding < monitor.renderFrames)
+                            ? (monitor.renderFrames - padding)
+                            : 0;
+        }
+
+        size_t inputFrames = input.size() / kStageMonitorAudioChannels;
+        const size_t needed = static_cast<size_t>(
+            std::ceil(static_cast<double>(available) * sourceStep)) + 2;
+        const ULONG backlog = monitor.tap.AudioAvailableFrames();
+        // Drain any ring backlog above the cushion as well; a GUI stall must
+        // not turn into audible delay. The cap below drops only the stale tail.
+        const size_t target = std::max(
+            needed + cushionFrames,
+            static_cast<size_t>(backlog) + cushionFrames);
+
+        while (inputFrames < target) {
+            ULONG frames = 0;
+            const ULONG want = static_cast<ULONG>(
+                std::min<size_t>(kTapFrames, target - inputFrames));
+            if (!monitor.tap.ReadAudio(block.data(), want, frames) ||
+                frames == 0)
+            {
+                break;
+            }
             ReportLevel(FloatBlockLevel(block.data(), frames,
                                         kStageMonitorAudioChannels));
             input.insert(input.end(), block.begin(),
                          block.begin() +
                              static_cast<size_t>(frames) *
                                  kStageMonitorAudioChannels);
+            inputFrames += frames;
         }
 
-        size_t inputFrames = input.size() / kStageMonitorAudioChannels;
         if (inputFrames > maxInputFrames) {
             const size_t dropFrames = inputFrames - maxInputFrames;
             input.erase(input.begin(),
@@ -646,81 +818,92 @@ void RunMonitor(Monitor& monitor)
             inputFrames = maxInputFrames;
         }
 
-        UINT32 padding = 0;
-        if (SUCCEEDED(monitor.renderClient->GetCurrentPadding(&padding))) {
-            const UINT32 available =
-                (padding < monitor.renderFrames)
-                    ? (monitor.renderFrames - padding)
-                    : 0;
-            if (available != 0) {
-                BYTE* output = nullptr;
-                if (SUCCEEDED(monitor.render->GetBuffer(available, &output)) &&
-                    output != nullptr)
-                {
-                    UINT32 produced = 0;
-                    while (produced < available) {
-                        const size_t absoluteIndex =
-                            static_cast<size_t>(sourcePos);
-                        const size_t totalFrames = inputBase + inputFrames;
-                        if (absoluteIndex < inputBase ||
-                            absoluteIndex + 1 >= totalFrames)
-                        {
-                            break;
-                        }
-                        const size_t relative = absoluteIndex - inputBase;
-                        const double fraction =
-                            sourcePos - static_cast<double>(absoluteIndex);
-                        for (UINT32 channel = 0; channel < renderChannels;
-                             ++channel)
-                        {
-                            const double left = TapChannelAt(
-                                input, relative, channel, renderChannels);
+        if (available != 0) {
+            BYTE* output = nullptr;
+            if (SUCCEEDED(monitor.render->GetBuffer(available, &output)) &&
+                output != nullptr)
+            {
+                UINT32 produced = 0;
+                while (produced < available) {
+                    const size_t absoluteIndex =
+                        static_cast<size_t>(sourcePos);
+                    const size_t totalFrames = inputBase + inputFrames;
+                    if (absoluteIndex < inputBase ||
+                        absoluteIndex >= totalFrames ||
+                        (!directRate && absoluteIndex + 1 >= totalFrames))
+                    {
+                        break;
+                    }
+                    const size_t relative = absoluteIndex - inputBase;
+                    const double fraction =
+                        sourcePos - static_cast<double>(absoluteIndex);
+                    for (UINT32 channel = 0; channel < renderChannels;
+                         ++channel)
+                    {
+                        double value = TapChannelAt(
+                            input, relative, channel, renderChannels);
+                        if (!directRate) {
                             const double right = TapChannelAt(
-                                input, relative + 1, channel, renderChannels);
-                            const double value =
-                                left + (right - left) * fraction;
-                            WriteRenderSample(
-                                output +
-                                    static_cast<size_t>(produced) *
-                                        monitor.renderFrameBytes +
-                                    channel * monitor.renderSampleBytes,
-                                value, monitor.renderSampleBytes,
-                                monitor.renderIsFloat);
+                                input, relative + 1, channel,
+                                renderChannels);
+                            value += (right - value) * fraction;
                         }
-                        ++produced;
-                        sourcePos += sourceStep;
+                        WriteRenderSample(
+                            output +
+                                static_cast<size_t>(produced) *
+                                    monitor.renderFrameBytes +
+                                channel * monitor.renderSampleBytes,
+                            value, monitor.renderSampleBytes,
+                            monitor.renderIsFloat);
                     }
+                    ++produced;
+                    sourcePos += sourceStep;
+                }
 
-                    if (produced != 0) {
-                        monitor.render->ReleaseBuffer(produced, 0);
-                        // Keep the frame at floor(sourcePos) as the left side
-                        // of the next linear interpolation.
-                        const size_t consumed = static_cast<size_t>(sourcePos);
-                        if (consumed > inputBase) {
-                            const size_t dropFrames = std::min(
-                                consumed - inputBase,
-                                input.size() / kStageMonitorAudioChannels);
-                            if (dropFrames != 0) {
-                                input.erase(
-                                    input.begin(),
-                                    input.begin() +
-                                        static_cast<std::ptrdiff_t>(
-                                            dropFrames *
-                                            kStageMonitorAudioChannels));
-                                inputBase += dropFrames;
-                            }
+                if (produced != 0) {
+                    monitor.render->ReleaseBuffer(produced, 0);
+                    // Keep the frame at floor(sourcePos) as the left side
+                    // of the next linear interpolation.
+                    const size_t consumed = static_cast<size_t>(sourcePos);
+                    if (consumed > inputBase) {
+                        const size_t dropFrames = std::min(
+                            consumed - inputBase,
+                            input.size() / kStageMonitorAudioChannels);
+                        if (dropFrames != 0) {
+                            input.erase(
+                                input.begin(),
+                                input.begin() +
+                                    static_cast<std::ptrdiff_t>(
+                                        dropFrames *
+                                        kStageMonitorAudioChannels));
+                            inputBase += dropFrames;
                         }
-                    } else {
-                        // No tap audio yet; keep the render clock moving with
-                        // silence so the device does not stall.
-                        monitor.render->ReleaseBuffer(
-                            available, AUDCLNT_BUFFERFLAGS_SILENT);
                     }
+                } else {
+                    // No tap audio yet; keep the render clock moving with
+                    // silence so the device does not stall.
+                    monitor.render->ReleaseBuffer(
+                        available, AUDCLNT_BUFFERFLAGS_SILENT);
                 }
             }
-        }
+            }
 
-        Sleep(5);
+        const ULONGLONG now = GetTickCount64();
+        if (now - monitor.lastStatsTick >= 2000) {
+            const ULONG queued = monitor.tap.AudioAvailableFrames();
+            ListenLog(
+                L"listen stats: renderFrames=%u padding=%u input=%u/%u "
+                L"tapQueued=%u lagMs=%u drops=%u",
+                monitor.renderFrames, padding,
+                static_cast<unsigned>(inputFrames),
+                static_cast<unsigned>(maxInputFrames),
+                queued,
+                static_cast<unsigned>(
+                    (static_cast<unsigned long long>(queued) + inputFrames) *
+                    1000ULL / sourceRate),
+                g_drops.load(std::memory_order_relaxed));
+            monitor.lastStatsTick = now;
+        }
     }
 }
 

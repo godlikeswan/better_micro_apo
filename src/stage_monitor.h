@@ -182,6 +182,9 @@ public:
     // at the live edge when the view opens, so starting Listen does not replay
     // old audio. Returns false if the APO has not published an audio format.
     bool AudioFormat(ULONG& sampleRate, ULONG& channels) const;
+    // Frames currently queued in the audition ring, capped at its capacity.
+    // Used only for latency diagnostics; it does not move the read cursor.
+    ULONG AudioAvailableFrames() const;
     bool ReadAudio(float* frames, ULONG maxFrames, ULONG& framesRead);
     // Skips to the live write edge after the APO publishes a new generation.
     void RebaseAudioRead();
