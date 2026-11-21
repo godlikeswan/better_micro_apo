@@ -62,14 +62,19 @@ presses on the key buttons drive record, overdub, play, stop, one-level undo, an
 clear; while Looper is selected, keys **1**–**4** and **Space** tap tracks 1–5.
 Takes are capped at **120 s** and recording wraps and layers instead of stopping
 at a boundary. The first synced take sets the reference length; later synced
-takes snap automatically to `1/8`, `1/4`, `1/2`, `1`, `2`, `4`, or `8` times that
-reference on a monotonic clock. Free tracks keep their exact length and own
-playhead. Transport commands are one-shot runtime messages; takes are persisted
-per device in a `.looper` bank. Looper has no live graph; only its transport
-states are published as telemetry.
+takes write into one fixed span and snap to `1/8`, `1/4`, `1/2`, `1`, `2`, `4`, or
+`8` times that reference when recording finishes. A press in the last 1/16 of a
+reference cycle waits for the next boundary. Each synced take stores its own
+playback phase, so a `2×` loop starts at the left edge of its bar. Free tracks
+keep their exact length and own playhead. Transport commands are one-shot runtime messages; takes are persisted
+per device in a `.looper` bank. Looper has no live graph; its transport states,
+loop lengths, playhead positions, and overdub flags are published as telemetry.
+The large Looper stage is allocated when the stream binds, even with Looper
+absent from the preset, so enabling it live never allocates or reads its bank in
+the real-time callback.
 
 Durable settings use schema version 17, the runtime snapshot uses version 19,
-and the stage-monitor channel uses version 12.
+and the stage-monitor channel uses version 13.
 Loading a settings file with any other `[dsp] version` deletes the file and
 starts from defaults; there is no migration path. See
 [DLL ↔ GUI settings sharing](docs/runtime-sharing.md) for the file formats, the

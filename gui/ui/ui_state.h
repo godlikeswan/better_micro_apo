@@ -191,6 +191,7 @@ enum : int {
     IDC_LOOPER_STOP_END_4,
     IDC_LOOPER_STOP_END_5,
     IDC_LOOPER_NOTE,
+    IDC_LOOPER_PROGRESS,
 
     IDC_LISTEN,
     IDC_METER,
@@ -476,6 +477,7 @@ extern HWND g_looperVolumeSliders[apo::kLooperTrackCount];
 extern HWND g_looperFreeLength[apo::kLooperTrackCount];
 extern HWND g_looperStopAtEnd[apo::kLooperTrackCount];
 extern HWND g_looperNote;
+extern HWND g_looperProgress;
 extern HWND g_listen;
 extern HWND g_meter;
 

@@ -103,6 +103,7 @@ the view when no enabled effect is selected and never restarts audio.
 | Control tree and geometry | `gui/ui/structure.cpp/.h` |
 | Widget factories and custom drawing | `gui/ui/widgets.cpp/.h` |
 | Effect graph control | `gui/ui/graph.cpp/.h` |
+| Looper progress bars | `gui/ui/looper_progress.cpp/.h` |
 | Menu bar | `gui/ui/menu.cpp/.h` |
 | Palette and native theming | `gui/ui/theme.cpp/.h` |
 | Effect picker and Info dialogs | `gui/ui/effect_dialog.cpp`, `gui/ui/info_dialog.cpp` |

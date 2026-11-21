@@ -545,6 +545,11 @@ struct LooperBankTrack
     std::uint64_t position = 0;
     std::uint64_t recordPosition = 0;
     std::uint64_t recordFrames = 0;
+    std::uint64_t writeSpan = 0;
+    std::uint64_t writeBase = 0;
+    std::uint64_t recordStartGlobal = 0;
+    std::uint64_t startDelayFrames = 0;
+    std::uint64_t phaseOffset = 0;
     bool synced = true;
     bool overdub = false;
     bool pendingStop = false;
@@ -570,6 +575,7 @@ struct LooperBankData
     int undoReferenceTrack = -1;
     std::uint64_t undoMasterFrames = 0;
     std::uint64_t undoSyncOrigin = 0;
+    std::uint64_t undoPhaseOffset = 0;
     std::vector<float> undoBuffer;
 };
 

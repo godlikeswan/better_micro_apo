@@ -594,11 +594,12 @@ private:
 };
 
 // Five independent loop tracks over one shared undo bank. Track buffers, the
-// undo bank and provisional-gesture snapshots are allocated once when Looper is
-// present, so Process() never allocates. The first synced take sets a shared
-// reference length; later
-// synced takes snap to the nearest allowed multiple of it on a monotonic frame
-// clock. Free tracks keep their own exact-length playhead.
+// undo bank and provisional-gesture snapshots are allocated once when the stage
+// pool is configured, so Process() never allocates. The first synced take sets a
+// shared reference length. Later synced takes write into one fixed span for the
+// whole take and choose the nearest allowed multiple only when recording finishes, so
+// the write cursor never jumps when a predicted snap length changes. Free
+// tracks keep their own exact-length playhead.
 class LooperStage final : public Stage
 {
 public:
@@ -613,6 +614,8 @@ public:
     // Re-establishes the command baseline after Chain::Reset() clears it. The
     // first gesture after an APO restart must not look like a stale command.
     void PrimeCommandSerial();
+    // Same, for a live rebind: the incoming settings are not in m_settings yet.
+    void PrimeCommandSerial(const LooperSettings& settings);
 
     void Configure(const AudioFormat& format) override;
     void Update(const EffectInstance& effect, const AudioFormat& format) override;
@@ -629,6 +632,17 @@ private:
         std::size_t position = 0;
         std::size_t recordPosition = 0;
         std::uint64_t recordFrames = 0;
+        // Open-recording state. `writeSpan` is fixed when the take starts;
+        // `writeBase` and `recordStartGlobal` let FinishRecord() remap the ring
+        // into the final snapped loop. `startDelayFrames` waits for a snapped
+        // reference boundary instead of writing a few early frames at the end.
+        std::size_t writeSpan = 0;
+        std::uint64_t writeBase = 0;
+        std::uint64_t recordStartGlobal = 0;
+        std::uint64_t startDelayFrames = 0;
+        // Playback origin for this synced track. It is chosen when the take
+        // finishes so a 2x loop still starts at the left edge of its bar.
+        std::uint64_t phaseOffset = 0;
         bool synced = true;
         bool overdub = false;
         bool pendingStop = false;
@@ -646,8 +660,13 @@ private:
     void StartRecord(int track);
     void FinishRecord(int track);
     std::size_t Phase(int track, std::size_t length) const;
+    std::size_t SyncedWriteSpan() const;
+    std::uint64_t StartSnapDelay() const;
     std::size_t SnapSyncedFrames(std::uint64_t recordedFrames) const;
+    std::size_t VisualSyncedFrames(std::uint64_t recordedFrames) const;
     std::size_t RecordingTarget(const TrackState& state) const;
+    void RemapSyncedTake(int track, TrackState& state,
+                         std::size_t finalLength);
 
     LooperSettings m_settings;
     std::wstring m_storageId;
@@ -657,6 +676,8 @@ private:
     std::array<TrackState, apo::kLooperTrackCount> m_tracks{};
     std::array<std::vector<float>, apo::kLooperTrackCount> m_buffers{};
     std::vector<float> m_undoBuffer;
+    // Scratch space for the one-time ring-to-loop copy at end of synced record.
+    std::vector<float> m_remapBuffer;
     std::vector<double> m_inputFrame;
     std::vector<double> m_layerFrame;
     int m_undoTrack = -1;
@@ -665,6 +686,9 @@ private:
     int m_undoReferenceTrack = -1;
     std::size_t m_undoMasterFrames = 0;
     std::uint64_t m_undoSyncOrigin = 0;
+    // The previous take's playback origin must be restored along with its
+    // samples and shared reference; otherwise undo can shift its alignment.
+    std::uint64_t m_undoPhaseOffset = 0;
     bool m_undoValid = false;
     std::uint64_t m_globalFrames = 0;
     std::uint64_t m_syncOrigin = 0;
@@ -674,9 +698,9 @@ private:
     std::uint64_t m_lastCommandSerial = 0;
 
     // A keyboard press starts a take before the 250 ms double-tap window closes.
-    // Keep everything the press can change so a later double tap or long press
-    // can discard the provisional take exactly, including the previous undo
-    // bank and shared sync reference.
+    // Keep what that one press can change so a later double tap or long press
+    // can discard it exactly. Discarding is scoped to the gesture's track; the
+    // global frame clock and other playing tracks must never be rolled back.
     bool m_provisional = false;
     int m_provisionalTrack = -1;
     std::array<TrackState, apo::kLooperTrackCount> m_preProvisionalTracks{};
@@ -685,7 +709,6 @@ private:
     int m_preProvisionalReferenceTrack = -1;
     std::size_t m_preProvisionalMasterFrames = 0;
     std::uint64_t m_preProvisionalSyncOrigin = 0;
-    std::uint64_t m_preProvisionalGlobalFrames = 0;
     bool m_preProvisionalUndoValid = false;
     int m_preProvisionalUndoTrack = -1;
     std::size_t m_preProvisionalUndoLength = 0;
@@ -693,12 +716,14 @@ private:
     int m_preProvisionalUndoReferenceTrack = -1;
     std::size_t m_preProvisionalUndoMasterFrames = 0;
     std::uint64_t m_preProvisionalUndoSyncOrigin = 0;
+    std::uint64_t m_preProvisionalUndoPhaseOffset = 0;
 };
 
 // Owns every stage instance the effect list can reference. Configure() runs
-// from LockForProcess and allocates a fixed number of stages per type; Update()
-// runs from the real-time path, binds instances by id, retunes them in place and
-// fills a non-owning Chain without allocating.
+// from LockForProcess and allocates a fixed number of stages per type, including
+// Looper's large buffers even when the preset has no Looper. Update() runs from
+// the real-time path, binds instances by id, retunes them in place and fills a
+// non-owning Chain without allocating, loading banks or touching disk.
 class StagePool
 {
 public:
@@ -708,8 +733,8 @@ public:
     void Clear();
     // Saves every allocated Looper stage before Clear() destroys them.
     void SaveLooperBanks();
-    // Restores banks after the first chain build has bound effect ids. Binding
-    // a new id calls Stage::Reset(), which would otherwise clear a loaded bank.
+    // Restores banks on the setup path after the chain's first build and reset.
+    // Live binds now preserve the loaded stage state instead of resetting it.
     void LoadLooperBanks();
     // Returns the number of active stages bound into `chain`.
     int Update(const ApoSettings& settings, const AudioFormat& format,

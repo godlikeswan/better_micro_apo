@@ -2,6 +2,7 @@
 
 #include "apo.h"
 #include "graph.h"
+#include "looper_progress.h"
 #include "theme.h"
 #include "ui_state.h"
 #include "widgets.h"
@@ -641,7 +642,7 @@ void LayoutEffectParams(int x, int y, int width)
     }
     case apo::EffectType::Looper: {
         const int gap = Scale(6);
-        const int looperRowStep = Scale(34);
+        const int looperRowStep = Scale(44);
         const int buttonWidth = Scale(52);
         const int stateWidth = Scale(76);
         const int volumeLabelWidth = Scale(34);
@@ -694,6 +695,8 @@ void LayoutEffectParams(int x, int y, int width)
                          stopAreaWidth);
             rowY += looperRowStep;
         }
+        MoveWindow(g_looperProgress, x, y + Scale(24), width,
+                   looperRowStep * apo::kLooperTrackCount, TRUE);
         MoveWindow(g_looperNote, x, rowY, width, Scale(40), TRUE);
         break;
     }
@@ -1282,6 +1285,7 @@ void CreateControls(HWND root)
         window, IDC_LOOPER_NOTE,
         L"Tap: record / finish / overdub. Recording wraps and layers. "
         L"Double tap: stop. Long press: undo / clear.");
+    g_looperProgress = ui::LooperProgress(window, IDC_LOOPER_PROGRESS);
 
     AddTooltip(g_looperFreeLength[0],
                L"Keep the exact recorded length; otherwise this track snaps "
@@ -1293,6 +1297,11 @@ void CreateControls(HWND root)
                L"tap, or hold about 600 ms. Keys 1-4 and Space start or finish "
                L"a take on the first press; a later double tap stops, and "
                L"holding a provisional start discards it. Takes are saved per device and restored after audio restarts and GUI reopen.");
+    AddTooltip(g_looperProgress,
+               L"Each line's width is proportional to its loop length; the "
+               L"longest take fills the row. The filled part is the current "
+               L"playhead: red records, amber overdubs, green plays, and a "
+               L"dim outline is empty or stopped.");
 
     g_listen = ui::CheckBox(window, IDC_LISTEN, L"Listen to this device");
 

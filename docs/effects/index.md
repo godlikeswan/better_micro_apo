@@ -51,7 +51,7 @@ All effects implement `apo::dsp::Stage` (`src/dsp/dsp.h`):
 | `MonitorValue()` | Every monitored buffer | Optional 0..1 stage-specific engagement value; Gate/Expander and Compressor/Limiter report gain change, others return zero. |
 | `MonitorGainDb()` | Every monitored buffer | Optional signed gain change in dB; Equalizer reports its current dynamic cut/boost, others return zero. |
 | `MonitorTuner(data)` | Every monitored buffer | Optional pitch measurement (frequency, confidence, validity); Tuner reports it, others leave it empty. |
-| `MonitorLooper(data)` | Every monitored buffer | Optional per-track transport states; Looper reports them, others leave them zero. |
+| `MonitorLooper(data)` | Every monitored buffer | Optional per-track transport states, loop lengths, playhead positions, and overdub flags; Looper reports them, others leave them zero. |
 | `Process(samples, frames, channels)` | Every `APOProcess` | Process `frames * channels` interleaved `double` values in `[-1, 1]`, in place. Real-time safe. |
 
 `Chain` holds non-owning `Stage*` pointers in list order. `Chain::Process`

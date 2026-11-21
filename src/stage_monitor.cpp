@@ -262,6 +262,12 @@ bool StageMonitorView::Read(int slot, StageMonitorSnapshot& snapshot) const
         snapshot.tunerConfidence = source.tunerConfidence;
         std::memcpy(snapshot.looperStates, source.looperStates,
                     sizeof(snapshot.looperStates));
+        std::memcpy(snapshot.looperLengths, source.looperLengths,
+                    sizeof(snapshot.looperLengths));
+        std::memcpy(snapshot.looperPositions, source.looperPositions,
+                    sizeof(snapshot.looperPositions));
+        std::memcpy(snapshot.looperOverdubs, source.looperOverdubs,
+                    sizeof(snapshot.looperOverdubs));
         snapshot.flags = source.flags;
         snapshot.valid = (source.flags & kStageMonitorFlagObserved) != 0;
         std::memcpy(snapshot.spectrum, source.spectrum,
@@ -578,6 +584,12 @@ void StageMonitor::WriteSlot(size_t slot, const StageMonitorBinding& binding,
     target.tunerConfidence = tuner.confidence;
     std::memcpy(target.looperStates, looper.states,
                 sizeof(target.looperStates));
+    std::memcpy(target.looperLengths, looper.lengths,
+                sizeof(target.looperLengths));
+    std::memcpy(target.looperPositions, looper.positions,
+                sizeof(target.looperPositions));
+    std::memcpy(target.looperOverdubs, looper.overdubs,
+                sizeof(target.looperOverdubs));
 
     if (binding.spectrum) {
         const auto& bins = m_impl->spectrum[slot];
@@ -614,6 +626,9 @@ void StageMonitor::ClearSlot(size_t slot)
     target.tunerFrequencyHz = 0.0f;
     target.tunerConfidence = 0.0f;
     std::memset(target.looperStates, 0, sizeof(target.looperStates));
+    std::memset(target.looperLengths, 0, sizeof(target.looperLengths));
+    std::memset(target.looperPositions, 0, sizeof(target.looperPositions));
+    std::memset(target.looperOverdubs, 0, sizeof(target.looperOverdubs));
     std::memset(target.spectrum, 0, sizeof(target.spectrum));
 
     auto& bins = m_impl->spectrum[slot];

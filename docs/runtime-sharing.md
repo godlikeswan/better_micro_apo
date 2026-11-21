@@ -93,7 +93,10 @@ new snapshot is applied exactly once.
   settings-only apply cannot replay it. The first stage mapping establishes the
   serial baseline and ignores a stale runtime command. Commands are never
   written to the INI; only the volume and timing settings are durable there.
-  Takes are saved separately in the per-device `.looper` bank.
+  Takes are saved separately in the per-device `.looper` bank, format version 3.
+  The Looper stage and its buffers are allocated at `LockForProcess` even when
+  Looper is not in the preset, so a live add only binds that stage and never
+  allocates or reads the bank in `APOProcess`.
 - **Noise-profile capture** uses the stage capture channel below. The selected
   Noise effect stays enabled, all other effects keep running, settings are not
   rewritten, and audio and Listen are not interrupted. The APO retunes the live
@@ -177,7 +180,7 @@ forced to `1` on every load/save/publish and is not a user option.
 ## Stage monitor channel
 
 `StageMonitorFile` (`src/stage_monitor.h`, magic `0x544F4D42` / `"BMOT"`,
-version 12) lives in `runtime\{id}.monitor`. It has a fixed header with a
+version 13) lives in `runtime\{id}.monitor`. It has a fixed header with a
 generation counter (incremented whenever the APO opens the file for a new
 stream and again when it unbinds) and a 32768-frame stereo post-DSP audio ring
 read by Listen and the bottom meter. On unbind the APO also clears the published
@@ -190,10 +193,11 @@ the bound effect id/type, observed flag, input/output peak and RMS, four
 cross-buffer short holds (input peak, input RMS, output RMS, and output peak),
 a longer output peak hold, a stage-specific engagement value, a signed dynamic
 gain in dB, Tuner frequency and confidence with
-`kStageMonitorFlagTunerValid`, five integer Looper transport states, and 128
-spectrum bins from a shared 256-point FFT. Spectra are published only for Input
-and Equalizer. Measurements are `float`; the 32-bit control fields and Looper
-states are integers, so the mapping has a stable cross-process layout.
+`kStageMonitorFlagTunerValid`, five integer Looper transport states with their
+loop lengths, playhead positions, and overdub flags, and 128 spectrum bins from
+a shared 256-point FFT. Spectra are published only for Input and Equalizer.
+Measurements are `float`; the 32-bit control fields and Looper telemetry are
+integers, so the mapping has a stable cross-process layout.
 
 The holds are accumulated in the APO on every buffer rather than sampled only
 when the GUI polls. Their decay is measured in audio time, so a transient

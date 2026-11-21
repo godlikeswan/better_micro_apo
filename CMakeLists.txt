@@ -79,6 +79,7 @@ add_executable(better_micro_apo_gui WIN32
     gui/ui/ui_state.cpp
     gui/ui/widgets.cpp
     gui/ui/graph.cpp
+    gui/ui/looper_progress.cpp
     gui/ui/effect_dialog.cpp
     gui/ui/info_dialog.cpp
     gui/ui/menu.cpp

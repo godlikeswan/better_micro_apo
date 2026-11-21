@@ -1391,6 +1391,7 @@ struct LooperBankFileHeader
     std::int32_t undoReferenceTrack;
     std::uint64_t undoMasterFrames;
     std::uint64_t undoSyncOrigin;
+    std::uint64_t undoPhaseOffset;
 };
 
 struct LooperBankFileTrack
@@ -1400,11 +1401,16 @@ struct LooperBankFileTrack
     std::uint64_t position;
     std::uint64_t recordPosition;
     std::uint64_t recordFrames;
+    std::uint64_t writeSpan;
+    std::uint64_t writeBase;
+    std::uint64_t recordStartGlobal;
+    std::uint64_t startDelayFrames;
+    std::uint64_t phaseOffset;
     std::uint32_t flags;
 };
 #pragma pack(pop)
 
-constexpr std::uint32_t kLooperBankVersion = 1;
+constexpr std::uint32_t kLooperBankVersion = 3;
 constexpr std::uint64_t kLooperBankFileLimit = 2ull * 1024 * 1024 * 1024;
 constexpr std::uint32_t kLooperTrackSyncedFlag = 1u;
 constexpr std::uint32_t kLooperTrackOverdubFlag = 2u;
@@ -1686,10 +1692,14 @@ bool SaveLooperBank(const std::wstring& endpointId,
     for (int index = 0; index < apo::kLooperTrackCount; ++index)
     {
         const LooperBankTrack& track = bank.tracks[static_cast<size_t>(index)];
-        const std::uint64_t samples =
-            static_cast<std::uint64_t>(track.length) * bank.channels;
-        if (track.length > bank.maxFrames || track.position > bank.maxFrames ||
-            track.recordPosition > bank.maxFrames)
+        const bool recording = track.state == LooperState::Recording;
+        const std::uint64_t savedFrames = recording ? track.writeSpan
+                                                    : track.length;
+        const std::uint64_t samples = savedFrames * bank.channels;
+        if (track.length > bank.maxFrames || savedFrames > bank.maxFrames ||
+            track.position > bank.maxFrames ||
+            track.recordPosition > bank.maxFrames ||
+            (recording && track.writeSpan == 0))
         {
             CloseHandle(file);
             DeleteFileW(tempPath.c_str());
@@ -1744,6 +1754,7 @@ bool SaveLooperBank(const std::wstring& endpointId,
     header.undoReferenceTrack = bank.undoReferenceTrack;
     header.undoMasterFrames = bank.undoMasterFrames;
     header.undoSyncOrigin = bank.undoSyncOrigin;
+    header.undoPhaseOffset = bank.undoPhaseOffset;
 
     bool ok = writeExact(&header, sizeof(header));
     for (int index = 0; index < apo::kLooperTrackCount && ok; ++index)
@@ -1755,6 +1766,11 @@ bool SaveLooperBank(const std::wstring& endpointId,
         fileTrack.position = track.position;
         fileTrack.recordPosition = track.recordPosition;
         fileTrack.recordFrames = track.recordFrames;
+        fileTrack.writeSpan = track.writeSpan;
+        fileTrack.writeBase = track.writeBase;
+        fileTrack.recordStartGlobal = track.recordStartGlobal;
+        fileTrack.startDelayFrames = track.startDelayFrames;
+        fileTrack.phaseOffset = track.phaseOffset;
         fileTrack.flags =
             (track.synced ? kLooperTrackSyncedFlag : 0u) |
             (track.overdub ? kLooperTrackOverdubFlag : 0u) |
@@ -1851,7 +1867,8 @@ bool LoadLooperBank(const std::wstring& endpointId, LooperBankData& bank)
          (header.undoReferenceTrack < 0 ||
           header.undoReferenceTrack >= apo::kLooperTrackCount)) ||
         (header.undoState < static_cast<std::int32_t>(LooperState::Empty) ||
-         header.undoState > static_cast<std::int32_t>(LooperState::Stopped)))
+         header.undoState > static_cast<std::int32_t>(LooperState::Stopped)) ||
+        header.undoPhaseOffset > header.maxFrames)
     {
         return reject();
     }
@@ -1870,6 +1887,7 @@ bool LoadLooperBank(const std::wstring& endpointId, LooperBankData& bank)
     bank.undoReferenceTrack = header.undoReferenceTrack;
     bank.undoMasterFrames = header.undoMasterFrames;
     bank.undoSyncOrigin = header.undoSyncOrigin;
+    bank.undoPhaseOffset = header.undoPhaseOffset;
 
     std::array<std::uint64_t, apo::kLooperTrackCount> trackSamples{};
     std::uint64_t totalBytes = sizeof(header) +
@@ -1895,20 +1913,29 @@ bool LoadLooperBank(const std::wstring& endpointId, LooperBankData& bank)
         track.position = fileTrack.position;
         track.recordPosition = fileTrack.recordPosition;
         track.recordFrames = fileTrack.recordFrames;
+        track.writeSpan = fileTrack.writeSpan;
+        track.writeBase = fileTrack.writeBase;
+        track.recordStartGlobal = fileTrack.recordStartGlobal;
+        track.startDelayFrames = fileTrack.startDelayFrames;
+        track.phaseOffset = fileTrack.phaseOffset;
         track.synced = (fileTrack.flags & kLooperTrackSyncedFlag) != 0u;
         track.overdub = (fileTrack.flags & kLooperTrackOverdubFlag) != 0u;
         track.pendingStop =
             (fileTrack.flags & kLooperTrackPendingStopFlag) != 0u;
         track.isReference = (fileTrack.flags & kLooperTrackReferenceFlag) != 0u;
 
-        if (track.length > header.maxFrames ||
+        const bool recording = track.state == LooperState::Recording;
+        const std::uint64_t savedFrames = recording ? track.writeSpan
+                                                    : track.length;
+        if (track.length > header.maxFrames || savedFrames > header.maxFrames ||
             track.position > header.maxFrames ||
-            track.recordPosition > header.maxFrames)
+            track.recordPosition > header.maxFrames ||
+            track.phaseOffset > header.maxFrames ||
+            (recording && track.writeSpan == 0))
         {
             return reject();
         }
-        const std::uint64_t samples =
-            static_cast<std::uint64_t>(track.length) * header.channels;
+        const std::uint64_t samples = savedFrames * header.channels;
         const std::uint64_t bytes = samples * sizeof(float);
         if (bytes > std::numeric_limits<DWORD>::max())
         {

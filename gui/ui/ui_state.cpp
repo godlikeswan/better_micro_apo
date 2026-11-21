@@ -162,6 +162,7 @@ HWND g_looperVolumeSliders[apo::kLooperTrackCount]{};
 HWND g_looperFreeLength[apo::kLooperTrackCount]{};
 HWND g_looperStopAtEnd[apo::kLooperTrackCount]{};
 HWND g_looperNote = nullptr;
+HWND g_looperProgress = nullptr;
 HWND g_listen = nullptr;
 HWND g_meter = nullptr;
 

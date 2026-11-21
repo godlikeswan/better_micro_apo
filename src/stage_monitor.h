@@ -19,7 +19,7 @@ namespace apo {
 // sampling the meters never changes settings, rebuilds the chain, or stops
 // audio.
 inline constexpr std::uint32_t kStageMonitorMagic = 0x544F4D42u; // "BMOT"
-inline constexpr std::uint32_t kStageMonitorVersion = 12u;
+inline constexpr std::uint32_t kStageMonitorVersion = 13u;
 // Post-DSP audio tap used by Listen and noise capture. It keeps audition out of
 // the capture endpoint's WASAPI client list, which otherwise reloads the APO
 // chain on some devices. 32768 stereo frames is about 0.68 s at 48 kHz.
@@ -45,9 +45,14 @@ struct TunerMonitorData
 
 // Per-track transport state published by a Looper stage. `states` holds
 // apo::LooperState values as integers so the shared layout stays plain data.
+// `lengths`/`positions` are frame counts for the GUI's per-track progress bars;
+// during a fresh recording the length is the current recording target.
 struct LooperMonitorData
 {
     int states[apo::kLooperTrackCount]{};
+    std::uint32_t lengths[apo::kLooperTrackCount]{};
+    std::uint32_t positions[apo::kLooperTrackCount]{};
+    int overdubs[apo::kLooperTrackCount]{};
 };
 
 // Identifies the effect currently occupying one chain slot. `slot` is the
@@ -108,7 +113,11 @@ struct StageMonitorSlot
     // Tuner measurement; validity is also flagged in `flags`.
     float tunerFrequencyHz = 0.0f;
     float tunerConfidence = 0.0f;
+    // Looper transport and per-track progress telemetry.
     int looperStates[apo::kLooperTrackCount]{};
+    ULONG looperLengths[apo::kLooperTrackCount]{};
+    ULONG looperPositions[apo::kLooperTrackCount]{};
+    int looperOverdubs[apo::kLooperTrackCount]{};
     float spectrum[kStageMonitorBins]{};
 };
 
@@ -156,7 +165,11 @@ struct StageMonitorSnapshot
     // Tuner measurement; validity is also flagged in `flags`.
     float tunerFrequencyHz = 0.0f;
     float tunerConfidence = 0.0f;
+    // Looper transport and per-track progress telemetry.
     int looperStates[apo::kLooperTrackCount]{};
+    ULONG looperLengths[apo::kLooperTrackCount]{};
+    ULONG looperPositions[apo::kLooperTrackCount]{};
+    int looperOverdubs[apo::kLooperTrackCount]{};
     float spectrum[kStageMonitorBins]{};
 };
 

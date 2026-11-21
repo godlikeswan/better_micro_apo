@@ -10,6 +10,7 @@
 #include "ui/effect_dialog.h"
 #include "ui/graph.h"
 #include "ui/info_dialog.h"
+#include "ui/looper_progress.h"
 #include "ui/menu.h"
 #include "ui/structure.h"
 #include "ui/theme.h"
@@ -75,6 +76,7 @@ bool g_liveApplyPending = false;
 // that round trip. Commands use a monotonic serial so a later settings-only
 // apply cannot replay an old transport request.
 apo::LooperState g_looperLocalStates[apo::kLooperTrackCount]{};
+ui::LooperProgressTrack g_looperProgressTracks[apo::kLooperTrackCount]{};
 apo::LooperState g_looperLocalUndoState = apo::LooperState::Empty;
 int g_looperLocalUndoTrack = -1;
 bool g_looperLocalUndoValid = false;
@@ -176,6 +178,7 @@ void PollStageMonitor();
 void HandleLooperKeyTimer(int track, bool longTimer);
 bool PublishLooperCommand(apo::LooperCommand command, int track);
 void SetLooperLocalState(int track, apo::LooperState state);
+void RefreshLooperProgress(int track);
 
 // Describes the install state and the identity/state/bindings of every capture
 // endpoint. Deliberately excludes per-device settings: those are edited in
@@ -394,7 +397,7 @@ void ShowEffectControls(apo::EffectType type, bool show)
     case apo::EffectType::Looper:
         showAll({g_looperHeaderTrack, g_looperHeaderState,
                  g_looperHeaderVolume, g_looperHeaderFree,
-                 g_looperHeaderStop, g_looperNote});
+                 g_looperHeaderStop, g_looperNote, g_looperProgress});
         for (int track = 0; track < apo::kLooperTrackCount; ++track) {
             showAll({g_looperButtons[track], g_looperStateLabels[track],
                      g_looperVolumeSliders[track],
@@ -477,7 +480,7 @@ void EnableEffectControls(bool enabled)
         g_looperFreeLength[4], g_looperStopAtEnd[4],
         g_looperHeaderTrack, g_looperHeaderState, g_looperHeaderVolume,
         g_looperHeaderFree, g_looperHeaderStop,
-        g_looperNote,
+        g_looperNote, g_looperProgress,
         g_effectGraph,
     };
     for (HWND control : controls) {
@@ -640,16 +643,38 @@ void CancelLooperKeyGestures()
     }
 }
 
+void RefreshLooperProgress(int track)
+{
+    if (track < 0 || track >= apo::kLooperTrackCount ||
+        g_looperProgress == nullptr)
+    {
+        return;
+    }
+    ui::SetLooperProgressTrack(g_looperProgress, track,
+                               g_looperProgressTracks[track]);
+}
+
 void SetLooperLocalState(int track, apo::LooperState state)
 {
     if (track < 0 || track >= apo::kLooperTrackCount) {
         return;
     }
+    const apo::LooperState previous = g_looperLocalStates[track];
     g_looperLocalStates[track] = state;
     if (g_looperStateLabels[track] != nullptr) {
         SetWindowTextW(g_looperStateLabels[track],
                        apo::LooperStateName(state));
     }
+
+    ui::LooperProgressTrack& progress = g_looperProgressTracks[track];
+    progress.state = state;
+    const bool recording = state == apo::LooperState::Recording;
+    progress.overdub = recording && (previous == apo::LooperState::Playback ||
+                                     progress.overdub);
+    if (!recording) {
+        progress.overdub = false;
+    }
+    RefreshLooperProgress(track);
 }
 
 void ResetLooperLocalStates()
@@ -658,6 +683,10 @@ void ResetLooperLocalStates()
     for (int track = 0; track < apo::kLooperTrackCount; ++track) {
         SetLooperLocalState(track, apo::LooperState::Empty);
     }
+    for (ui::LooperProgressTrack& track : g_looperProgressTracks) {
+        track = ui::LooperProgressTrack{};
+    }
+    ui::ClearLooperProgress(g_looperProgress);
     g_looperLocalUndoState = apo::LooperState::Empty;
     g_looperLocalUndoTrack = -1;
     g_looperLocalUndoValid = false;
@@ -2168,12 +2197,23 @@ void PollStageMonitor()
         if (effect.type == apo::EffectType::Looper) {
             for (int track = 0; track < apo::kLooperTrackCount; ++track) {
                 const int value = snapshot.looperStates[track];
-                if (value >= static_cast<int>(apo::LooperState::Empty) &&
-                    value <= static_cast<int>(apo::LooperState::Stopped))
+                if (value < static_cast<int>(apo::LooperState::Empty) ||
+                    value > static_cast<int>(apo::LooperState::Stopped))
                 {
-                    SetLooperLocalState(
-                        track, static_cast<apo::LooperState>(value));
+                    continue;
                 }
+
+                const apo::LooperState state =
+                    static_cast<apo::LooperState>(value);
+                SetLooperLocalState(track, state);
+
+                ui::LooperProgressTrack& progress =
+                    g_looperProgressTracks[track];
+                progress.state = state;
+                progress.length = snapshot.looperLengths[track];
+                progress.position = snapshot.looperPositions[track];
+                progress.overdub = snapshot.looperOverdubs[track] != 0;
+                RefreshLooperProgress(track);
             }
         }
         ui::SetGraphMonitor(g_effectGraph, snapshot);

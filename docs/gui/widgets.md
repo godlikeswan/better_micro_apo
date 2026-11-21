@@ -1,7 +1,8 @@
 # Widgets and controls
 
 `gui/ui/widgets.*` provides the reusable control factories and the custom
-drawing used by the single screen. `gui/ui/graph.cpp` owns the effect graph;
+drawing used by the single screen. `gui/ui/graph.cpp` owns the effect graph,
+`gui/ui/looper_progress.cpp` owns the Looper progress bars, and
 `gui/ui/structure.cpp` owns the info icons and tooltips.
 
 ## Factories in widgets.cpp
@@ -111,6 +112,17 @@ input peak through the Drive pre-gain, so a higher Drive widens the marker gap
 toward the flat part instead of bending the curve. These are stage-local
 displays, independent of the bottom Peak/RMS label fed by the post-DSP APO audio
 ring used by Listen.
+
+## Looper progress bars
+
+`gui/ui/looper_progress.cpp` registers its own window class and draws five thin
+bars beneath the Looper rows. `SetLooperProgressTrack` copies one row of APO
+telemetry from `main.cpp`; `ClearLooperProgress` resets all rows when the
+optimistic transport state is discarded. Each bar's width is the track's loop
+length divided by the longest non-empty loop, so the longest take fills the
+row. Empty rows get a short outline, and Stopped rows keep their proportional
+outline but no fill. The fill is the published playhead position: red for
+Recording, amber for overdubs, and green for Playback.
 
 ## Icons, tooltips, and reset buttons
 
